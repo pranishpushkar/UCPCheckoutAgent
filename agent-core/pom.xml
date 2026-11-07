@@ -12,4 +12,13 @@
 
     <artifactId>agent-core</artifactId>
     <name>Agent core</name>
+
+    <!-- Section 14, level 2: property-based tests. Test scope only; main code stays JDK-only (5.2). -->
+    <dependencies>
+        <dependency>
+            <groupId>net.jqwik</groupId>
+            <artifactId>jqwik</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
 </project>
