@@ -118,7 +118,7 @@ These are the properties the evaluation checks. Each must be enforced in code an
 | I4 | After the first `complete` request is sent, the intent's merchant session id never changes and no new session is created for that intent |
 | I5 | Every non-terminal intent reaches a terminal state, or `ESCALATED`, within its deadline (liveness) |
 | I6 | The model's tool set contains no operation that can complete, cancel or approve |
-| I7 | A `complete` retry reuses the same idempotency key and a byte-identical body |
+| I7 | A `complete` retry under the same approval reuses the same idempotency key and a byte-identical body. A new approval after a re-quote gets a new key and a new frozen body (7.4) |
 | I8 | Secrets, tokens and card credentials are never written to logs, events or traces |
 | I9 | Tenant isolation: a user can read, approve or act on only their own intents, approvals and runs |
 | I10 | Only the intent's owner, with a sign-in no older than maxApprovalAuthAge, can approve it, and the approval records decided\_by |
@@ -317,8 +317,10 @@ Create and update are safe to resend with the same key. `complete` is never rese
 `key = 'ucp-' + first 26 chars of base32(sha256(intentId + '|' + op + '|' + revision))`
 
 - `op` is one of `create`, `update`, `complete`, `cancel`.
-- `revision` is 0 for create, complete and cancel. For update it is the number of updates already issued for the intent.
+- `revision` is 0 for create and cancel. For update it is the number of updates already issued for the intent. For `complete` it is the intent's `requote_count` at the time of approval: 0 for the first approval, 1 after the first re-quote and new approval, and so on. Every approval therefore gets its own `complete` key, and all resends under that approval share it.
 - The `complete` body is built once, when the intent becomes `APPROVED`, from the approved snapshot and the payment instrument. It is stored in `merchant_attempt.request_body`, and every resend reads that stored body (I7).
+
+**New complete key guard \[CONTRACT\].** A `complete` with a new key (a higher `requote_count`) may be sent only when every earlier `complete` attempt for the intent is RESPONDED with a definitive no-charge outcome (price_changed, out_of_stock, incomplete or payment_declined). If any earlier `complete` attempt is SENT or UNCERTAIN, the intent must first reconcile (7.5). This stops a new key from being sent while an older request could still create an order. Why the key must change: the merchant stores the result per key (A.1), so reusing the old key after a re-quote would replay the stored price_changed result, or return 409 because the body differs, and S5 could never complete.
 
 ### 7.5 Reconciliation \[CONTRACT\]
 
