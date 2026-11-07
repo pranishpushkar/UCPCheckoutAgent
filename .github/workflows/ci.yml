@@ -1,0 +1,20 @@
+# Section 15. Every push runs ./mvnw verify: build, unit, property, component,
+# contract and ArchUnit tests.
+# TODO(M4): on pull requests, add a reduced scripted evaluation (./scripts/eval.sh --mode scripted).
+# TODO(M5): add a manual (workflow_dispatch) live evaluation that reads GEMINI_API_KEY from a repository secret.
+name: CI
+
+on:
+  push:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - run: ./mvnw -B -ntp verify

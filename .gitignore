@@ -30,3 +30,8 @@ bin/
 
 ### Mac OS ###
 .DS_Store
+### Maven ###
+target/
+
+### Local secrets ###
+.env
