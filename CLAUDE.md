@@ -15,3 +15,4 @@
 - Never cache checkout sessions, quotes, approvals or reconciliation reads (section 20).
 - Work one milestone at a time (section 16). A milestone is done only when its acceptance
   criteria pass under ./mvnw verify.
+- Never add Co-Authored-By, Claude-Session or "Generated with Claude Code" lines to commits or PRs.
