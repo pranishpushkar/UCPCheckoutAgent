@@ -43,19 +43,47 @@ class RequotePolicyTest {
         assertThatThrownBy(() -> policy.evaluateRequoteCap(-1)).isInstanceOf(IllegalArgumentException.class);
     }
 
-    // Covers: P7, I2, I3, table 7.2 (every re-quote needs a new approval: price up, down or unchanged)
+    // Covers: P7, P8, I3, table 7.2 (a re-quote below the cap needs a new approval and is not rejected)
     @Test
-    void evaluateReapproval_deniesWithP7_forEveryRequote() {
-        assertThat(policy.evaluateReapproval(6696, 6697).ruleId()).contains(PolicyRule.P7);
-        assertThat(policy.evaluateReapproval(6696, 6696).ruleId()).contains(PolicyRule.P7);
-        assertThat(policy.evaluateReapproval(6696, 5000).ruleId()).contains(PolicyRule.P7);
+    void evaluateReapproval_requiresApproval_belowCap() {
+        for (int count = 0; count < 2; count++) {
+            RequoteOutcome outcome = policy.evaluateReapproval(count, 6696, 6900);
+
+            assertThat(outcome).isEqualTo(new RequoteOutcome.ApprovalRequired(6696, 6900));
+            assertThat(outcome).isNotInstanceOf(RequoteOutcome.Rejected.class);
+            assertThat(outcome.rule()).isEqualTo(PolicyRule.P7);
+        }
     }
 
-    // Covers: P7 (always on, whatever the rest of the configuration says)
+    // Covers: P8, S16, table 7.2 (the re-quote that hits the cap is rejected with price_unstable)
     @Test
-    void evaluateReapproval_deniesWithP7_underAnyConfiguration() {
+    void evaluateReapproval_rejectsWithPriceUnstable_atCap() {
+        RequoteOutcome outcome = policy.evaluateReapproval(2, 6696, 6900);
+
+        assertThat(outcome).isEqualTo(new RequoteOutcome.Rejected(2, 2));
+        assertThat(outcome.rule()).isEqualTo(PolicyRule.P8);
+        assertThat(outcome.reason()).isEqualTo("price_unstable");
+    }
+
+    // Covers: P7, I2, I3 (approval is required whether the price went up, down or stayed the same)
+    @Test
+    void evaluateReapproval_requiresApproval_whateverTheDirectionOfThePrice() {
+        assertThat(policy.evaluateReapproval(0, 6696, 6697)).isInstanceOf(RequoteOutcome.ApprovalRequired.class);
+        assertThat(policy.evaluateReapproval(0, 6696, 6696)).isInstanceOf(RequoteOutcome.ApprovalRequired.class);
+        assertThat(policy.evaluateReapproval(0, 6696, 5000)).isInstanceOf(RequoteOutcome.ApprovalRequired.class);
+    }
+
+    // Covers: P7 (always on: even with approval off and lax limits, a re-quote needs a new approval)
+    @Test
+    void evaluateReapproval_requiresApproval_underAnyConfiguration() {
         RequotePolicy lax = new RequotePolicy(new PolicyConfig(1_000_000, 1_000_000, 99, 99, 999, false, 10));
 
-        assertThat(lax.evaluateReapproval(6696, 5000).ruleId()).contains(PolicyRule.P7);
+        assertThat(lax.evaluateReapproval(0, 6696, 5000)).isInstanceOf(RequoteOutcome.ApprovalRequired.class);
+    }
+
+    // Covers: P8 (a negative count is a programming error here too)
+    @Test
+    void evaluateReapproval_throws_forNegativeCount() {
+        assertThatThrownBy(() -> policy.evaluateReapproval(-1, 1, 1)).isInstanceOf(IllegalArgumentException.class);
     }
 }

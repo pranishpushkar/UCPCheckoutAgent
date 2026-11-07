@@ -415,7 +415,7 @@ Configuration file `policy.yaml`. `PolicyEngine.evaluateProposal(...)` and `eval
 | P4 size limits | 5 per line, 5 lines | Reject larger proposals |
 | P5 proposal rate limit | 10 per user per hour | Guards against a looping agent |
 | P6 approval required | true | May not be false in the `prod` profile |
-| P7 re-approval | on | Every re-quote needs a new approval, whether the price went up or down (table 7.2). Always on and not configurable; listed so the rule is visible in policy decisions |
+| P7 re-approval | on | Every re-quote needs a new approval, whether the price went up or down (table 7.2). Always on and not configurable; listed so the rule is visible in policy decisions. Its outcome is "new approval required" (the intent returns to AWAITING\_APPROVAL), never a rejection; only P8 rejects a re-quote |
 | P8 re-quote cap | 2 per intent | Counts re-quotes caused by a price change or an incomplete checkout. When the cap is reached, the next re-quote ends the intent as REJECTED with reason price\_unstable. Enforced by the orchestrator, not AgentBudget, because the model is not involved in re-quoting |
 
 ### 9.2 Approval snapshot and token \[CONTRACT\]

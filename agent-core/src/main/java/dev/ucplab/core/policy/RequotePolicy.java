@@ -43,12 +43,17 @@ public final class RequotePolicy {
     }
 
     /**
-     * P7. Every re-quote needs a new approval, whether the total went up or down (table 7.2), so the
-     * existing approval never covers a re-quote and this always denies. Always on and not
-     * configurable; it exists so the rule is visible in policy decisions.
+     * The outcome of a re-quote. P8 is checked first: at the cap the re-quote is
+     * {@link RequoteOutcome.Rejected} with {@value #PRICE_UNSTABLE}. Below the cap, P7 applies: every
+     * re-quote needs a new approval, whether the total went up or down, so the outcome is
+     * {@link RequoteOutcome.ApprovalRequired}, never a rejection. P7 is always on and not configurable.
+     *
+     * @param requoteCount the intent's {@code requote_count} before this re-quote
      */
-    public PolicyDecision evaluateReapproval(long approvedTotalMinor, long requotedTotalMinor) {
-        return PolicyDecision.deny(PolicyRule.P7, "re-quoted total " + requotedTotalMinor
-                + " replaces the approved total " + approvedTotalMinor + "; a new approval is required");
+    public RequoteOutcome evaluateReapproval(int requoteCount, long approvedTotalMinor, long requotedTotalMinor) {
+        if (!evaluateRequoteCap(requoteCount).allowed()) {
+            return new RequoteOutcome.Rejected(requoteCount, config.maxRequotes());
+        }
+        return new RequoteOutcome.ApprovalRequired(approvedTotalMinor, requotedTotalMinor);
     }
 }
