@@ -411,11 +411,11 @@ Configuration file `policy.yaml`. `PolicyEngine.evaluateProposal(...)` and `eval
 | --- | --- | --- |
 | P1 merchant allowlist | `localhost` entries only | Reject merchants that are not ACTIVE in the merchant registry (section 19) |
 | P2 per-purchase cap | 20000 minor units | Reject a quote above the cap |
-| P3 daily cap per user | 50000 minor units | Reject when the daily total would exceed the cap |
+| P3 daily cap per user | 50000 minor units | Reject when the user's spend over the last 24 hours (a rolling window, not a calendar day, so time zones don't matter) would exceed the cap. Counts intents in AWAITING\_APPROVAL, APPROVED, COMPLETING, RECONCILING, COMPLETED or ESCALATED; an intent being re-quoted is counted once |
 | P4 size limits | 5 per line, 5 lines | Reject larger proposals |
 | P5 proposal rate limit | 10 per user per hour | Guards against a looping agent |
 | P6 approval required | true | May not be false in the `prod` profile |
-| P7 re-approval | on | A re-quote with a higher total needs a new approval |
+| P7 re-approval | on | Every re-quote needs a new approval, whether the price went up or down (table 7.2). Always on and not configurable; listed so the rule is visible in policy decisions |
 | P8 re-quote cap | 2 per intent | Counts re-quotes caused by a price change or an incomplete checkout. When the cap is reached, the next re-quote ends the intent as REJECTED with reason price\_unstable. Enforced by the orchestrator, not AgentBudget, because the model is not involved in re-quoting |
 
 ### 9.2 Approval snapshot and token \[CONTRACT\]

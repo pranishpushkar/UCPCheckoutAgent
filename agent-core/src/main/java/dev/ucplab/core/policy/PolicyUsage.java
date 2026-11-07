@@ -12,7 +12,8 @@ import java.time.Instant;
 public interface PolicyUsage {
 
     /**
-     * P3. Total in minor units of the user's intents created in the window whose spend is committed
+     * P3, called with the last 24 hours as a rolling window, not a calendar day.
+     * Total in minor units of the user's intents created in the window whose spend is committed
      * or may have happened: AWAITING_APPROVAL, APPROVED, COMPLETING, RECONCILING, COMPLETED or
      * ESCALATED. An intent in PROPOSED or QUOTING, which includes the one being evaluated, is not
      * counted, so a re-quote is not counted twice.

@@ -32,7 +32,7 @@ class RequotePolicyTest {
     // Covers: P8 (a cap of 0 forbids any re-quote)
     @Test
     void evaluateRequoteCap_deniesFirstRequote_whenCapIsZero() {
-        RequotePolicy none = new RequotePolicy(new PolicyConfig(20_000, 50_000, 5, 5, 10, true, true, 0));
+        RequotePolicy none = new RequotePolicy(new PolicyConfig(20_000, 50_000, 5, 5, 10, true, 0));
 
         assertThat(none.evaluateRequoteCap(0).ruleId()).contains(PolicyRule.P8);
     }
@@ -43,19 +43,19 @@ class RequotePolicyTest {
         assertThatThrownBy(() -> policy.evaluateRequoteCap(-1)).isInstanceOf(IllegalArgumentException.class);
     }
 
-    // Covers: P7, I2 (a higher re-quoted total needs a new approval; equal or lower is covered)
+    // Covers: P7, I2, I3, table 7.2 (every re-quote needs a new approval: price up, down or unchanged)
     @Test
-    void evaluateRequotedTotal_deniesWithP7_whenTotalHigher() {
-        assertThat(policy.evaluateRequotedTotal(6696, 6697).ruleId()).contains(PolicyRule.P7);
-        assertThat(policy.evaluateRequotedTotal(6696, 6696).allowed()).isTrue();
-        assertThat(policy.evaluateRequotedTotal(6696, 5000).allowed()).isTrue();
+    void evaluateReapproval_deniesWithP7_forEveryRequote() {
+        assertThat(policy.evaluateReapproval(6696, 6697).ruleId()).contains(PolicyRule.P7);
+        assertThat(policy.evaluateReapproval(6696, 6696).ruleId()).contains(PolicyRule.P7);
+        assertThat(policy.evaluateReapproval(6696, 5000).ruleId()).contains(PolicyRule.P7);
     }
 
-    // Covers: P7 (with re-approval off the rule does not deny)
+    // Covers: P7 (always on, whatever the rest of the configuration says)
     @Test
-    void evaluateRequotedTotal_allows_whenReapprovalOff() {
-        RequotePolicy off = new RequotePolicy(new PolicyConfig(20_000, 50_000, 5, 5, 10, true, false, 2));
+    void evaluateReapproval_deniesWithP7_underAnyConfiguration() {
+        RequotePolicy lax = new RequotePolicy(new PolicyConfig(1_000_000, 1_000_000, 99, 99, 999, false, 10));
 
-        assertThat(off.evaluateRequotedTotal(6696, 9000).allowed()).isTrue();
+        assertThat(lax.evaluateReapproval(6696, 5000).ruleId()).contains(PolicyRule.P7);
     }
 }

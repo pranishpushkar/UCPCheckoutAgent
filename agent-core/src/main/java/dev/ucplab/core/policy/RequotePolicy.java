@@ -43,16 +43,12 @@ public final class RequotePolicy {
     }
 
     /**
-     * P7. Denied when re-approval is on and the re-quoted total is above the approved total: the
-     * existing approval does not cover it (I2). Table 7.2 still requires a new approval after every
-     * re-quote, so the orchestrator never proceeds on an allow here alone.
+     * P7. Every re-quote needs a new approval, whether the total went up or down (table 7.2), so the
+     * existing approval never covers a re-quote and this always denies. Always on and not
+     * configurable; it exists so the rule is visible in policy decisions.
      */
-    public PolicyDecision evaluateRequotedTotal(long approvedTotalMinor, long requotedTotalMinor) {
-        if (config.reapprovalOnHigherTotal() && requotedTotalMinor > approvedTotalMinor) {
-            return PolicyDecision.deny(PolicyRule.P7, "re-quoted total " + requotedTotalMinor
-                    + " is above the approved total " + approvedTotalMinor + "; a new approval is required");
-        }
-        return PolicyDecision.allow("re-quoted total " + requotedTotalMinor + " is not above the approved total "
-                + approvedTotalMinor);
+    public PolicyDecision evaluateReapproval(long approvedTotalMinor, long requotedTotalMinor) {
+        return PolicyDecision.deny(PolicyRule.P7, "re-quoted total " + requotedTotalMinor
+                + " replaces the approved total " + approvedTotalMinor + "; a new approval is required");
     }
 }

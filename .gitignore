@@ -38,3 +38,6 @@ target/
 
 ### jqwik ###
 **/.jqwik-database
+
+### Claude Code ###
+.claude/

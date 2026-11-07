@@ -156,9 +156,9 @@ class RuleBasedPolicyEngineTest {
         assertThat(engine.evaluateQuote(ALICE, quote(20_001)).ruleId()).contains(PolicyRule.P2);
     }
 
-    // Covers: P3, T5 (spent + quote may reach the daily cap but not exceed it)
+    // Covers: P3, T5 (spent over the last 24 hours + quote may reach the cap but not exceed it)
     @Test
-    void evaluateQuote_deniesWithP3_whenDailyTotalWouldExceedCap() {
+    void evaluateQuote_deniesWithP3_when24HourTotalWouldExceedCap() {
         usage.spend.put(ALICE, 35_000L);
 
         assertThat(engine.evaluateQuote(ALICE, quote(15_000)).allowed()).isTrue();
@@ -181,13 +181,25 @@ class RuleBasedPolicyEngineTest {
         assertThat(engine.evaluateQuote(ALICE, quote(1)).ruleId()).contains(PolicyRule.P3);
     }
 
-    // Covers: P3, section 20 (the window is the current UTC day, read live from the clock)
+    // Covers: P3, section 20 (the window is the rolling last 24 hours, read live from the clock, not a calendar day)
     @Test
-    void evaluateQuote_asksForTheCurrentUtcDay_forP3() {
+    void evaluateQuote_asksForTheLast24Hours_forP3() {
         engine.evaluateQuote(ALICE, quote(100));
 
-        assertThat(usage.windows).containsExactly(new Window(ALICE,
-                Instant.parse("2026-11-08T00:00:00Z"), Instant.parse("2026-11-09T00:00:00Z")));
+        assertThat(usage.windows).containsExactly(new Window(ALICE, Instant.parse("2026-11-07T15:30:00Z"), NOW));
+    }
+
+    // Covers: P3 (the window moves with the clock: just after UTC midnight it still reaches into yesterday)
+    @Test
+    void evaluateQuote_usesRollingWindow_acrossUtcMidnight() {
+        Instant justAfterMidnight = Instant.parse("2026-11-09T00:05:00Z");
+        PolicyEngine late = new RuleBasedPolicyEngine(PolicyConfig.defaults(),
+                RuleBasedPolicyEngineTest::registry, usage, Clock.fixed(justAfterMidnight, ZoneOffset.UTC));
+
+        late.evaluateQuote(ALICE, quote(100));
+
+        assertThat(usage.windows).containsExactly(
+                new Window(ALICE, Instant.parse("2026-11-08T00:05:00Z"), justAfterMidnight));
     }
 
     // Covers: P4, FR7, table 7.2 (QUOTING guard: policy re-checks the merchant's quoted items)

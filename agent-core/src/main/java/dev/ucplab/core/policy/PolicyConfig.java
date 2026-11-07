@@ -12,9 +12,9 @@ import java.util.Objects;
  * @param maxLines P4
  * @param maxProposalsPerHour P5
  * @param approvalRequired P6
- * @param reapprovalOnHigherTotal P7
  * @param maxRequotes P8
  */
+// P7 has no setting: it is always on (9.1).
 // TODO(M6): agent-service loads POLICY_FILE (policy.yaml) into this record and calls
 // requireValidFor(AGENT_PROFILE) at startup. agent-core stays JDK-only, so no YAML parsing here (5.2).
 public record PolicyConfig(
@@ -24,7 +24,6 @@ public record PolicyConfig(
         int maxLines,
         int maxProposalsPerHour,
         boolean approvalRequired,
-        boolean reapprovalOnHigherTotal,
         int maxRequotes) {
 
     public PolicyConfig {
@@ -40,7 +39,7 @@ public record PolicyConfig(
 
     /** The defaults of table 9.1. */
     public static PolicyConfig defaults() {
-        return new PolicyConfig(20_000, 50_000, 5, 5, 10, true, true, 2);
+        return new PolicyConfig(20_000, 50_000, 5, 5, 10, true, 2);
     }
 
     /**

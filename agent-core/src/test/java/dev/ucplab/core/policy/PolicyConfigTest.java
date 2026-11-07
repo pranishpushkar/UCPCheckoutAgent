@@ -11,13 +11,22 @@ import org.junit.jupiter.api.Test;
 class PolicyConfigTest {
 
     private static PolicyConfig withApproval(boolean approvalRequired) {
-        return new PolicyConfig(20_000, 50_000, 5, 5, 10, approvalRequired, true, 2);
+        return new PolicyConfig(20_000, 50_000, 5, 5, 10, approvalRequired, 2);
     }
 
-    // Covers: P2, P3, P4, P5, P6, P7, P8 (defaults of table 9.1)
+    // Covers: P2, P3, P4, P5, P6, P8 (defaults of table 9.1)
     @Test
     void policyConfig_defaults_matchTable91() {
-        assertThat(PolicyConfig.defaults()).isEqualTo(new PolicyConfig(20_000, 50_000, 5, 5, 10, true, true, 2));
+        assertThat(PolicyConfig.defaults()).isEqualTo(new PolicyConfig(20_000, 50_000, 5, 5, 10, true, 2));
+    }
+
+    // Covers: P7 (always on: the configuration has no P7 setting)
+    @Test
+    void policyConfig_hasNoP7Setting() {
+        assertThat(PolicyConfig.class.getRecordComponents())
+                .extracting(java.lang.reflect.RecordComponent::getName)
+                .containsExactly("perPurchaseCapMinor", "dailyCapMinor", "maxQuantityPerLine", "maxLines",
+                        "maxProposalsPerHour", "approvalRequired", "maxRequotes");
     }
 
     // Covers: P6 (approval may not be false in the prod profile)
@@ -39,11 +48,11 @@ class PolicyConfigTest {
     // Covers: P2 to P5, P8 (limits must be usable values)
     @Test
     void policyConfig_throws_forNonPositiveLimits() {
-        assertThatThrownBy(() -> new PolicyConfig(0, 50_000, 5, 5, 10, true, true, 2))
+        assertThatThrownBy(() -> new PolicyConfig(0, 50_000, 5, 5, 10, true, 2))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new PolicyConfig(20_000, 50_000, 0, 5, 10, true, true, 2))
+        assertThatThrownBy(() -> new PolicyConfig(20_000, 50_000, 0, 5, 10, true, 2))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new PolicyConfig(20_000, 50_000, 5, 5, 10, true, true, -1))
+        assertThatThrownBy(() -> new PolicyConfig(20_000, 50_000, 5, 5, 10, true, -1))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

@@ -10,7 +10,6 @@ import dev.ucplab.core.merchant.MerchantStatus;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -18,11 +17,13 @@ import java.util.function.Function;
 
 /**
  * Table 9.1 rules P1 to P5. Rules are checked in rule-number order and the first failure is
- * returned. The daily window for P3 is the current UTC calendar day; the P5 window is the last hour.
+ * returned. The P3 window is the last 24 hours (rolling, so time zones don't matter); the P5
+ * window is the last hour.
  */
 public final class RuleBasedPolicyEngine implements PolicyEngine {
 
     private static final Duration RATE_WINDOW = Duration.ofHours(1);
+    private static final Duration SPEND_WINDOW = Duration.ofHours(24);
 
     private final PolicyConfig config;
     private final Function<MerchantId, Optional<MerchantEntry>> merchants;
@@ -87,12 +88,12 @@ public final class RuleBasedPolicyEngine implements PolicyEngine {
                     + config.perPurchaseCapMinor());
         }
 
-        Instant dayStart = clock.instant().truncatedTo(ChronoUnit.DAYS);
-        long spent = usage.committedSpendMinor(user, dayStart, dayStart.plus(Duration.ofDays(1)));
+        Instant now = clock.instant();
+        long spent = usage.committedSpendMinor(user, now.minus(SPEND_WINDOW), now);
         // Written as a subtraction so a large spent value cannot overflow.
         if (total > config.dailyCapMinor() - spent) {
-            return PolicyDecision.deny(PolicyRule.P3, "spent today " + spent + " plus quoted total " + total
-                    + " is above the daily cap " + config.dailyCapMinor());
+            return PolicyDecision.deny(PolicyRule.P3, "spent in the last 24 hours " + spent + " plus quoted total "
+                    + total + " is above the daily cap " + config.dailyCapMinor());
         }
 
         Optional<PolicyDecision> size = checkSize(quote.lines().size(),
