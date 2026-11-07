@@ -169,7 +169,7 @@ These are the properties the evaluation checks. Each must be enforced in code an
 | `eval-harness` | Scenario runner, invariant checks, report | JDK, client libraries |
 | `merchant` | System under test | JDK only |
 
-An ArchUnit test must fail the build if `agent-core` imports anything outside `java.*`, or if any module other than `agent-adk` imports an ADK type.
+An ArchUnit test must fail the build if `agent-core` imports anything outside `java.*` or `javax.crypto.*`, or if any module other than `agent-adk` imports an ADK type.
 
 ### 5.3 Happy path
 
@@ -427,6 +427,14 @@ Configuration file `policy.yaml`. `PolicyEngine.evaluate(...)` returns `PolicyDe
 - Single use. TTL 10 minutes. Constant-time comparison.
 - `ApprovalService` is the only code that can move an intent to `APPROVED`.
 - The token goes to the approver channel only. It is never in a tool result or a prompt (I6, I8).
+
+**Snapshot and token details \[CONTRACT\].**
+
+- Before hashing, `lines` are sorted by `itemId`, then `quantity`, then `unitPriceMinor`, so the order in which the merchant lists them does not change `snapshotHash`.
+- `expiresAt` is written as ISO-8601 UTC.
+- `maxTotalMinor` defaults to the quoted `totalMinor`.
+- `approvalToken` is base64url without padding. The HMAC uses `javax.crypto.Mac` (`HmacSHA256`), and tokens are compared with `MessageDigest.isEqual`. This is why `agent-core` may also import `javax.crypto.*` (5.2).
+- `approvalSecret` must be at least 32 bytes, or startup fails. The `prod` profile also refuses a secret that starts with `change-me`.
 
 ### 9.3 Defence in depth against prompt injection
 
@@ -1076,9 +1084,9 @@ AGENT_PROFILE=local
 DATABASE_URL=jdbc:postgresql://postgres:5432/ucplab
 OIDC_ISSUER=http://localhost:8081/realms/ucplab
 OIDC_CLIENT_ID=ucplab-agent
-OIDC_CLIENT_SECRET=change-me-local-only
+OIDC_CLIENT_SECRET=change-me-local-only-at-least-32-bytes
 OIDC_REDIRECT_URI=http://localhost:8080/auth/callback
-APPROVAL_SECRET=change-me-local-only
+APPROVAL_SECRET=change-me-local-only-at-least-32-bytes
 MERCHANTS_FILE=/config/merchants.local.yaml
 POLICY_FILE=/config/policy.yaml
 GEMINI_API_KEY=          # live mode only
