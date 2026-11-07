@@ -405,7 +405,7 @@ Connect timeout 2 s. Request timeout 5 s, except `complete` at 10 s. One circuit
 
 ### 9.1 Policy rules \[CONTRACT\]
 
-Configuration file `policy.yaml`. `PolicyEngine.evaluate(...)` returns `PolicyDecision{allowed, ruleId, reason}`, and every decision is stored as an event.
+Configuration file `policy.yaml`. `PolicyEngine.evaluateProposal(...)` and `evaluateQuote(...)` (Appendix B) return `PolicyDecision{allowed, ruleId, reason}`, and every decision is stored as an event.
 
 | Rule | Default | Meaning |
 | --- | --- | --- |
