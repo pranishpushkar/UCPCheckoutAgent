@@ -291,6 +291,7 @@ Any event that is not in this table for the current state is a programming error
 | RECONCILING | deadline reached | none | ESCALATED | event listing all attempts |
 | COMPLETING or RECONCILING | price\_changed, checkout incomplete or observed incomplete | requote\_count has reached the P8 cap | REJECTED | failure\_reason price\_unstable, cancel session. Not ESCALATED: no money has moved and the outcome is known |
 | RECONCILING | observed ready\_for\_complete | quiet period (7.5) not yet elapsed | RECONCILING | poll again; do not resend |
+| QUOTING | an update or GET shows the session completed | none | RECONCILING | send nothing new; reconciliation records the order. Defensive: a correct orchestrator should never reach this, but it must never throw here |
 
 ### 7.3 Step function and write-ahead protocol \[CONTRACT\]
 
@@ -358,11 +359,11 @@ A `RecoveryWorker` runs every 5 s and once at startup. It selects intents in `QU
 
 | State | Must leave it within |
 |---|---|
-| `PROPOSED`, `QUOTING`, `APPROVED` | One worker pass plus the request timeouts of its calls |
+| `PROPOSED`, `QUOTING`, `APPROVED` | One worker pass plus at most 4 attempts of a single call and their backoff (8.2): about 26 s for create or update (4 × 5 s timeouts plus backoff), 10 s for the first complete |
 | `AWAITING_APPROVAL` | The approval's `expires_at` (10 minutes) |
 | `COMPLETING`, `RECONCILING` | The reconciliation deadline (60 s per complete key, 7.5) |
 
-Each crash adds at most one lease period (30 s) before another worker takes over.
+Each crash adds at most one lease period plus one worker period (30 s + 5 s = 35 s) before another worker takes over.
 
 Lease rules \[CONTRACT\]:
 
@@ -443,7 +444,7 @@ Configuration file `policy.yaml`. `PolicyEngine.evaluateProposal(...)` and `eval
 `ApprovalSnapshot` fields: `intentId`, `merchantId`, `sessionId`, `lines[{itemId, quantity, unitPriceMinor}]`, `currency`, `totalMinor`, `maxTotalMinor`, `expiresAt`. The snapshot is built from the **merchant's response**, never from model output.
 
 - `snapshotHash = sha256_hex(canonicalJson(snapshot))`.
-- `approvalToken = base64url(HMAC_SHA256(approvalSecret, intentId + ':' + snapshotHash))`.
+- `approvalToken = base64url(HMAC_SHA256(approvalSecret, approvalId + ':' + intentId + ':' + snapshotHash))`.
 - Single use. TTL 10 minutes. Constant-time comparison.
 - `ApprovalService` is the only code that can move an intent to `APPROVED`.
 - The token goes to the approver channel only. It is never in a tool result or a prompt (I6, I8).
@@ -455,6 +456,7 @@ Configuration file `policy.yaml`. `PolicyEngine.evaluateProposal(...)` and `eval
 - `maxTotalMinor` defaults to the quoted `totalMinor`.
 - `approvalToken` is base64url without padding. The HMAC uses `javax.crypto.Mac` (`HmacSHA256`), and tokens are compared with `MessageDigest.isEqual`. This is why `agent-core` may also import `javax.crypto.*` (5.2).
 - `approvalSecret` must be at least 32 bytes, or startup fails. The `prod` profile also refuses a secret that starts with `change-me`.
+- The token includes the approval id, so two approvals with byte-identical snapshots (for example when a price goes back to its old value) get different tokens, and a consumed token can never verify against a later approval.
 
 ### 9.3 Defence in depth against prompt injection
 
@@ -699,6 +701,8 @@ Per scenario: runs; terminal-state distribution; invariant violations; time to t
 | 8. Live evaluation | Real model, budget-capped, manual or nightly | eval-harness |
 | 9. Mutation (optional) | Target a mutation score of at least 80% on the orchestrator and approval packages | PIT |
 
+Test naming: `unit_behaviour_condition`. Each test carries a comment citing the requirement or invariant IDs it covers.
+
 ### 14.1 Property tests without a library \[CONTRACT\]
 
 jqwik was removed. Its author asks that it not be used with AI coding agents, and its output includes a message telling agents to ignore its test results, which conflicts with a workflow where an agent must act on real test failures. Property tests use plain JUnit 5 instead.
@@ -711,8 +715,6 @@ jqwik was removed. Its author asks that it not be used with AI coding agents, an
 - **Merchant strictness.** `FaultyMerchantModel` also has a strict mode in which each idempotency key can create its own order, as a merchant without per-session protection might. Every property runs in both modes, so I1 detects key misuse directly instead of only through I3 and I7.
 - **Bounds.** The generator's limits are constants in `ScheduleGenerator`, documented in its Javadoc: up to 3 baskets and 40 entries per schedule, faults on the first 6 calls of each kind, up to 2 crashes and 4 decisions per basket, proxy holds of 1 to 30 s, and waits of up to 11 minutes.
 - **Reach check.** A committed test confirms that generated schedules reach every terminal state, include crashes and same-key resends, and hit the P8 cap, so the property counts are meaningful.
-
-Test naming: `unit_behaviour_condition`. Each test carries a comment citing the requirement or invariant IDs it covers.
 
 ## 15. Repository, stack and build
 
@@ -1040,7 +1042,7 @@ In `prod` these routes do not exist (404).
 
 ### 23.5 Errors and limits
 
-Errors use one shape: `{code, message, request_id}`. Codes: `unauthenticated` (401), `reauth_required` (401), `csrf_failed` (403), `not_found` (404), `approval_not_pending` (409), intent_busy (409, with Retry-After set to the remaining lease time; returned when another worker still holds the intent's lease, for example for up to 30 s after a crash), `validation_failed` (422), `rate_limited` (429, with `Retry-After`), `internal` (500, no internals in the message). `POST /api/runs` is limited per user by P5 and returns 429 when exceeded.
+Errors use one shape: `{code, message, request_id}`. Codes: `unauthenticated` (401), `reauth_required` (401), `csrf_failed` (403), `not_found` (404), `approval_not_pending` (409), `intent_busy` (409, with Retry-After set to the remaining lease time; returned when another worker still holds the intent's lease, for example for up to 30 s after a crash), `validation_failed` (422), `rate_limited` (429, with `Retry-After`), `internal` (500, no internals in the message). `POST /api/runs` is limited per user by P5 and returns 429 when exceeded.
 
 ## 24. Lab console (UI)
 
@@ -1334,6 +1336,8 @@ Create `.github/copilot-instructions.md` with this content before generating any
 - User identity comes only from AuthContext. Every repository call on intents, approvals
   or runs takes the owner's UserId (section 18). Never trust a user id from a request body.
 - Never cache checkout sessions, quotes, approvals or reconciliation reads (section 20).
+- Don't add jqwik or any other property-testing library. Property tests follow section 14.1.
+- Never add Co-Authored-By, Claude-Session or "Generated with Claude Code" lines to commits or PRs.
 - Work one milestone at a time (section 16). A milestone is done only when its acceptance
   criteria pass under ./mvnw verify.
 ```
