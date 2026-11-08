@@ -161,6 +161,59 @@ public final class InMemoryIntentRepository implements IntentRepository {
     }
 
     @Override
+    public void resolveAttempt(
+            AttemptId id, AttemptStatus status, Optional<Integer> httpStatus, Optional<String> responseJson,
+            PurchaseIntent intent, long expectedVersion, String leaseOwner) {
+        Objects.requireNonNull(id, "id");
+        Objects.requireNonNull(status, "status");
+        Objects.requireNonNull(httpStatus, "httpStatus");
+        Objects.requireNonNull(responseJson, "responseJson");
+        Objects.requireNonNull(intent, "intent");
+        lock.lock();
+        try {
+            // Every check comes before the first write, so a failure leaves nothing behind (7.3 step 5).
+            PurchaseIntent stored = fenced(intent.id(), expectedVersion, leaseOwner);
+            MerchantAttempt attempt = attempts.get(id);
+            if (attempt == null) {
+                throw new IntentNotFoundException("no such attempt: " + id);
+            }
+            if (!attempt.intentId().equals(intent.id())) {
+                throw new IllegalArgumentException("attempt " + id + " belongs to another intent");
+            }
+            PurchaseIntent merged = merge(stored, intent, expectedVersion + 1);
+            attempts.put(id, attempt.resolved(status, httpStatus, responseJson, clock.instant()));
+            intents.put(intent.id(), merged);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
+    public Optional<PurchaseIntent> claim(IntentId id, String owner, Duration lease) {
+        Objects.requireNonNull(id, "id");
+        Objects.requireNonNull(owner, "owner");
+        Objects.requireNonNull(lease, "lease");
+        lock.lock();
+        try {
+            PurchaseIntent stored = intents.get(id);
+            if (stored == null) {
+                return Optional.empty();
+            }
+            Instant now = clock.instant();
+            boolean free = stored.leaseOwner().equals(Optional.of(owner))
+                    || stored.leaseUntil().map(t -> t.isBefore(now)).orElse(true);
+            if (!free) {
+                return Optional.empty();
+            }
+            PurchaseIntent leased = stored.withLease(Optional.of(owner), Optional.of(now.plus(lease)));
+            intents.put(id, leased);
+            return Optional.of(leased);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
     public List<PurchaseIntent> claimRecoverable(String owner, Duration lease, int limit) {
         Objects.requireNonNull(owner, "owner");
         Objects.requireNonNull(lease, "lease");
@@ -217,8 +270,9 @@ public final class InMemoryIntentRepository implements IntentRepository {
         }
     }
 
-    /** Test and harness view of an intent's merchant attempts, in insertion order. */
+    @Override
     public List<MerchantAttempt> attempts(IntentId id) {
+        Objects.requireNonNull(id, "id");
         lock.lock();
         try {
             return attempts.values().stream().filter(a -> a.intentId().equals(id)).toList();
@@ -248,11 +302,18 @@ public final class InMemoryIntentRepository implements IntentRepository {
         return stored;
     }
 
-    private static PurchaseIntent merge(PurchaseIntent stored, PurchaseIntent update, long newVersion) {
+    /** Caller holds the lock. Refuses a session change once a complete attempt exists (I4). */
+    private PurchaseIntent merge(PurchaseIntent stored, PurchaseIntent update, long newVersion) {
+        if (stored.sessionId().isPresent() && !stored.sessionId().equals(update.sessionId())
+                && attempts.values().stream()
+                        .anyMatch(a -> a.intentId().equals(stored.id()) && a.op() == AttemptOp.COMPLETE)) {
+            throw new IllegalStateException("I4: session of intent " + stored.id()
+                    + " cannot change after a complete attempt");
+        }
         return new PurchaseIntent(
-                stored.id(), stored.owner(), stored.merchantId(), stored.dedupeKey(), update.state(), newVersion,
-                update.sessionId(), update.approvedSnapshotHash(), update.requoteCount(), update.orderId(),
-                update.failureReason(), update.uncertainSince(), stored.leaseOwner(), stored.leaseUntil(),
-                stored.createdAt(), update.updatedAt());
+                stored.id(), stored.owner(), stored.merchantId(), stored.dedupeKey(), stored.lines(),
+                stored.buyerEmail(), update.state(), newVersion, update.sessionId(), update.approvedSnapshotHash(),
+                update.requoteCount(), update.orderId(), update.failureReason(), update.uncertainSince(),
+                stored.leaseOwner(), stored.leaseUntil(), stored.createdAt(), update.updatedAt());
     }
 }

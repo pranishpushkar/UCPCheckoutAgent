@@ -42,6 +42,32 @@ public interface IntentRepository {
 
     void resolveAttempt(AttemptId id, AttemptStatus status, Optional<Integer> httpStatus, Optional<String> responseJson);
 
+    // The three methods below are additions to the Appendix B port. 7.3 needs them and the listed methods cannot
+    // express them: step 1 loads the unresolved attempt, resends read the stored body (7.4), and step 5 must move
+    // the state together with the attempt under the same fencing as step 3 (7.6). claim takes the lease on one named
+    // intent, which propose, ApprovalService.decide and advance need for states RecoveryWorker does not claim.
+
+    /** System read (T2): the intent's attempts in the order they were recorded (7.3 step 1, 7.4). */
+    List<MerchantAttempt> attempts(IntentId id);
+
+    /**
+     * 7.3 step 5 as one atomic step: resolves the attempt and writes the intent under the same checks as
+     * {@link #update}. When it throws, neither change is visible, so the attempt stays SENT and is later treated as
+     * uncertain (7.3).
+     *
+     * @throws StaleVersionException the stored version differs
+     * @throws LeaseLostException the stored lease owner differs
+     */
+    void resolveAttempt(
+            AttemptId id, AttemptStatus status, Optional<Integer> httpStatus, Optional<String> responseJson,
+            PurchaseIntent intent, long expectedVersion, String leaseOwner);
+
+    /**
+     * Takes or renews the lease on one intent when it is free, expired or already held by {@code owner}, setting it
+     * to now + {@code lease} (7.6). Empty when another worker holds a live lease or the intent does not exist.
+     */
+    Optional<PurchaseIntent> claim(IntentId id, String owner, Duration lease);
+
     /**
      * Claims up to {@code limit} intents in QUOTING, COMPLETING or RECONCILING whose lease is empty or expired,
      * setting the lease owner and expiry to now + {@code lease} (7.6).

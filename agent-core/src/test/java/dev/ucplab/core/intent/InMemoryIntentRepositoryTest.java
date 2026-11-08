@@ -30,12 +30,13 @@ class InMemoryIntentRepositoryTest {
     private static final MerchantId SHOP = new MerchantId("shop-1");
     private static final String W1 = "worker-1";
     private static final String W2 = "worker-2";
+    private static final List<ProposedLine> LINES = List.of(new ProposedLine("item_123", 1));
 
     private final MutableClock clock = new MutableClock(T0);
     private final InMemoryIntentRepository repo = new InMemoryIntentRepository(clock);
 
     private PurchaseIntent proposed(String id, UserId owner, String dedupeKey) {
-        return PurchaseIntent.proposed(new IntentId(id), owner, SHOP, dedupeKey, clock.instant());
+        return PurchaseIntent.proposed(new IntentId(id), owner, SHOP, dedupeKey, LINES, "a@example.com", clock.instant());
     }
 
     /** Inserts an intent in QUOTING and claims it for {@code worker}; returns the claimed copy (version 0). */
@@ -186,7 +187,8 @@ class InMemoryIntentRepositoryTest {
     void update_keepsOwnerAndLease_whateverTheCallerPasses() {
         PurchaseIntent claimed = insertAndClaim("i1", ALICE, "d1", W1);
         PurchaseIntent forged = new PurchaseIntent(
-                claimed.id(), BOB, new MerchantId("other"), "forged", IntentState.COMPLETING, 99,
+                claimed.id(), BOB, new MerchantId("other"), "forged", List.of(new ProposedLine("other", 5)),
+                "forged@example.com", IntentState.COMPLETING, 99,
                 Optional.empty(), Optional.empty(), 0, Optional.empty(), Optional.empty(), Optional.empty(),
                 Optional.of(W2), Optional.of(T0.plusSeconds(9999)), T0.minusSeconds(5), clock.instant());
 
@@ -196,6 +198,8 @@ class InMemoryIntentRepositoryTest {
         assertThat(stored.owner()).isEqualTo(ALICE);
         assertThat(stored.merchantId()).isEqualTo(SHOP);
         assertThat(stored.dedupeKey()).isEqualTo("d1");
+        assertThat(stored.lines()).isEqualTo(LINES);
+        assertThat(stored.buyerEmail()).isEqualTo("a@example.com");
         assertThat(stored.createdAt()).isEqualTo(claimed.createdAt());
         assertThat(stored.leaseOwner()).contains(W1);
         assertThat(stored.leaseUntil()).isEqualTo(claimed.leaseUntil());
@@ -432,5 +436,77 @@ class InMemoryIntentRepositoryTest {
         assertThat(repo.events(p.id())).containsExactly(first, second);
         assertThatThrownBy(() -> repo.appendEvent(new IntentId("ghost"), first))
                 .isInstanceOf(IntentNotFoundException.class);
+    }
+
+    private MerchantAttempt completeAttempt(String attemptId, PurchaseIntent intent) {
+        return MerchantAttempt.sent(
+                new AttemptId(attemptId), intent.id(), AttemptOp.COMPLETE, 0,
+                Optional.of(IdempotencyKey.derive(intent.id(), MutatingOp.COMPLETE, 0)),
+                Optional.of(new FrozenBody("{}")), clock.instant());
+    }
+
+    // Covers: 7.3 step 5, 7.6 (resolve and state move are one fenced write)
+    @Test
+    void resolveAttemptWithIntent_resolvesAndMovesState_inOneStep() {
+        PurchaseIntent claimed = insertAndClaim("i1", ALICE, "d1", W1);
+        repo.recordAttempt(attempt("a1", claimed), claimed, 0, W1);
+
+        repo.resolveAttempt(new AttemptId("a1"), AttemptStatus.RESPONDED, Optional.of(201), Optional.of("{}"),
+                claimed.withState(IntentState.AWAITING_APPROVAL, clock.instant()), 1, W1);
+
+        assertThat(repo.attempts(claimed.id())).singleElement()
+                .satisfies(a -> assertThat(a.status()).isEqualTo(AttemptStatus.RESPONDED));
+        PurchaseIntent stored = repo.findForSystem(claimed.id()).orElseThrow();
+        assertThat(stored.state()).isEqualTo(IntentState.AWAITING_APPROVAL);
+        assertThat(stored.version()).isEqualTo(2);
+    }
+
+    // Covers: 7.3 step 5, 7.6, S15 (a fenced resolve that fails leaves the attempt SENT and the intent unchanged)
+    @Test
+    void resolveAttemptWithIntent_changesNothing_whenLeaseLostOrStale() {
+        PurchaseIntent claimed = insertAndClaim("i1", ALICE, "d1", W1);
+        repo.recordAttempt(attempt("a1", claimed), claimed, 0, W1);
+        PurchaseIntent moved = claimed.withState(IntentState.AWAITING_APPROVAL, clock.instant());
+
+        assertThatThrownBy(() -> repo.resolveAttempt(new AttemptId("a1"), AttemptStatus.RESPONDED, Optional.empty(),
+                Optional.empty(), moved, 1, W2)).isInstanceOf(LeaseLostException.class);
+        assertThatThrownBy(() -> repo.resolveAttempt(new AttemptId("a1"), AttemptStatus.RESPONDED, Optional.empty(),
+                Optional.empty(), moved, 0, W1)).isInstanceOf(StaleVersionException.class);
+
+        assertThat(repo.attempts(claimed.id())).singleElement()
+                .satisfies(a -> assertThat(a.status()).isEqualTo(AttemptStatus.SENT));
+        assertThat(repo.findForSystem(claimed.id()).orElseThrow().state()).isEqualTo(IntentState.QUOTING);
+    }
+
+    // Covers: I4 (the session id cannot change once a complete attempt exists)
+    @Test
+    void update_refusesSessionChange_afterCompleteAttempt() {
+        PurchaseIntent claimed = insertAndClaim("i1", ALICE, "d1", W1);
+        PurchaseIntent withSession = claimed.withSessionId(new SessionId("cs_1"));
+        repo.update(withSession, 0, W1);
+        repo.recordAttempt(completeAttempt("a1", withSession), withSession, 1, W1);
+
+        assertThatThrownBy(() -> repo.update(withSession.withSessionId(new SessionId("cs_2")), 2, W1))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("I4");
+        assertThat(repo.findForSystem(claimed.id()).orElseThrow().sessionId()).contains(new SessionId("cs_1"));
+    }
+
+    // Covers: 7.6 (claim takes a free or expired lease, renews its own, and refuses a live lease of another worker)
+    @Test
+    void claim_takesFreeOrExpiredLease_andRefusesLiveForeignLease() {
+        repo.insert(proposed("i1", ALICE, "d1").withState(IntentState.AWAITING_APPROVAL, clock.instant()));
+        IntentId id = new IntentId("i1");
+
+        assertThat(repo.claim(id, W1, LEASE)).hasValueSatisfying(i -> {
+            assertThat(i.leaseOwner()).contains(W1);
+            assertThat(i.leaseUntil()).contains(T0.plus(LEASE));
+        });
+        assertThat(repo.claim(id, W2, LEASE)).isEmpty();
+        clock.advance(Duration.ofSeconds(10));
+        assertThat(repo.claim(id, W1, LEASE)).hasValueSatisfying(
+                i -> assertThat(i.leaseUntil()).contains(T0.plusSeconds(10).plus(LEASE)));
+        clock.advance(LEASE.plusSeconds(1));
+        assertThat(repo.claim(id, W2, LEASE)).hasValueSatisfying(i -> assertThat(i.leaseOwner()).contains(W2));
+        assertThat(repo.claim(new IntentId("missing"), W1, LEASE)).isEmpty();
     }
 }

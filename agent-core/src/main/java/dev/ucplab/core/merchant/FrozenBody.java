@@ -4,8 +4,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 
 /**
- * The {@code complete} request body, built once when the intent becomes APPROVED and re-sent byte for byte (7.4, I7).
- * Holds a payment credential, so it is never logged: {@link #toString()} hides the content.
+ * A frozen request body, stored in {@code merchant_attempt.request_body} and re-sent byte for byte under the same key
+ * (7.3, 7.4, I7). The {@code complete} body is built once per approval and holds a payment credential; create and
+ * update bodies hold the buyer email. Neither is ever logged: {@link #toString()} hides the content.
  */
 public record FrozenBody(String json) {
 
