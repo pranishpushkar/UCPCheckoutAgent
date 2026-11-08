@@ -15,7 +15,7 @@
 
     <build>
         <plugins>
-            <!-- SelfTest is a plain main() with 46 checks and exits 1 on any failure, so a failing check fails the build. -->
+            <!-- SelfTest is a plain main() with 46 checks and exits 1 on any failure. It runs in a forked JVM so that exit code fails the build cleanly. -->
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
@@ -24,10 +24,15 @@
                         <id>merchant-selftest</id>
                         <phase>integration-test</phase>
                         <goals>
-                            <goal>java</goal>
+                            <goal>exec</goal>
                         </goals>
                         <configuration>
-                            <mainClass>dev.ucplab.merchant.SelfTest</mainClass>
+                            <executable>${java.home}/bin/java</executable>
+                            <arguments>
+                                <argument>-classpath</argument>
+                                <classpath/>
+                                <argument>dev.ucplab.merchant.SelfTest</argument>
+                            </arguments>
                             <classpathScope>test</classpathScope>
                         </configuration>
                     </execution>
