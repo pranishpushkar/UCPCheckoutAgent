@@ -89,4 +89,30 @@ class CanonicalJsonTest {
 
         assertThat(CanonicalJson.write(forward)).isEqualTo(CanonicalJson.write(backward));
     }
+
+    // Covers: 7.4, I7 (a frozen body read back and rewritten is byte-identical)
+    @Test
+    void read_roundTripsWrittenJson_byteForByte() {
+        String json = "{\"a\":[1,-2,true,false],\"b\":{\"c\":\"x\\\"y\\\\z\\n\\u0001\"},\"d\":9007199254740993}";
+
+        Object value = CanonicalJson.read(json);
+
+        assertThat(CanonicalJson.write(value)).isEqualTo(json);
+        assertThat(CanonicalJson.readObject(json).get("d")).isEqualTo(9007199254740993L);
+    }
+
+    // Covers: 8.4 (whitespace between tokens is accepted on read)
+    @Test
+    void read_acceptsWhitespace_betweenTokens() {
+        assertThat(CanonicalJson.read(" { \"k\" : [ 1 , 2 ] } ")).isEqualTo(Map.of("k", List.of(1L, 2L)));
+    }
+
+    // Covers: 8.4 (fail closed: null, fractions, duplicates and malformed input are refused)
+    @Test
+    void read_throws_forUnsupportedOrMalformedInput() {
+        for (String bad : List.of("null", "1.5", "1e3", "{\"a\":1,\"a\":2}", "[1,]", "{\"a\"}", "\"x", "[1] 2", "")) {
+            assertThatThrownBy(() -> CanonicalJson.read(bad)).as(bad).isInstanceOf(IllegalArgumentException.class);
+        }
+        assertThatThrownBy(() -> CanonicalJson.readObject("[1]")).isInstanceOf(IllegalArgumentException.class);
+    }
 }
