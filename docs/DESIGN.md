@@ -116,9 +116,9 @@ These are the properties the evaluation checks. Each must be enforced in code an
 | I2 | Any order matches the approved snapshot: same merchant, items, quantities and currency, and a total not above the approved maximum |
 | I3 | `COMPLETING` is reachable only from `APPROVED`, with a valid, unexpired, unconsumed approval whose hash matches the current quote |
 | I4 | After the first `complete` request is sent, the intent's merchant session id never changes and no new session is created for that intent |
-| I5 | Every non-terminal intent reaches a terminal state, or `ESCALATED`, within its deadline (liveness) |
+| I5 | Every non-terminal intent reaches a terminal state, or `ESCALATED`, within its deadline (liveness). The deadline for each state is set in 7.6 |
 | I6 | The model's tool set contains no operation that can complete, cancel or approve |
-| I7 | A `complete` retry under the same approval reuses the same idempotency key and a byte-identical body. A new approval after a re-quote gets a new key and a new frozen body (7.4) |
+| I7 | A `complete` retry under the same approval reuses the same idempotency key and a byte-identical body. A new approval after a re-quote gets a new key; its frozen body may be byte-identical to the previous one, because it holds only the payment instrument (7.4) |
 | I8 | Secrets, tokens and card credentials are never written to logs, events or traces |
 | I9 | Tenant isolation: a user can read, approve or act on only their own intents, approvals and runs |
 | I10 | Only the intent's owner, with a sign-in no older than maxApprovalAuthAge, can approve it, and the approval records decided\_by |
@@ -320,13 +320,13 @@ Create and update are safe to resend with the same key. `complete` is never rese
 - `revision` is 0 for create and cancel. For update it is the number of updates already issued for the intent. For `complete` it is the intent's `requote_count` at the time of approval: 0 for the first approval, 1 after the first re-quote and new approval, and so on. Every approval therefore gets its own `complete` key, and all resends under that approval share it.
 - The `complete` body is built once, when the intent becomes `APPROVED`, from the approved snapshot and the payment instrument. It is stored in `merchant_attempt.request_body`, and every resend reads that stored body (I7).
 
-**New complete key guard \[CONTRACT\].** A `complete` with a new key (a higher `requote_count`) may be sent only when every earlier `complete` attempt for the intent is RESPONDED with a definitive no-charge outcome (price_changed, out_of_stock, incomplete or payment_declined). If any earlier `complete` attempt is SENT or UNCERTAIN, the intent must first reconcile (7.5). This stops a new key from being sent while an older request could still create an order. Why the key must change: the merchant stores the result per key (A.1), so reusing the old key after a re-quote would replay the stored price_changed result, or return 409 because the body differs, and S5 could never complete.
+**New complete key guard \[CONTRACT\].** A `complete` with a new key (a higher `requote_count`) may be sent only when every earlier `complete` attempt for the intent is RESPONDED with a definitive no-charge outcome (price_changed, out_of_stock, incomplete or payment_declined). If any earlier `complete` attempt is SENT or UNCERTAIN, the intent must first reconcile (7.5). This stops a new key from being sent while an older request could still create an order. A definitive answer to any request under a key settles every earlier attempt under that same key, because the merchant keeps one result per key (A.1). UCP requires merchants to keep idempotency results for at least 24 hours, far longer than the reconciliation deadline; VERIFY this for each real merchant. Why the key must change: the merchant stores the result per key (A.1), so reusing the old key after a re-quote would replay the stored price_changed result, or return 409 because the body differs, and S5 could never complete.
 
 ### 7.5 Reconciliation \[CONTRACT\]
 
 Parameters (configuration): `pollInitial` 250 ms, `pollMax` 2 s, jitter 20%, `deadline` 60 s measured from the first uncertainty, `maxCompleteResends` 2, `resendQuietPeriod` 20 s.
 
-1. On entering `RECONCILING`, persist `uncertain_since` once. A restart must not reset the deadline.
+1. On entering `RECONCILING`, persist `uncertain_since` once. A restart must not reset the deadline. The deadline is per complete key: when a new complete key is issued after a re-quote, uncertain_since is cleared, and the next uncertainty starts a fresh deadline. P8 limits the number of keys, so the total time stays bounded.
 2. Call `get(session)`. Reads follow the retry rules in section 8.3 and bypass the circuit breaker.
 3. Act on the observed status according to table 7.2.
 4. If the read itself fails, back off and repeat until the deadline.
@@ -347,6 +347,22 @@ Why: a GET can show `ready_for_complete` while the first `complete` is still que
 ### 7.6 Recovery and leases
 
 A `RecoveryWorker` runs every 5 s and once at startup. It selects intents in `QUOTING`, `COMPLETING` or `RECONCILING` whose `lease_until` is null or in the past, claims one with a conditional UPDATE that sets `lease_owner` and `lease_until` (now + 30 s), and calls `advance`. Reconciliation is a series of short `advance` calls, not one long call, so the lease is checked and renewed between steps rather than by a background heartbeat.
+
+**What the worker picks up \[CONTRACT\].** Besides `QUOTING`, `COMPLETING` and `RECONCILING`, each pass also handles:
+
+- `APPROVED`: calls `advance`, which sends `complete`. Without this, a crash between approval and the first `complete` would leave the intent stuck.
+- `AWAITING_APPROVAL` past the approval's `expires_at`: marks the approval `EXPIRED` and moves the intent to `REJECTED` with reason `approval_expired`.
+- Any intent with `cancel_pending` set, which happens when `REJECTED` or `FAILED_NOT_CHARGED` owes a best-effort cancel: sends `cancel` with its usual key, clears the flag on any definitive answer, and gives up after 3 attempts. A failed cancel never changes the intent's state.
+
+**Liveness bounds for I5 \[CONTRACT\].**
+
+| State | Must leave it within |
+|---|---|
+| `PROPOSED`, `QUOTING`, `APPROVED` | One worker pass plus the request timeouts of its calls |
+| `AWAITING_APPROVAL` | The approval's `expires_at` (10 minutes) |
+| `COMPLETING`, `RECONCILING` | The reconciliation deadline (60 s per complete key, 7.5) |
+
+Each crash adds at most one lease period (30 s) before another worker takes over.
 
 Lease rules \[CONTRACT\]:
 
@@ -468,7 +484,8 @@ CREATE TABLE purchase_intent (
   requote_count INTEGER NOT NULL DEFAULT 0, -- P8
   order_id TEXT,
   failure_reason TEXT,
-  uncertain_since TEXT,
+  uncertain_since TEXT,                 -- per complete key; cleared when a new complete key is issued (7.5)
+  cancel_pending INTEGER NOT NULL DEFAULT 0, -- 1 while a best-effort cancel is still owed (7.6)
   lease_owner TEXT,
   lease_until TEXT,
   created_at TEXT NOT NULL,
@@ -1023,7 +1040,7 @@ In `prod` these routes do not exist (404).
 
 ### 23.5 Errors and limits
 
-Errors use one shape: `{code, message, request_id}`. Codes: `unauthenticated` (401), `reauth_required` (401), `csrf_failed` (403), `not_found` (404), `approval_not_pending` (409), `validation_failed` (422), `rate_limited` (429, with `Retry-After`), `internal` (500, no internals in the message). `POST /api/runs` is limited per user by P5 and returns 429 when exceeded.
+Errors use one shape: `{code, message, request_id}`. Codes: `unauthenticated` (401), `reauth_required` (401), `csrf_failed` (403), `not_found` (404), `approval_not_pending` (409), intent_busy (409, with Retry-After set to the remaining lease time; returned when another worker still holds the intent's lease, for example for up to 30 s after a crash), `validation_failed` (422), `rate_limited` (429, with `Retry-After`), `internal` (500, no internals in the message). `POST /api/runs` is limited per user by P5 and returns 429 when exceeded.
 
 ## 24. Lab console (UI)
 
