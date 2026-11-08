@@ -185,6 +185,29 @@ class DefaultOrchestratorTest {
         assertThat(lab.merchant.orders()).hasSize(1);
     }
 
+    // Covers: 7.4 new-key guard, I5, I7, P7 (found by the I5 property: the first complete was uncertain, its resend
+    // under the same key got price_changed; the key is settled, so the re-approval's new key may be sent)
+    @Test
+    void sendComplete_sendsNewKey_whenResendUnderEarlierKeyGotDefinitiveAnswer() {
+        IntentId id = approved();
+        lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 1, new Fault.NotSent()));
+        lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 2, new Fault.PriceChange("item_123", 2600)));
+
+        assertThat(w.orchestrator().advance(id).after()).isEqualTo(RECONCILING);
+        lab.clock.advance(lab.config.resendQuietPeriod());
+        assertThat(w.orchestrator().advance(id).after()).isEqualTo(COMPLETING);
+        assertThat(lab.drive(w, id)).isEqualTo(AWAITING_APPROVAL);
+        assertThat(lab.decide(w, id, true)).isInstanceOf(ApprovalDecision.Approved.class);
+
+        assertThat(lab.drive(w, id)).isEqualTo(COMPLETED);
+        assertThat(lab.merchant.orders()).singleElement()
+                .satisfies(o -> assertThat(o.totalMinor()).isEqualTo(5616));
+        assertThat(attempts(id, AttemptOp.COMPLETE)).extracting(a -> a.idempotencyKey().orElseThrow())
+                .containsExactly(IdempotencyKey.derive(id, MutatingOp.COMPLETE, 0),
+                        IdempotencyKey.derive(id, MutatingOp.COMPLETE, 0),
+                        IdempotencyKey.derive(id, MutatingOp.COMPLETE, 1));
+    }
+
     // Covers: 7.5 (deadline from uncertain_since -> ESCALATED, never FAILED_NOT_CHARGED), I5 (a restart keeps it)
     @Test
     void reconcile_escalatesAtDeadline_andRestartDoesNotResetIt() {

@@ -86,7 +86,8 @@ import java.util.stream.Collectors;
  * <p><b>Keys.</b> create and cancel use revision 0; the update for re-quote n uses revision n-1, and the
  * {@code complete} key uses the requote_count at approval (7.4). A new {@code complete} key is sent only when every
  * earlier {@code complete} attempt is RESPONDED: either with a no-charge outcome, or resolved by a reconciliation
- * read that observed the session incomplete (the 7.4 guard).
+ * read that observed the session incomplete (the 7.4 guard). A definitive answer to a resend also resolves the
+ * earlier attempts under its key, because the merchant keeps one result per key (A.1).
  *
  * <p><b>Side-effect cancels.</b> Table 7.2 rows that end in REJECTED or FAILED_NOT_CHARGED with a cancel are
  * followed by one best-effort cancel, made by the next {@code advance} of the now terminal intent so a step still
@@ -525,6 +526,7 @@ public final class DefaultOrchestrator implements Orchestrator {
             if (view.status() == CheckoutStatus.COMPLETED && view.order().isPresent()) {
                 Move m = move(written, TransitionEvent.MERCHANT_COMPLETED);
                 PurchaseIntent next = m.next().withOrderId(view.order().get().id());
+                settleSiblings(attempt, "completed");
                 resolve(attempt, AttemptStatus.RESPONDED, http, summary, next, written.version());
                 transitionEvent(written.id(), m.transition());
                 return moved(written, next);
@@ -536,6 +538,7 @@ public final class DefaultOrchestrator implements Orchestrator {
                         ? TransitionEvent.PRICE_CHANGED
                         : TransitionEvent.CHECKOUT_INCOMPLETE;
                 Move m = requote(written, event);
+                settleSiblings(attempt, "incomplete");
                 resolve(attempt, AttemptStatus.RESPONDED, http, summary, m.next(), written.version());
                 requoteEvents(written, m);
                 return moved(written, m.next());
@@ -544,6 +547,7 @@ public final class DefaultOrchestrator implements Orchestrator {
                     && (codes.contains(PAYMENT_DECLINED) || codes.contains(PAYMENT_INVALID))) {
                 Move m = move(written, TransitionEvent.PAYMENT_DECLINED);
                 PurchaseIntent next = m.next().withFailureReason(PAYMENT_DECLINED);
+                settleSiblings(attempt, "payment_declined");
                 resolve(attempt, AttemptStatus.RESPONDED, http, summary, next, written.version());
                 transitionEvent(written.id(), m.transition());
                 return moved(written, next);
@@ -627,7 +631,7 @@ public final class DefaultOrchestrator implements Orchestrator {
                 if (view.order().isEmpty()) {
                     yield pastDeadline ? escalate(intent, attempts) : waiting(intent, "completed_without_order");
                 }
-                settle(sameKey, "completed");
+                settle(sameKey, "reconciliation", "completed");
                 Move m = move(intent, TransitionEvent.OBSERVED_COMPLETED);
                 PurchaseIntent next = m.next().withOrderId(view.order().get().id());
                 intents.update(next, intent.version(), workerId);
@@ -635,7 +639,7 @@ public final class DefaultOrchestrator implements Orchestrator {
                 yield moved(intent, next);
             }
             case CANCELED -> {
-                settle(sameKey, "canceled");
+                settle(sameKey, "reconciliation", "canceled");
                 Move m = move(intent, TransitionEvent.OBSERVED_CANCELED);
                 PurchaseIntent next = m.next().withFailureReason(CANCELED_BY_MERCHANT);
                 intents.update(next, intent.version(), workerId);
@@ -679,7 +683,7 @@ public final class DefaultOrchestrator implements Orchestrator {
                     // session and charge an unapproved total. Wait out the quiet period first, as for a resend.
                     yield pastDeadline ? escalate(intent, attempts) : waiting(intent, "incomplete_within_quiet_period");
                 }
-                settle(sameKey, "incomplete");
+                settle(sameKey, "reconciliation", "incomplete");
                 Move m = requote(intent, TransitionEvent.OBSERVED_INCOMPLETE);
                 intents.update(m.next(), intent.version(), workerId);
                 requoteEvents(intent, m);
@@ -712,14 +716,24 @@ public final class DefaultOrchestrator implements Orchestrator {
         return new Step(intent.state(), intent.state(), false, Optional.empty());
     }
 
-    /** Records what reconciliation established for attempts whose own response was lost (the 7.4 guard reads it). */
-    private void settle(List<MerchantAttempt> sameKey, String observed) {
+    /** Records what was established for attempts whose own response was lost (the 7.4 guard reads it). */
+    private void settle(List<MerchantAttempt> sameKey, String resolvedBy, String observed) {
         for (MerchantAttempt a : sameKey) {
             if (a.status() != AttemptStatus.RESPONDED) {
                 intents.resolveAttempt(a.id(), AttemptStatus.RESPONDED, Optional.empty(), Optional.of(
-                        CanonicalJson.write(Map.of("resolved_by", "reconciliation", "observed", observed))));
+                        CanonicalJson.write(Map.of("resolved_by", resolvedBy, "observed", observed))));
             }
         }
+    }
+
+    /**
+     * A definitive answer to one {@code complete} attempt is the merchant's stored result for its key (A.1), so it
+     * also settles the earlier attempts under that key; a late arrival of any of them replays the same result.
+     * Written before the fenced outcome write, so a crash in between cannot leave them unresolved (7.4 guard).
+     */
+    private void settleSiblings(MerchantAttempt answered, String observed) {
+        settle(completesUnder(intents.attempts(answered.intentId()), answered.revision()).stream()
+                .filter(a -> !a.id().equals(answered.id())).toList(), "same_key_answer", observed);
     }
 
     // ---------------------------------------------------------------- re-quote (P7, P8)
