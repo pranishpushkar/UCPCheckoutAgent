@@ -6,7 +6,8 @@ import java.util.Objects;
 import java.util.TreeMap;
 
 /**
- * Canonical JSON writer: object keys sorted by UTF-16 code units, no whitespace (8.4). Used for
+ * Canonical JSON writer: object keys sorted by UTF-16 code units, as {@link String#compareTo} does and RFC 8785
+ * specifies (not by code point, which orders characters above U+FFFF differently), no whitespace (8.4). Used for
  * frozen request bodies (7.4, I7) and the approval snapshot hash (9.2).
  *
  * <p>Accepted values: {@code Map} with {@code String} keys, {@code List}, {@code String},
@@ -244,6 +245,7 @@ public final class CanonicalJson {
     }
 
     private static void writeObject(Map<?, ?> map, StringBuilder out) {
+        // Natural String order: UTF-16 code units (8.4, RFC 8785).
         TreeMap<String, Object> sorted = new TreeMap<>();
         for (Map.Entry<?, ?> e : map.entrySet()) {
             if (!(e.getKey() instanceof String key)) {

@@ -3,10 +3,12 @@ package dev.ucplab.core.orchestrator;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
 
+import dev.ucplab.core.PropertySettings;
 import dev.ucplab.core.intent.IntentState;
 import dev.ucplab.core.merchant.IdempotencyKey;
 import dev.ucplab.core.merchant.fake.MerchantCall;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.List;
@@ -18,7 +20,7 @@ import org.junit.jupiter.api.Test;
  * Seeded property tests (section 14, level 2; M1 acceptance in section 16): DefaultOrchestrator against
  * FaultyMerchantModel under generated schedules of user actions, per-call faults, merchant-side events, re-quotes
  * (P7, P8) and crash points (7.3, S9). Each invariant is checked on its own run of {@link PropertyRunner#DEFAULT_TRIES}
- * schedules, or {@code -Dproperty.tries}.
+ * schedules, or {@code -Dproperty.tries} (14.1).
  */
 class OrchestratorPropertyTest {
 
@@ -58,23 +60,31 @@ class OrchestratorPropertyTest {
         PropertyRunner.check("I7", holds(Invariants::i7));
     }
 
-    // Covers: section 14, level 2 (the generator is deterministic for a seed)
+    /** The first {@code n} schedules a run from {@code base} checks (14.1 seed chain). */
+    private static List<Schedule> schedules(long base, int n) {
+        List<Schedule> out = new ArrayList<>(n);
+        for (long seed = base; out.size() < n; seed = PropertySettings.next(seed)) {
+            out.add(new ScheduleGenerator(seed).generate());
+        }
+        return out;
+    }
+
+    // Covers: 14.1 Determinism (a schedule depends only on its seed)
     @Test
-    void generator_sameSeed_generatesSameSchedules() {
-        ScheduleGenerator a = new ScheduleGenerator(7);
-        ScheduleGenerator b = new ScheduleGenerator(7);
-        for (int i = 0; i < 100; i++) {
-            assertThat(a.next()).isEqualTo(b.next());
+    void generator_sameSeed_generatesSameSchedule() {
+        for (long seed = 7, i = 0; i < 100; i++, seed = PropertySettings.next(seed)) {
+            ScheduleGenerator generator = new ScheduleGenerator(seed);
+            assertThat(generator.generate()).isEqualTo(new ScheduleGenerator(seed).generate())
+                    .isEqualTo(generator.generate());
         }
     }
 
-    // Covers: section 14, level 2 (every kind of entry and fault appears under the default seed)
+    // Covers: 14.1 Generator (every kind of entry and fault appears under the default seed)
     @Test
     void generator_defaultSeed_generatesEveryEntryAndFaultKind() {
-        ScheduleGenerator generator = new ScheduleGenerator(PropertyRunner.DEFAULT_SEED);
         Set<String> kinds = new HashSet<>();
-        for (int i = 0; i < 500; i++) {
-            for (ScheduleEntry e : generator.next().entries()) {
+        for (Schedule schedule : schedules(PropertySettings.DEFAULT_SEED, 500)) {
+            for (ScheduleEntry e : schedule.entries()) {
                 kinds.add(e instanceof ScheduleEntry.CallFault f
                         ? "fault:" + f.fault().getClass().getSimpleName()
                         : e.getClass().getSimpleName());
@@ -85,17 +95,16 @@ class OrchestratorPropertyTest {
                 "fault:Duplicate", "fault:PriceChange", "fault:StockChange");
     }
 
-    // Covers: section 14, level 2, I5, P8, S9 (the schedules reach every terminal state, fired crashes, same-key
+    // Covers: 14.1 Reach check, I5, P8, S9 (the schedules reach every terminal state, fired crashes, same-key
     // resends and the P8 cap, so a passing property is not passing on easy runs only)
     @Test
     void generator_defaultSeed_reachesEveryOutcomeTheInvariantsAreAbout() {
-        ScheduleGenerator generator = new ScheduleGenerator(PropertyRunner.DEFAULT_SEED);
         Set<IntentState> ends = EnumSet.noneOf(IntentState.class);
         int crashes = 0;
         int resendRuns = 0;
         int capRuns = 0;
-        for (int i = 0; i < 2_000; i++) {
-            Observations o = executor.run(generator.next());
+        for (Schedule schedule : schedules(PropertySettings.DEFAULT_SEED, 2_000)) {
+            Observations o = executor.run(schedule);
             o.samples().stream().filter(s -> s.phase() == Observations.Phase.END).forEach(s -> ends.add(s.state()));
             crashes += o.crashes().size();
             List<IdempotencyKey> keys = o.calls().stream().filter(c -> c.call() == MerchantCall.COMPLETE)
@@ -110,7 +119,7 @@ class OrchestratorPropertyTest {
         assertThat(capRuns).isPositive();
     }
 
-    // Covers: section 14, level 2 (shrinking keeps only the entries the failure needs)
+    // Covers: 14.1 On failure (shrinking keeps only the entries the failure needs)
     @Test
     void runner_shrink_removesEntriesTheFailureDoesNotNeed() {
         Schedule failing = new Schedule(List.of(
@@ -125,16 +134,22 @@ class OrchestratorPropertyTest {
         assertThat(shrunk.attempts()).isLessThanOrEqualTo(PropertyRunner.MAX_SHRINK_ATTEMPTS);
     }
 
-    // Covers: section 14, level 2 (a failure reports the seed, the full schedule and the shrunk one)
+    // Covers: 14.1 On failure, Replay (the report names the failing schedule's own seed, and that seed with one try
+    // fails on exactly the same schedule)
     @Test
-    void runner_failure_reportsSeedScheduleAndShrunkSchedule() {
-        PropertyRunner.Settings settings = new PropertyRunner.Settings(42, false, 5);
-        Function<Schedule, List<String>> alwaysFails = s -> List.of("boom");
+    void runner_failure_reportsScheduleSeedThatReplaysItAlone() {
+        Schedule fourth = schedules(42, 4).get(3);
+        Function<Schedule, List<String>> failsOnFourth = s -> s.equals(fourth) ? List.of("boom") : List.of();
 
-        AssertionError e = catchThrowableOfType(AssertionError.class,
-                () -> PropertyRunner.check("demo", settings, alwaysFails));
+        AssertionError first = catchThrowableOfType(AssertionError.class,
+                () -> PropertyRunner.check("demo", new PropertySettings(42, false, 10), failsOnFourth));
+        long seed = Long.parseLong(first.getMessage().replaceAll("(?s).*schedule seed (-?\\d+).*", "$1"));
+        AssertionError replay = catchThrowableOfType(AssertionError.class,
+                () -> PropertyRunner.check("demo", new PropertySettings(seed, false, 1), failsOnFourth));
 
-        assertThat(e.getMessage()).contains("seed 42", "-Dproperty.seed=42 -Dproperty.tries=1", "violations:",
-                "boom", "schedule (", "shrunk to 0 entries");
+        assertThat(first.getMessage()).contains("schedule 4 of 10", "base seed 42", PropertySettings.replay(seed),
+                "violations:", "boom", "schedule (" + fourth.size() + " entries", "smallest failing schedule (");
+        assertThat(replay.getMessage()).contains("schedule 1 of 1", "schedule seed " + seed)
+                .contains(fourth.toString());
     }
 }

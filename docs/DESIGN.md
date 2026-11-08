@@ -402,7 +402,7 @@ Connect timeout 2 s. Request timeout 5 s, except `complete` at 10 s. One circuit
 
 - A new `Request-Id` (UUID) for every HTTP attempt. Log it with the attempt id.
 - `UCP-Agent` comes from configuration.
-- Mutating bodies use canonical JSON (sorted keys, no extra whitespace) so a replay is byte-identical.
+- Mutating bodies use canonical JSON (keys sorted by UTF-16 code units, as String.compareTo does and as RFC 8785 specifies; no extra whitespace) so a replay is byte-identical.
 - Ignore unknown JSON fields. Amounts are integers.
 
 ## 9. Policy and approval
@@ -673,7 +673,7 @@ Per scenario: runs; terminal-state distribution; invariant violations; time to t
 | Level | What | Tooling |
 | --- | --- | --- |
 | 1. Unit | Every row of table 7.2 and every illegal transition (table-driven), policy rules, approval, idempotency key, canonical JSON, redaction | JUnit 5, AssertJ |
-| 2. Property-based (most valuable) | Random sequences of events and fault schedules against `FaultyMerchantModel`, an in-memory fake with the real merchant's semantics (idempotent keys, session states, commit-then-drop-response). Properties: I1, I3, I4, I5, I7 hold for every generated schedule | jqwik |
+| 2. Property-based (most valuable) | Random sequences of events and fault schedules against `FaultyMerchantModel`, an in-memory fake with the real merchant's semantics (idempotent keys, session states, commit-then-drop-response). Properties: I1, I3, I4, I5, I7 hold for every generated schedule | JUnit 5 with an in-house seeded schedule generator (14.1) |
 | 3. Component | Orchestrator with the SQL adapter and a fake gateway. Crash injection at each boundary in 7.3, then restart the recovery worker | JUnit 5 |
 | 4. Contract | `agent-ucp` against the real merchant module started in-process. Every row of table 8.1 exercised through the fault proxy | JUnit 5 |
 | 5. Conformance | The official UCP conformance suite against the merchant. See the repositories listed at https://ucp.dev/documentation/contributing/ (**VERIFY** how its simulation hook works) | pytest (external) |
@@ -681,6 +681,19 @@ Per scenario: runs; terminal-state distribution; invariant violations; time to t
 | 7. End to end | Scenarios S0 to S14 through the HTTP API, scripted model | JUnit 5, eval-harness |
 | 8. Live evaluation | Real model, budget-capped, manual or nightly | eval-harness |
 | 9. Mutation (optional) | Target a mutation score of at least 80% on the orchestrator and approval packages | PIT |
+
+### 14.1 Property tests without a library \[CONTRACT\]
+
+jqwik was removed. Its author asks that it not be used with AI coding agents, and its output includes a message telling agents to ignore its test results, which conflicts with a workflow where an agent must act on real test failures. Property tests use plain JUnit 5 instead.
+
+- **Generator.** `ScheduleGenerator(long seed)`, built on `java.util.SplittableRandom`, produces one schedule: the user's actions (propose, approve, reject), per-call faults (not sent, commit then drop the response, delay past the timeout, duplicate) and merchant-side events (price change, stock change), all within fixed bounds.
+- **Runner.** Each property runs at least 10,000 schedules per `./mvnw verify`. `-Dproperty.tries=N` overrides the count. The base seed is fixed by default so builds are reproducible; `-Dproperty.seed=<n>` sets it, and `-Dproperty.seed=random` picks one and prints it.
+- **On failure.** Report the seed and the full schedule, then shrink: repeatedly remove single entries and keep any shorter schedule that still fails, up to 1,000 attempts. Report the smallest failing schedule and its seed.
+- **Replay.** `-Dproperty.seed=<seed> -Dproperty.tries=1` reproduces one run exactly.
+- **Determinism.** No wall clock and no shared static state. `Clock` and `IdGenerator` are fakes driven by the schedule.
+- **Merchant strictness.** `FaultyMerchantModel` also has a strict mode in which each idempotency key can create its own order, as a merchant without per-session protection might. Every property runs in both modes, so I1 detects key misuse directly instead of only through I3 and I7.
+- **Bounds.** The generator's limits are constants in `ScheduleGenerator`, documented in its Javadoc: up to 3 baskets and 40 entries per schedule, faults on the first 6 calls of each kind, up to 2 crashes and 4 decisions per basket, proxy holds of 1 to 30 s, and waits of up to 11 minutes.
+- **Reach check.** A committed test confirms that generated schedules reach every terminal state, include crashes and same-key resends, and hit the P8 cap, so the property counts are meaningful.
 
 Test naming: `unit_behaviour_condition`. Each test carries a comment citing the requirement or invariant IDs it covers.
 
@@ -704,7 +717,7 @@ ucp-checkout-lab/
   .env.example
 ```
 
-**Stack.** Java 21. Maven multi-module. Spring Boot 3.x in `agent-service` only. Jackson. JDBC with SQLite and Flyway. JUnit 5, AssertJ, jqwik, ArchUnit. OpenTelemetry API. A small hand-written circuit breaker is acceptable (about 80 lines); record the choice in an ADR. Use the latest stable versions at generation time and record them in the parent pom. **VERIFY** the ADK for Java version and coordinates at https://adk.dev.
+**Stack.** Java 21. Maven multi-module. Spring Boot 3.x in `agent-service` only. Jackson. JDBC with SQLite and Flyway. JUnit 5, AssertJ, ArchUnit (no property-testing library; see 14.1). OpenTelemetry API. A small hand-written circuit breaker is acceptable (about 80 lines); record the choice in an ADR. Use the latest stable versions at generation time and record them in the parent pom. **VERIFY** the ADK for Java version and coordinates at https://adk.dev.
 
 **Conventions.** Package root `dev.ucplab`. Records for DTOs. Sealed interfaces for outcomes. No Lombok. No null returns (use `Optional`). `Clock` and `IdGenerator` are injected. One top-level type per file. Javadoc on every port cites the contract IDs it implements.
 
@@ -1315,7 +1328,7 @@ Use one prompt per step, in Copilot agent mode, and run `./mvnw verify` after ea
 1. *Set up M0 from section 15: parent pom, empty modules, CI workflow and the ArchUnit rules from 5.2. Move the existing merchant into `merchant/` unchanged and run its self-test in the build.*
 2. *Implement section 7.1 and 7.2 in agent-core: the IntentState enum, a transition table, and a table-driven test with one case per row plus illegal transitions.*
 3. *Implement section 7.4 and 9.2 with unit tests: idempotency keys, canonical JSON, snapshot hash and approval tokens.*
-4. *Implement FaultyMerchantModel (section 14, level 2) and the orchestrator step function (7.3, 7.5). Add jqwik properties for I1, I3, I4, I5 and I7.*
+4. *Implement FaultyMerchantModel (section 14, level 2) and the orchestrator step function (7.3, 7.5). Add the seeded property tests (14.1) for I1, I3, I4, I5 and I7.*
 5. *Implement agent-ucp (section 8, Appendix B) with a contract test per row of table 8.1, against the merchant started in-process.*
 6. *Implement agent-persistence (section 10), RecoveryWorker and leases (7.6), with crash-injection tests at each boundary in 7.3.*
 7. *Implement fault-proxy (section 12) and eval-harness (section 13) with scenarios S0 to S9, S11, S13, S14 in scripted mode.*

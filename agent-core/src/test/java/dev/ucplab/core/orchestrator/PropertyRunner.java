@@ -1,62 +1,46 @@
 package dev.ucplab.core.orchestrator;
 
+import dev.ucplab.core.PropertySettings;
 import java.util.List;
-import java.util.SplittableRandom;
 import java.util.function.Function;
 
 /**
- * A minimal property runner (section 14, level 2) with no property-testing library: generate schedules from one
- * seed, check each, and on the first failure shrink it by removing single entries.
+ * The property runner of 14.1, with no property-testing library. Schedule 0 is generated from the base seed and each
+ * later one from {@link PropertySettings#next} of the one before, so every schedule has its own seed. On the first
+ * failure the runner shrinks the schedule by removing single entries and reports the seed, the full schedule and the
+ * smallest failing one. {@code -Dproperty.seed=<that seed> -Dproperty.tries=1} replays exactly that schedule.
  *
- * <p>Settings come from system properties, passed through by {@code ./mvnw verify -D...}:
- * <ul>
- *   <li>{@code property.seed}: a long, or {@code random} for a fresh seed that is printed. Default {@link #DEFAULT_SEED}.
- *   <li>{@code property.tries}: schedules per property, at least 1. Default {@link #DEFAULT_TRIES}.
- * </ul>
- * A failure reports the seed, the try, the violations, the full schedule and the shrunk one, and how to rerun it.
+ * <p>Settings: {@link PropertySettings} ({@code property.seed}, {@code property.tries}); {@link #DEFAULT_TRIES}
+ * schedules per property by default.
  */
 final class PropertyRunner {
 
-    static final long DEFAULT_SEED = 0x5EED_1A7E_2026L;
     static final int DEFAULT_TRIES = 10_000;
     static final int MAX_SHRINK_ATTEMPTS = 1_000;
 
-    record Settings(long seed, boolean randomSeed, int tries) {
-
-        static Settings fromSystemProperties() {
-            String seed = System.getProperty("property.seed", "").trim();
-            boolean random = seed.equalsIgnoreCase("random");
-            long value = random ? new SplittableRandom().nextLong() : seed.isEmpty() ? DEFAULT_SEED : Long.parseLong(seed);
-            String tries = System.getProperty("property.tries", "").trim();
-            int n = tries.isEmpty() ? DEFAULT_TRIES : Integer.parseInt(tries);
-            if (n < 1) {
-                throw new IllegalArgumentException("property.tries must be at least 1: " + n);
-            }
-            return new Settings(value, random, n);
-        }
-    }
-
-    /** What one run found: how many schedules ran and how long it took. */
+    /** What one passing run covered. */
     record Result(String name, int schedules, long millis) {}
+
+    record Shrunk(Schedule schedule, List<String> violations, int attempts) {}
 
     private PropertyRunner() {}
 
     /** Checks {@code property} (schedule to violations) over the configured schedules; throws on the first failure. */
     static Result check(String name, Function<Schedule, List<String>> property) {
-        return check(name, Settings.fromSystemProperties(), property);
+        return check(name, PropertySettings.fromSystemProperties(DEFAULT_TRIES), property);
     }
 
-    static Result check(String name, Settings settings, Function<Schedule, List<String>> property) {
+    static Result check(String name, PropertySettings settings, Function<Schedule, List<String>> property) {
         if (settings.randomSeed()) {
             System.out.println("[property] " + name + ": property.seed=random chose seed " + settings.seed());
         }
-        ScheduleGenerator generator = new ScheduleGenerator(settings.seed());
-        long started = System.nanoTime();
-        for (int i = 0; i < settings.tries(); i++) {
-            Schedule schedule = generator.next();
+        long started = System.nanoTime(); // timing for the report only; no test logic reads it
+        long seed = settings.seed();
+        for (int i = 0; i < settings.tries(); i++, seed = PropertySettings.next(seed)) {
+            Schedule schedule = new ScheduleGenerator(seed).generate();
             List<String> violations = property.apply(schedule);
             if (!violations.isEmpty()) {
-                throw new AssertionError(report(name, settings, i, schedule, violations, property));
+                throw new AssertionError(report(name, settings, i, seed, schedule, violations, property));
             }
         }
         long millis = (System.nanoTime() - started) / 1_000_000;
@@ -65,7 +49,10 @@ final class PropertyRunner {
         return new Result(name, settings.tries(), millis);
     }
 
-    /** Greedy shrinking: drop one entry at a time while the property still fails, up to the attempt limit. */
+    /**
+     * 14.1 shrinking: repeatedly remove single entries, keeping any shorter schedule that still fails, until no single
+     * removal fails or {@link #MAX_SHRINK_ATTEMPTS} attempts are used.
+     */
     static Shrunk shrink(Schedule failing, Function<Schedule, List<String>> property) {
         Schedule current = failing;
         List<String> violations = property.apply(failing);
@@ -89,23 +76,23 @@ final class PropertyRunner {
         return new Shrunk(current, violations, attempts);
     }
 
-    record Shrunk(Schedule schedule, List<String> violations, int attempts) {}
-
     private static String report(
-            String name, Settings settings, int index, Schedule schedule, List<String> violations,
+            String name, PropertySettings settings, int index, long seed, Schedule schedule, List<String> violations,
             Function<Schedule, List<String>> property) {
         Shrunk shrunk = shrink(schedule, property);
         StringBuilder out = new StringBuilder();
         out.append(name).append(" failed on schedule ").append(index + 1).append(" of ").append(settings.tries())
-                .append(", seed ").append(settings.seed()).append(settings.randomSeed() ? " (random)" : "").append('\n');
-        out.append("rerun: ./mvnw verify -pl agent-core -Dproperty.seed=").append(settings.seed())
-                .append(" -Dproperty.tries=").append(index + 1).append('\n');
+                .append(" (base seed ").append(settings.seed()).append(settings.randomSeed() ? ", random" : "")
+                .append("), schedule seed ").append(seed).append('\n');
+        out.append("replay: ./mvnw verify -pl agent-core ").append(PropertySettings.replay(seed)).append('\n');
         out.append("violations:\n");
         violations.forEach(v -> out.append("  ").append(v).append('\n'));
-        out.append("schedule (").append(schedule.size()).append(" entries):\n").append(schedule);
-        out.append("shrunk to ").append(shrunk.schedule().size()).append(" entries in ").append(shrunk.attempts())
-                .append(" attempts:\n").append(shrunk.schedule());
-        out.append("shrunk violations:\n");
+        out.append("schedule (").append(schedule.size()).append(" entries, seed ").append(seed).append("):\n")
+                .append(schedule);
+        out.append("smallest failing schedule (").append(shrunk.schedule().size()).append(" entries, shrunk from seed ")
+                .append(seed).append(" in ").append(shrunk.attempts()).append(" attempts):\n")
+                .append(shrunk.schedule());
+        out.append("its violations:\n");
         shrunk.violations().forEach(v -> out.append("  ").append(v).append('\n'));
         return out.toString();
     }

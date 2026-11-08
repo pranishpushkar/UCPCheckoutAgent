@@ -16,3 +16,4 @@
 - Work one milestone at a time (section 16). A milestone is done only when its acceptance
   criteria pass under ./mvnw verify.
 - Never add Co-Authored-By, Claude-Session or "Generated with Claude Code" lines to commits or PRs.
+- Don't add jqwik or any other property-testing library. Property tests follow section 14.1 of docs/DESIGN.md.

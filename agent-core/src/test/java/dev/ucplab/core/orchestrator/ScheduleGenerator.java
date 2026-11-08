@@ -8,8 +8,19 @@ import java.util.List;
 import java.util.SplittableRandom;
 
 /**
- * Seeded generator of schedules for the property tests (section 14, level 2). The same seed always yields the same
- * sequence of schedules; nothing else is random.
+ * Seeded generator of one schedule for the property tests (14.1). {@link #generate} depends only on the seed, so the
+ * same seed always yields the same schedule; nothing else is random and no wall clock is read.
+ *
+ * <p><b>Bounds</b> (14.1), all constants below:
+ * <ul>
+ *   <li>up to {@link #MAX_SLOTS} baskets and {@link #MAX_ENTRIES} entries per schedule;
+ *   <li>up to {@link #MAX_CALL_FAULTS} per-call faults, each on one of the first {@link #MAX_NTH} calls of its kind;
+ *   <li>up to {@link #MAX_CRASHES} crashes, and up to {@link #MAX_DECISIONS_PER_SLOT} decisions per basket;
+ *   <li>proxy holds ({@code DelayForward}) of 1 s to {@link #MAX_HOLD};
+ *   <li>waits of up to {@link #MAX_SHORT_WAIT} in 250 ms steps, up to {@link #MAX_MEDIUM_WAIT}, or between
+ *       {@link #MIN_LONG_WAIT} and {@link #MAX_LONG_WAIT} (11 minutes);
+ *   <li>merchant-side prices from {@link #PRICES_ITEM_123} and {@link #PRICES_ITEM_456}, stock from {@link #STOCKS}.
+ * </ul>
  *
  * <p>Each schedule is drawn from one of three profiles: {@code MIXED} (anything), {@code REQUOTE} (price and stock
  * changes anchored to {@code complete} calls with repeated approvals, for P7 and P8, sometimes with the response lost
@@ -50,13 +61,20 @@ final class ScheduleGenerator {
 
     private enum Profile { MIXED, REQUOTE, CRASH }
 
-    private final SplittableRandom random;
+    private final long seed;
+    private SplittableRandom random;
 
     ScheduleGenerator(long seed) {
-        this.random = new SplittableRandom(seed);
+        this.seed = seed;
     }
 
-    Schedule next() {
+    long seed() {
+        return seed;
+    }
+
+    /** The schedule for this seed; every call returns an equal one. */
+    Schedule generate() {
+        random = new SplittableRandom(seed);
         Profile profile = Profile.values()[random.nextInt(Profile.values().length)];
         int slots = 1 + random.nextInt(profile == Profile.REQUOTE ? 2 : MAX_SLOTS);
 

@@ -36,8 +36,5 @@ target/
 ### Local secrets ###
 .env
 
-### jqwik ###
-**/.jqwik-database
-
 ### Claude Code ###
 .claude/
