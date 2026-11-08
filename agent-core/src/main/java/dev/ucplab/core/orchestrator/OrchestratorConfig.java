@@ -49,6 +49,12 @@ public record OrchestratorConfig(
         if (maxCompleteResends < 0 || maxQuoteRetries < 0) {
             throw new IllegalArgumentException("retry counts must not be negative");
         }
+        Duration resendSpan = resendQuietPeriod.multipliedBy(maxCompleteResends);
+        if (reconcileDeadline.compareTo(resendSpan) <= 0) {
+            throw new IllegalArgumentException("7.5: reconcileDeadline " + reconcileDeadline + " must be greater than "
+                    + maxCompleteResends + " resends x quiet period " + resendQuietPeriod + " (" + resendSpan
+                    + "), or the resend cap can never be reached");
+        }
         if (!pollInitial.isPositive() || pollMax.compareTo(pollInitial) < 0) {
             throw new IllegalArgumentException("7.5: need 0 < pollInitial <= pollMax: " + pollInitial + ", " + pollMax);
         }
@@ -59,10 +65,11 @@ public record OrchestratorConfig(
 
     /**
      * Lease 30 s, complete timeout 10 s, quiet period 20 s (twice the complete timeout, 7.5), deadline 60 s,
-     * 3 resends, 3 retries, polls from 250 ms to 2 s with 20% jitter.
+     * 2 resends (complete at 0, 20 and 40 s; 7.5 "Reconciliation defaults"), 3 retries, polls from 250 ms to 2 s with
+     * 20% jitter.
      */
     public static OrchestratorConfig defaults() {
         return new OrchestratorConfig(Duration.ofSeconds(30), Duration.ofSeconds(10), Duration.ofSeconds(20),
-                Duration.ofSeconds(60), 3, 3, Duration.ofMillis(250), Duration.ofSeconds(2), 0.2);
+                Duration.ofSeconds(60), 2, 3, Duration.ofMillis(250), Duration.ofSeconds(2), 0.2);
     }
 }

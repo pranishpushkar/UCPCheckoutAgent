@@ -324,7 +324,7 @@ Create and update are safe to resend with the same key. `complete` is never rese
 
 ### 7.5 Reconciliation \[CONTRACT\]
 
-Parameters (configuration): `pollInitial` 250 ms, `pollMax` 2 s, jitter 20%, `deadline` 60 s measured from the first uncertainty, `maxCompleteResends` 3.
+Parameters (configuration): `pollInitial` 250 ms, `pollMax` 2 s, jitter 20%, `deadline` 60 s measured from the first uncertainty, `maxCompleteResends` 2, `resendQuietPeriod` 20 s.
 
 1. On entering `RECONCILING`, persist `uncertain_since` once. A restart must not reset the deadline.
 2. Call `get(session)`. Reads follow the retry rules in section 8.3 and bypass the circuit breaker.
@@ -335,6 +335,8 @@ Parameters (configuration): `pollInitial` 250 ms, `pollMax` 2 s, jitter 20%, `de
 Rules: reconciliation never creates a session, and never resends `complete` unless the merchant reports `ready_for_complete`.
 
 **Who waits \[CONTRACT\].** `advance` never sleeps. When the next step is a poll or a resend, it returns a `StepResult` with `nextAttemptAt`, computed from `pollInitial`, `pollMax` and jitter using the injected `Clock` and a seeded random source. The caller (`RecoveryWorker` from M3, or a test) does the waiting and calls `advance` again at or after that time.
+
+**Reconciliation defaults \[CONTRACT\].** `maxCompleteResends` is 2, not 3: with a 20 s quiet period and a 60 s deadline, `complete` can go out at 0, 20 and 40 s before the intent escalates, so two resends is the most the defaults allow. Configuration validation fails at startup unless `deadline` is greater than `maxCompleteResends` × `resendQuietPeriod`, so the cap can always be reached.
 
 **Quiet period before a resend \[CONTRACT\].** `complete` is resent only when the merchant reports `ready_for_complete` **and** at least `resendQuietPeriod` has passed since the last `complete` attempt was sent. Default 20 s, twice the complete request timeout, so a request held just past the timeout still lands before any resend; configuration validation fails at startup if it is shorter than the `complete` request timeout in 8.3. Until then, keep polling.
 
