@@ -56,7 +56,7 @@ Source: https://ucp.dev/latest/specification/shopping/checkout/rest/ (version 20
 
 ### 2.2 The merchant (provided)
 
-Module `merchant/` is already built: zero dependencies, JDK 21 only, 46 self-tests passing. It implements the five checkout endpoints, discovery, a mock payment handler, and `/_lab/*` controls for the fault harness. Its full contract is Appendix A. It is the system under test and **must not be modified to make the agent's tests pass**.
+Module `merchant/` is already built: zero dependencies, JDK 21 only, 46 self-tests passing. JDK only means java.* plus JDK-provided modules such as jdk.httpserver (com.sun.net.httpserver); no third-party dependencies. It implements the five checkout endpoints, discovery, a mock payment handler, and `/_lab/*` controls for the fault harness. Its full contract is Appendix A. It is the system under test and **must not be modified to make the agent's tests pass**.
 
 Behaviours the agent must cope with: business outcomes arrive as HTTP 200; a changed price blocks completion (`price_changed`); stock is reserved before the charge; a second `complete` on a finished checkout returns it unchanged and creates no new order.
 
