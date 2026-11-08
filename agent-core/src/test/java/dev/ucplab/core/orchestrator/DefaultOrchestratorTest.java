@@ -270,6 +270,45 @@ class DefaultOrchestratorTest {
         assertThat(attempts(id, AttemptOp.COMPLETE)).hasSize(1);
     }
 
+    // Covers: 7.2 (defensive QUOTING row: an update shows the session complete_in_progress -> RECONCILING; RECONCILING
+    // complete_in_progress -> poll again), I1, I2 (one order, nothing new is sent)
+    @Test
+    void requote_movesToReconcilingAndPolls_whenUpdateShowsCompleteInProgress() {
+        IntentId id = approved();
+        lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 1, new Fault.PriceChange("item_123", 2600)));
+        lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 2, new Fault.HoldInProgress(Duration.ofSeconds(15))));
+        assertThat(w.orchestrator().advance(id).after()).isEqualTo(IntentState.QUOTING);
+        // A late complete reaches the session after the re-quote began and is still charging (sent outside the
+        // orchestrator).
+        lab.merchant.setPrice("item_123", 2500);
+        MerchantAttempt first = attempts(id, AttemptOp.COMPLETE).get(0);
+        SessionId session = lab.intent(id).sessionId().orElseThrow();
+        assertThat(lab.merchant.complete(session, first.requestBody().orElseThrow(),
+                IdempotencyKey.derive(id, MutatingOp.COMPLETE, 5))).isInstanceOf(CallOutcome.Uncertain.class);
+        assertThat(lab.merchant.session(session).orElseThrow().status()).isEqualTo(CheckoutStatus.COMPLETE_IN_PROGRESS);
+        int completesDelivered = lab.merchant.delivered(MerchantCall.COMPLETE);
+
+        assertThat(w.orchestrator().advance(id).after()).isEqualTo(RECONCILING);
+        assertThat(attempts(id, AttemptOp.UPDATE)).singleElement()
+                .satisfies(a -> assertThat(a.status()).isEqualTo(AttemptStatus.RESPONDED));
+        assertThat(lab.intent(id).uncertainSince()).isPresent();
+        assertThat(w.orchestrator().advance(id).after()).isEqualTo(RECONCILING);
+        assertThat(lab.intents.events(id)).filteredOn(e -> e.type().equals("transition"))
+                .extracting(e -> e.payloadJson())
+                .anySatisfy(p -> assertThat(p).contains("\"from\":\"QUOTING\"")
+                        .contains("\"event\":\"OBSERVED_COMPLETE_IN_PROGRESS\"").contains("\"to\":\"RECONCILING\""))
+                .anySatisfy(p -> assertThat(p).contains("\"from\":\"RECONCILING\"")
+                        .contains("\"event\":\"OBSERVED_COMPLETE_IN_PROGRESS\"").contains("\"to\":\"RECONCILING\""));
+        assertThat(lab.merchant.orders()).isEmpty();
+
+        lab.clock.advance(Duration.ofSeconds(15));
+        assertThat(lab.drive(w, id)).isEqualTo(COMPLETED);
+        assertThat(lab.merchant.orders()).singleElement()
+                .satisfies(o -> assertThat(lab.intent(id).orderId()).contains(o.orderId()));
+        assertThat(lab.merchant.delivered(MerchantCall.COMPLETE)).isEqualTo(completesDelivered);
+        assertThat(attempts(id, AttemptOp.COMPLETE)).hasSize(1);
+    }
+
     // Covers: 7.5 (deadline from uncertain_since -> ESCALATED, never FAILED_NOT_CHARGED), I5 (a restart keeps it)
     @Test
     void reconcile_escalatesAtDeadline_andRestartDoesNotResetIt() {

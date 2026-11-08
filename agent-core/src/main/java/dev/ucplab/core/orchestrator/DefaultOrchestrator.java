@@ -18,7 +18,6 @@ import dev.ucplab.core.intent.AttemptId;
 import dev.ucplab.core.intent.AttemptOp;
 import dev.ucplab.core.intent.AttemptStatus;
 import dev.ucplab.core.intent.DuplicateIntentException;
-import dev.ucplab.core.intent.IllegalTransitionException;
 import dev.ucplab.core.intent.IntentEvent;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentNotFoundException;
@@ -354,22 +353,16 @@ public final class DefaultOrchestrator implements Orchestrator {
                 if (!create && !view.id().equals(requireSession(written))) {
                     throw new IllegalStateException("I4: update answered for another session: " + view.id());
                 }
-                if (view.status() == CheckoutStatus.COMPLETED) {
-                    // Defensive row (7.2): a late complete landed after the re-quote began. Send nothing new; the
-                    // reconciliation read records the order.
-                    Move m = move(written, TransitionEvent.OBSERVED_COMPLETED);
+                if (view.status() == CheckoutStatus.COMPLETED || view.status() == CheckoutStatus.COMPLETE_IN_PROGRESS) {
+                    // Defensive row (7.2): a late complete landed, or is charging, after the re-quote began. Send
+                    // nothing new; reconciliation polls and records the order.
+                    Move m = move(written, view.status() == CheckoutStatus.COMPLETED
+                            ? TransitionEvent.OBSERVED_COMPLETED
+                            : TransitionEvent.OBSERVED_COMPLETE_IN_PROGRESS);
                     PurchaseIntent next = withUncertainSince(m.next());
                     resolve(attempt, AttemptStatus.RESPONDED, http, summary, next, written.version());
                     transitionEvent(written.id(), m.transition());
                     yield moved(written, next);
-                }
-                if (view.status() == CheckoutStatus.COMPLETE_IN_PROGRESS) {
-                    // DESIGN GAP: table 7.2 has no QUOTING row for complete_in_progress (the defensive row covers
-                    // completed only). Keep the evidence and fail loudly rather than report FAILED_NOT_CHARGED for a
-                    // purchase that may be charged.
-                    intents.resolveAttempt(attempt.id(), AttemptStatus.RESPONDED, http, summary);
-                    throw new IllegalTransitionException(QUOTING, TransitionEvent.OBSERVED_COMPLETE_IN_PROGRESS,
-                            "quote response shows the session " + view.status().wire() + "; table 7.2 has no row");
                 }
                 PurchaseIntent base = create ? written.withSessionId(view.id()) : written;
                 Set<String> codes = codes(view);
