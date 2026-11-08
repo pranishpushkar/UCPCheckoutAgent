@@ -19,6 +19,7 @@ import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentState;
 import dev.ucplab.core.intent.MerchantAttempt;
 import dev.ucplab.core.intent.PurchaseIntent;
+import dev.ucplab.core.intent.StepResult;
 import dev.ucplab.core.merchant.CheckoutStatus;
 import dev.ucplab.core.merchant.IdempotencyKey;
 import dev.ucplab.core.merchant.MutatingOp;
@@ -30,6 +31,7 @@ import dev.ucplab.core.merchant.fake.MerchantCall;
 import dev.ucplab.core.merchant.fake.ModelOrder;
 import dev.ucplab.core.policy.RequotePolicy;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -321,36 +323,46 @@ class ScenarioTest {
 
     // ---------------------------------------------------------------- S17
 
-    // Covers: S17, I1, I7, 7.5 (complete held at the proxy 8 s; GET shows ready_for_complete; no resend in the quiet period)
+    // Covers: S17, I1, I7, 7.5 (complete held at the proxy 12 s: past the 10 s complete timeout, inside the 20 s quiet
+    // period; GET shows ready_for_complete; no resend inside the quiet period; COMPLETED with exactly one order)
     @Test
     void scenarioS17_doesNotResendInsideQuietPeriod_whenCompleteIsHeldAtProxy() {
         IntentId id = proposeAndApprove(worker);
-        lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 1, new Fault.DelayForward(Duration.ofSeconds(8))));
+        Duration hold = Duration.ofSeconds(12);
+        assertThat(hold).isGreaterThan(lab.config.completeRequestTimeout()).isLessThan(lab.config.resendQuietPeriod());
+        lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 1, new Fault.DelayForward(hold)));
 
-        assertThat(worker.orchestrator().advance(id).after()).isEqualTo(RECONCILING);
-        for (int t = 0; t < 8; t += 2) {
-            assertThat(worker.orchestrator().advance(id).after()).as("poll at +%ds", t).isEqualTo(RECONCILING);
-            assertThat(lab.merchant.orders()).as("orders at +%ds", t).isEmpty();
-            lab.clock.advance(Duration.ofSeconds(2));
+        StepResult step = worker.orchestrator().advance(id);
+        assertThat(step.after()).isEqualTo(RECONCILING);
+        Instant sentAt = completes(id).get(0).sentAt();
+        boolean sawReadyForComplete = false;
+        while (step.after() == RECONCILING) {
+            lab.waitUntilNextAttempt(step);
+            step = worker.orchestrator().advance(id);
+            assertThat(completes(id)).as("complete attempts at %s", lab.clock.instant()).hasSize(1);
+            assertThat(step.after()).isNotEqualTo(COMPLETING);
+            sawReadyForComplete |= lab.intents.events(id).stream()
+                    .anyMatch(e -> e.payloadJson().contains("\"guard\":\"QUIET_PERIOD_NOT_ELAPSED\""));
         }
-        assertThat(worker.orchestrator().advance(id).after()).isEqualTo(COMPLETED);
 
         assertThat(lab.merchant.orders()).hasSize(1);
         lab.assertOrderMatchesLatestApproval(id);
+        assertThat(step.after()).isEqualTo(COMPLETED);
+        assertThat(sawReadyForComplete).isTrue();
+        assertThat(lab.clock.instant()).isAfterOrEqualTo(sentAt.plus(hold))
+                .isBefore(sentAt.plus(lab.config.resendQuietPeriod()));
         assertThat(lab.merchant.delivered(MerchantCall.COMPLETE)).isEqualTo(1);
         assertThat(completes(id)).hasSize(1);
-        assertThat(lab.intents.events(id)).anySatisfy(e -> assertThat(e.payloadJson())
-                .contains("\"guard\":\"QUIET_PERIOD_NOT_ELAPSED\""));
     }
 
     // Covers: S17, I1, I7 (held longer than the quiet period: the resend reuses the key, the late original replays it)
     @Test
     void scenarioS17_createsOneOrder_whenHeldRequestArrivesAfterTheResend() {
         IntentId id = proposeAndApprove(worker);
-        lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 1, new Fault.DelayForward(Duration.ofSeconds(12))));
+        lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 1, new Fault.DelayForward(Duration.ofSeconds(25))));
 
         assertThat(worker.orchestrator().advance(id).after()).isEqualTo(RECONCILING);
-        lab.clock.advance(Duration.ofSeconds(10));
+        lab.clock.advance(lab.config.resendQuietPeriod());
         assertThat(worker.orchestrator().advance(id).after()).isEqualTo(COMPLETING);
         assertThat(worker.orchestrator().advance(id).after()).isEqualTo(COMPLETED);
         lab.clock.advance(Duration.ofSeconds(5));

@@ -34,6 +34,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.SplittableRandom;
 
 /**
  * One in-memory lab: clock, repositories and FaultyMerchantModel shared by any number of orchestrator instances
@@ -64,8 +65,16 @@ final class Lab {
     final InMemoryApprovalRepository approvals = new InMemoryApprovalRepository();
     final FaultyMerchantModel merchant = new FaultyMerchantModel(SHOP, clock, new SequentialIdGenerator("m"));
     final SequentialIdGenerator ids = new SequentialIdGenerator("id");
-    final OrchestratorConfig config = OrchestratorConfig.defaults();
+    final OrchestratorConfig config;
     private PaymentInstrument payment = PaymentInstrument.mockCard("pi_1", FaultyMerchantModel.TOKEN_OK);
+
+    Lab() {
+        this(OrchestratorConfig.defaults());
+    }
+
+    Lab(OrchestratorConfig config) {
+        this.config = config;
+    }
 
     /** One orchestrator instance with its approval service, both using {@code workerId} as lease owner. */
     record Worker(String id, DefaultOrchestrator orchestrator, DefaultApprovalService approvalService) {}
@@ -89,7 +98,7 @@ final class Lab {
                 new ApprovalTokens(SECRET), clock, ids, workerId, config.lease(), DefaultApprovalService.DEFAULT_TTL,
                 DefaultApprovalService.DEFAULT_MAX_AUTH_AGE);
         DefaultOrchestrator orchestrator = new DefaultOrchestrator(intents, approvals, approvalService, gateway, policy,
-                new RequotePolicy(policyConfig), payment, config, clock, ids, workerId);
+                new RequotePolicy(policyConfig), payment, config, clock, ids, workerId, new SplittableRandom(42));
         return new Worker(workerId, orchestrator, approvalService);
     }
 
@@ -117,25 +126,29 @@ final class Lab {
     }
 
     /**
-     * Calls advance until it reports idle, moving the clock by {@code tick} after each step that leaves the intent
-     * RECONCILING (the poll pacing that RecoveryWorker will own in M3). Fails after {@code maxSteps}.
+     * Calls advance until it reports idle, doing the waiting itself: after each step the clock moves to the returned
+     * {@code nextAttemptAt}, as RecoveryWorker will in M3 (7.5 "Who waits"). Fails after {@code maxSteps}.
      */
-    IntentState drive(Worker w, IntentId id, Duration tick, int maxSteps) {
+    IntentState drive(Worker w, IntentId id, int maxSteps) {
         for (int i = 0; i < maxSteps; i++) {
             StepResult r = w.orchestrator().advance(id);
             if (r.idle()) {
                 return r.after();
             }
-            if (r.after() == IntentState.RECONCILING) {
-                clock.advance(tick);
-            }
+            waitUntilNextAttempt(r);
         }
         throw new AssertionError("intent " + id + " did not settle in " + maxSteps + " steps; state "
                 + intent(id).state());
     }
 
     IntentState drive(Worker w, IntentId id) {
-        return drive(w, id, Duration.ofSeconds(1), 200);
+        return drive(w, id, 200);
+    }
+
+    /** The caller's wait (7.5): moves the clock to {@code nextAttemptAt} when it is in the future. */
+    void waitUntilNextAttempt(StepResult r) {
+        r.nextAttemptAt().filter(t -> t.isAfter(clock.instant()))
+                .ifPresent(t -> clock.advance(Duration.between(clock.instant(), t)));
     }
 
     PurchaseIntent intent(IntentId id) {

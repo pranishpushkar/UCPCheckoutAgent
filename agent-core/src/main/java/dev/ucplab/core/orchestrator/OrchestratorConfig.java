@@ -12,21 +12,28 @@ import java.util.Objects;
  * @param reconcileDeadline time from the first uncertainty to ESCALATED (7.5)
  * @param maxCompleteResends resends of {@code complete} under one key (7.5)
  * @param maxQuoteRetries retries of a create or update under one key before FAILED_NOT_CHARGED (7.2, 8.2)
+ * @param pollInitial first reconciliation poll delay (7.5)
+ * @param pollMax largest reconciliation poll delay (7.5)
+ * @param pollJitter relative jitter on each poll delay, in [0, 1) (7.5)
  */
-// pollInitial, pollMax and jitter (7.5) pace the calls to advance, so they belong to RecoveryWorker (M3), not here.
 public record OrchestratorConfig(
         Duration lease,
         Duration completeRequestTimeout,
         Duration resendQuietPeriod,
         Duration reconcileDeadline,
         int maxCompleteResends,
-        int maxQuoteRetries) {
+        int maxQuoteRetries,
+        Duration pollInitial,
+        Duration pollMax,
+        double pollJitter) {
 
     public OrchestratorConfig {
         Objects.requireNonNull(lease, "lease");
         Objects.requireNonNull(completeRequestTimeout, "completeRequestTimeout");
         Objects.requireNonNull(resendQuietPeriod, "resendQuietPeriod");
         Objects.requireNonNull(reconcileDeadline, "reconcileDeadline");
+        Objects.requireNonNull(pollInitial, "pollInitial");
+        Objects.requireNonNull(pollMax, "pollMax");
         if (resendQuietPeriod.compareTo(completeRequestTimeout) < 0) {
             throw new IllegalArgumentException("7.5: resendQuietPeriod " + resendQuietPeriod
                     + " is shorter than the complete request timeout " + completeRequestTimeout);
@@ -42,11 +49,20 @@ public record OrchestratorConfig(
         if (maxCompleteResends < 0 || maxQuoteRetries < 0) {
             throw new IllegalArgumentException("retry counts must not be negative");
         }
+        if (!pollInitial.isPositive() || pollMax.compareTo(pollInitial) < 0) {
+            throw new IllegalArgumentException("7.5: need 0 < pollInitial <= pollMax: " + pollInitial + ", " + pollMax);
+        }
+        if (!(pollJitter >= 0 && pollJitter < 1)) {
+            throw new IllegalArgumentException("7.5: pollJitter must be in [0, 1): " + pollJitter);
+        }
     }
 
-    /** Lease 30 s, complete timeout 10 s, quiet period 10 s, deadline 60 s, 3 resends, 3 retries. */
+    /**
+     * Lease 30 s, complete timeout 10 s, quiet period 20 s (twice the complete timeout, 7.5), deadline 60 s,
+     * 3 resends, 3 retries, polls from 250 ms to 2 s with 20% jitter.
+     */
     public static OrchestratorConfig defaults() {
-        return new OrchestratorConfig(Duration.ofSeconds(30), Duration.ofSeconds(10), Duration.ofSeconds(10),
-                Duration.ofSeconds(60), 3, 3);
+        return new OrchestratorConfig(Duration.ofSeconds(30), Duration.ofSeconds(10), Duration.ofSeconds(20),
+                Duration.ofSeconds(60), 3, 3, Duration.ofMillis(250), Duration.ofSeconds(2), 0.2);
     }
 }

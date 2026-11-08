@@ -334,7 +334,9 @@ Parameters (configuration): `pollInitial` 250 ms, `pollMax` 2 s, jitter 20%, `de
 
 Rules: reconciliation never creates a session, and never resends `complete` unless the merchant reports `ready_for_complete`.
 
-**Quiet period before a resend \[CONTRACT\].** `complete` is resent only when the merchant reports `ready_for_complete` **and** at least `resendQuietPeriod` has passed since the last `complete` attempt was sent. Default 10 s; configuration validation fails at startup if it is shorter than the `complete` request timeout in 8.3. Until then, keep polling.
+**Who waits \[CONTRACT\].** `advance` never sleeps. When the next step is a poll or a resend, it returns a `StepResult` with `nextAttemptAt`, computed from `pollInitial`, `pollMax` and jitter using the injected `Clock` and a seeded random source. The caller (`RecoveryWorker` from M3, or a test) does the waiting and calls `advance` again at or after that time.
+
+**Quiet period before a resend \[CONTRACT\].** `complete` is resent only when the merchant reports `ready_for_complete` **and** at least `resendQuietPeriod` has passed since the last `complete` attempt was sent. Default 20 s, twice the complete request timeout, so a request held just past the timeout still lands before any resend; configuration validation fails at startup if it is shorter than the `complete` request timeout in 8.3. Until then, keep polling.
 
 Why: a GET can show `ready_for_complete` while the first `complete` is still queued in the proxy or the merchant. Resending at that moment puts two requests with the same key in flight. The first GET is not delayed, because a read is always safe; only the resend waits.
 
@@ -638,7 +640,7 @@ Two modes. **Scripted** uses `ScriptedModel`: deterministic, free, used in CI, 2
 | S14 | 24 concurrent complete calls for one session | one order | I1 | scripted |
 | S15 | two workers on one intent: worker A pauses past its lease during RECONCILING, worker B takes over, then A resumes | A's next write fails with LeaseLostException; COMPLETED with one order | I1, I5, I7 | scripted |
 | S16 | price changes before every complete; the approver approves each new quote | REJECTED with price\_unstable after 2 re-quotes; no order; exactly 3 approvals requested | I1, I2, I3, I5 | scripted |
-| S17 | complete held at the proxy (forward delayed 8 s); the client times out and a GET shows ready\_for\_complete | no resend inside the quiet period; COMPLETED with one order | I1, I7 | scripted |
+| S17 | complete held at the proxy (forward delayed 12 s: longer than the 10 s complete timeout, shorter than the 20 s quiet period); the client times out and a GET shows ready\_for\_complete | no resend inside the quiet period; COMPLETED with one order | I1, I7 | scripted |
 | S18 | user B tries to read and approve user A's intent | 404 for both; A's intent unchanged | I9, I10 | scripted |
 | S19 | approval sent with a sign-in older than 15 minutes; then with a freshly refreshed token whose auth\_time is still old; then after signing in again | first two refused with reauth\_required; third accepted; COMPLETED | I3, I10 | scripted |
 | S20 | three merchants; one returns 503 on every call | search returns the healthy merchants' items; a purchase at a healthy merchant completes; only the failing merchant's breaker opens | I1, I11 | scripted |

@@ -22,6 +22,7 @@ import dev.ucplab.core.intent.LeaseLostException;
 import dev.ucplab.core.intent.MerchantAttempt;
 import dev.ucplab.core.intent.ProposalResult;
 import dev.ucplab.core.intent.ProposedLine;
+import dev.ucplab.core.intent.StepResult;
 import dev.ucplab.core.merchant.CheckoutStatus;
 import dev.ucplab.core.merchant.IdempotencyKey;
 import dev.ucplab.core.merchant.MerchantId;
@@ -167,7 +168,7 @@ class DefaultOrchestratorTest {
         lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 1, new Fault.NotSent()));
 
         assertThat(w.orchestrator().advance(id).after()).isEqualTo(RECONCILING);
-        lab.clock.advance(Duration.ofSeconds(9));
+        lab.clock.advance(lab.config.resendQuietPeriod().minusSeconds(1));
         assertThat(w.orchestrator().advance(id).after()).isEqualTo(RECONCILING);
         assertThat(lab.merchant.delivered(MerchantCall.COMPLETE)).isZero();
 
@@ -204,16 +205,39 @@ class DefaultOrchestratorTest {
         assertThat(lab.intents.events(id)).anySatisfy(e -> assertThat(e.type()).isEqualTo("escalated"));
     }
 
-    // Covers: 7.5 (maxCompleteResends), I5 (with no resends left it polls until the deadline, then ESCALATED)
+    // Covers: 7.5 (maxCompleteResends), I5 (with no resends left it polls until the deadline, then ESCALATED).
+    // The deadline is 120 s here: with the defaults (20 s quiet period, 60 s deadline) only 2 resends fit before
+    // the deadline, so the cap of 3 would never bind.
     @Test
     void reconcile_stopsAfterMaxResends_andEscalatesAtDeadline() {
+        OrchestratorConfig d = OrchestratorConfig.defaults();
+        Lab longDeadline = new Lab(new OrchestratorConfig(d.lease(), d.completeRequestTimeout(), d.resendQuietPeriod(),
+                Duration.ofSeconds(120), d.maxCompleteResends(), d.maxQuoteRetries(), d.pollInitial(), d.pollMax(),
+                d.pollJitter()));
+        Lab.Worker worker = longDeadline.worker("worker-a");
+        IntentId id = longDeadline.propose(worker, TWO_SHIRTS).intentId();
+        longDeadline.decide(worker, id, true);
+        longDeadline.merchant.addRule(FaultRule.every(MerchantCall.COMPLETE, new Fault.NotSent()));
+
+        assertThat(longDeadline.drive(worker, id)).isEqualTo(ESCALATED);
+
+        assertThat(longDeadline.intents.attempts(id).stream().filter(a -> a.op() == AttemptOp.COMPLETE))
+                .hasSize(1 + d.maxCompleteResends());
+        assertThat(longDeadline.intents.events(id)).anySatisfy(e -> assertThat(e.payloadJson())
+                .contains("resends_exhausted"));
+        assertThat(longDeadline.merchant.delivered(MerchantCall.COMPLETE)).isZero();
+        assertThat(longDeadline.merchant.orders()).isEmpty();
+    }
+
+    // Covers: 7.5, I5 (with the default 20 s quiet period and 60 s deadline, two resends fit before ESCALATED)
+    @Test
+    void reconcile_escalatesAfterTwoResends_withDefaultQuietPeriodAndDeadline() {
         IntentId id = approved();
         lab.merchant.addRule(FaultRule.every(MerchantCall.COMPLETE, new Fault.NotSent()));
 
         assertThat(lab.drive(w, id)).isEqualTo(ESCALATED);
 
-        assertThat(attempts(id, AttemptOp.COMPLETE)).hasSize(1 + lab.config.maxCompleteResends());
-        assertThat(lab.merchant.delivered(MerchantCall.COMPLETE)).isZero();
+        assertThat(attempts(id, AttemptOp.COMPLETE)).hasSize(3);
         assertThat(lab.merchant.orders()).isEmpty();
     }
 
@@ -240,6 +264,59 @@ class DefaultOrchestratorTest {
         assertThat(a.orchestrator().advance(id).idle()).isTrue();
     }
 
+    // Covers: 7.5 "Who waits" (advance never sleeps; it returns when to poll, backed off from uncertain_since,
+    // within jitter, never past the deadline; an approved resend is due now; idle steps carry no time)
+    @Test
+    void advance_returnsNextAttemptAt_forPollsAndResends() {
+        IntentId id = approved();
+        lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 1, new Fault.NotSent()));
+        Duration initial = lab.config.pollInitial();
+        Duration max = lab.config.pollMax();
+        double j = lab.config.pollJitter();
+
+        StepResult first = w.orchestrator().advance(id);
+        assertThat(first.after()).isEqualTo(RECONCILING);
+        assertThat(first.nextAttemptAt()).hasValueSatisfying(t -> assertThat(Duration.between(lab.clock.instant(), t))
+                .isBetween(scaled(initial, 1 - j), scaled(initial, 1 + j)));
+
+        lab.clock.advance(Duration.ofSeconds(5));
+        StepResult later = w.orchestrator().advance(id);
+        assertThat(later.after()).isEqualTo(RECONCILING);
+        assertThat(later.nextAttemptAt()).hasValueSatisfying(t -> assertThat(Duration.between(lab.clock.instant(), t))
+                .isBetween(scaled(max, 1 - j), scaled(max, 1 + j)));
+
+        lab.clock.advance(lab.config.resendQuietPeriod());
+        StepResult resendOwed = w.orchestrator().advance(id);
+        assertThat(resendOwed.after()).isEqualTo(COMPLETING);
+        assertThat(resendOwed.nextAttemptAt()).contains(lab.clock.instant());
+
+        StepResult done = w.orchestrator().advance(id);
+        assertThat(done.after()).isEqualTo(COMPLETED);
+        assertThat(done.nextAttemptAt()).isEmpty();
+        assertThat(w.orchestrator().advance(id).nextAttemptAt()).isEmpty();
+        assertThat(lab.merchant.orders()).hasSize(1);
+    }
+
+    // Covers: 7.5 (the next poll is never scheduled past the reconciliation deadline)
+    @Test
+    void advance_capsNextAttemptAt_atDeadline() {
+        IntentId id = approved();
+        lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 1, new Fault.CommitThenDrop()));
+        lab.merchant.addRule(FaultRule.every(MerchantCall.GET, new Fault.Reject(503, "unavailable", Optional.empty())));
+        assertThat(w.orchestrator().advance(id).after()).isEqualTo(RECONCILING);
+        Instant deadline = lab.intent(id).uncertainSince().orElseThrow().plus(lab.config.reconcileDeadline());
+
+        lab.clock.advance(lab.config.reconcileDeadline().minusMillis(100));
+        StepResult r = w.orchestrator().advance(id);
+
+        assertThat(r.after()).isEqualTo(RECONCILING);
+        assertThat(r.nextAttemptAt()).contains(deadline);
+    }
+
+    private static Duration scaled(Duration d, double factor) {
+        return Duration.ofNanos(Math.round(d.toNanos() * factor));
+    }
+
     // Covers: T6 (another user's intent is reported as not found)
     @Test
     void status_reportsNotFound_forAnotherUsersIntent() {
@@ -255,10 +332,16 @@ class DefaultOrchestratorTest {
         Duration ten = Duration.ofSeconds(10);
         Duration minute = Duration.ofSeconds(60);
 
-        assertThatThrownBy(() -> new OrchestratorConfig(Duration.ofSeconds(30), ten, Duration.ofSeconds(9), minute, 3, 3))
-                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("7.5");
-        assertThatThrownBy(() -> new OrchestratorConfig(Duration.ofSeconds(24), ten, ten, minute, 3, 3))
-                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("7.6");
+        Duration poll = Duration.ofMillis(250);
+        Duration pollMax = Duration.ofSeconds(2);
+
+        assertThatThrownBy(() -> new OrchestratorConfig(Duration.ofSeconds(30), ten, Duration.ofSeconds(9), minute, 3, 3,
+                poll, pollMax, 0.2)).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("7.5");
+        assertThatThrownBy(() -> new OrchestratorConfig(Duration.ofSeconds(24), ten, ten, minute, 3, 3,
+                poll, pollMax, 0.2)).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("7.6");
+        assertThatThrownBy(() -> new OrchestratorConfig(Duration.ofSeconds(30), ten, ten, minute, 3, 3,
+                pollMax, poll, 0.2)).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("7.5");
         assertThat(OrchestratorConfig.defaults().lease()).isEqualTo(Duration.ofSeconds(30));
+        assertThat(OrchestratorConfig.defaults().resendQuietPeriod()).isEqualTo(Duration.ofSeconds(20));
     }
 }

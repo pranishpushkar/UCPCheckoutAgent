@@ -55,6 +55,7 @@ import dev.ucplab.core.policy.PolicyEngine;
 import dev.ucplab.core.policy.RequoteOutcome;
 import dev.ucplab.core.policy.RequotePolicy;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -63,7 +64,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
+import java.util.random.RandomGenerator;
 import java.util.stream.Collectors;
 
 /**
@@ -88,6 +91,10 @@ import java.util.stream.Collectors;
  * <p><b>Side-effect cancels.</b> Table 7.2 rows that end in REJECTED or FAILED_NOT_CHARGED with a cancel are
  * followed by one best-effort cancel, made by the next {@code advance} of the now terminal intent so a step still
  * makes at most one call.
+ *
+ * <p><b>Who waits</b> (7.5). {@code advance} never sleeps. After a step that leaves the intent RECONCILING it returns
+ * {@code nextAttemptAt} for the next poll; after one that approves a resend, {@code nextAttemptAt} is now. The caller
+ * waits and calls {@code advance} again.
  *
  * <p>No locks are held across merchant calls; all coordination is the repository's version and lease checks (7.8).
  */
@@ -122,15 +129,18 @@ public final class DefaultOrchestrator implements Orchestrator {
     private final Clock clock;
     private final IdGenerator ids;
     private final String workerId;
+    private final RandomGenerator jitter;
+    private final ReentrantLock jitterLock = new ReentrantLock();
 
     /**
      * @param payment the instrument put in every frozen {@code complete} body (7.4); one mock card in M1
      * @param workerId this instance's lease owner id (7.6)
+     * @param jitter a seeded random source for poll jitter (7.5); guarded here, so it need not be thread-safe
      */
     public DefaultOrchestrator(
             IntentRepository intents, ApprovalRepository approvals, ApprovalService approvalService,
             MerchantGateway merchant, PolicyEngine policy, RequotePolicy requotePolicy, PaymentInstrument payment,
-            OrchestratorConfig config, Clock clock, IdGenerator ids, String workerId) {
+            OrchestratorConfig config, Clock clock, IdGenerator ids, String workerId, RandomGenerator jitter) {
         this.intents = Objects.requireNonNull(intents, "intents");
         this.approvals = Objects.requireNonNull(approvals, "approvals");
         this.approvalService = Objects.requireNonNull(approvalService, "approvalService");
@@ -142,6 +152,7 @@ public final class DefaultOrchestrator implements Orchestrator {
         this.clock = Objects.requireNonNull(clock, "clock");
         this.ids = Objects.requireNonNull(ids, "ids");
         this.workerId = Objects.requireNonNull(workerId, "workerId");
+        this.jitter = Objects.requireNonNull(jitter, "jitter");
     }
 
     // ---------------------------------------------------------------- Orchestrator
@@ -207,7 +218,38 @@ public final class DefaultOrchestrator implements Orchestrator {
     public StepResult advance(IntentId id) {
         Objects.requireNonNull(id, "id");
         Step s = step(id);
-        return new StepResult(id, s.before(), s.after(), s.idle());
+        return new StepResult(id, s.before(), s.after(), s.idle(), s.idle() ? Optional.empty() : nextAttemptAt(id));
+    }
+
+    /**
+     * 7.5 "Who waits". RECONCILING: the next poll. The delay grows with the time since uncertain_since (so it starts at
+     * pollInitial, roughly doubles per poll, and is not reset by a restart), is capped at pollMax, gets the configured
+     * jitter, and never passes the deadline. COMPLETING after a step: a resend approved by reconciliation, due now.
+     */
+    private Optional<Instant> nextAttemptAt(IntentId id) {
+        PurchaseIntent intent = intents.findForSystem(id)
+                .orElseThrow(() -> new IntentNotFoundException("no such intent: " + id));
+        Instant now = clock.instant();
+        return switch (intent.state()) {
+            case COMPLETING -> Optional.of(now);
+            case RECONCILING -> {
+                Instant since = intent.uncertainSince().orElse(now);
+                Duration elapsed = Duration.between(since, now);
+                Duration base = elapsed.compareTo(config.pollInitial()) < 0 ? config.pollInitial()
+                        : elapsed.compareTo(config.pollMax()) > 0 ? config.pollMax() : elapsed;
+                double factor;
+                jitterLock.lock();
+                try {
+                    factor = 1 + config.pollJitter() * (2 * jitter.nextDouble() - 1);
+                } finally {
+                    jitterLock.unlock();
+                }
+                Instant next = now.plusNanos(Math.round(base.toNanos() * factor));
+                Instant deadline = since.plus(config.reconcileDeadline());
+                yield Optional.of(next.isAfter(deadline) && !now.isAfter(deadline) ? deadline : next);
+            }
+            default -> Optional.empty();
+        };
     }
 
     @Override
