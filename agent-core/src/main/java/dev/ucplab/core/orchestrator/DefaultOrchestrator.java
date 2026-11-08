@@ -508,7 +508,8 @@ public final class DefaultOrchestrator implements Orchestrator {
         IdempotencyKey key = IdempotencyKey.derive(intent.id(), MutatingOp.COMPLETE, revision);
         MerchantAttempt attempt = newAttempt(intent.id(), AttemptOp.COMPLETE, revision, key, Optional.of(body));
         Move m = move(intent, TransitionEvent.SEND_COMPLETE, TransitionGuard.ATTEMPT_PERSISTED);
-        PurchaseIntent written = writeAhead(intent, attempt, m.next());
+        // A new key starts a fresh reconciliation deadline (7.5 rule 1); cleared in the same write as the attempt.
+        PurchaseIntent written = writeAhead(intent, attempt, m.next().withoutUncertainSince());
         if (approval.status() != ApprovalStatus.CONSUMED) {
             approvals.transition(approval.id(), approval.status(), ApprovalStatus.CONSUMED, clock.instant(),
                     Optional.empty());
@@ -812,7 +813,10 @@ public final class DefaultOrchestrator implements Orchestrator {
         intents.resolveAttempt(attempt.id(), status, http, response, next, expectedVersion, workerId);
     }
 
-    /** Sets uncertain_since only once, so a restart or a later uncertainty never resets the deadline (7.5). */
+    /**
+     * Sets uncertain_since only once per complete key, so a restart or a later uncertainty under the same key never
+     * resets the deadline; {@link #sendComplete} clears it when it issues a new key (7.5 rule 1).
+     */
     private PurchaseIntent withUncertainSince(PurchaseIntent intent) {
         return intent.uncertainSince().isPresent() ? intent : intent.withUncertainSince(clock.instant());
     }

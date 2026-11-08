@@ -10,7 +10,6 @@ import dev.ucplab.core.merchant.SessionId;
 import dev.ucplab.core.merchant.fake.CallRecord;
 import dev.ucplab.core.merchant.fake.MerchantCall;
 import dev.ucplab.core.merchant.fake.ModelOrder;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -24,6 +23,7 @@ import java.util.Optional;
  *
  * @param intentsBySlot the intent created for each slot's basket
  * @param aborts reasons the run could not finish (the orchestrator threw, or the run did not settle)
+ * @param config the orchestrator settings the run used (deadlines, lease, timeouts for I5)
  */
 record Observations(
         Map<Integer, IntentId> intentsBySlot,
@@ -34,8 +34,7 @@ record Observations(
         List<CrashEvent> crashes,
         List<Sample> samples,
         List<String> aborts,
-        Duration reconcileDeadline,
-        Duration lease) {
+        OrchestratorConfig config) {
 
     Observations {
         intentsBySlot = Map.copyOf(intentsBySlot);

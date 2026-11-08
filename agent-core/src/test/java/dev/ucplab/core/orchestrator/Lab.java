@@ -63,7 +63,7 @@ final class Lab {
     final MutableClock clock = new MutableClock(T0);
     final InMemoryIntentRepository intents = new InMemoryIntentRepository(clock);
     final InMemoryApprovalRepository approvals = new InMemoryApprovalRepository();
-    final FaultyMerchantModel merchant = new FaultyMerchantModel(SHOP, clock, new SequentialIdGenerator("m"));
+    final FaultyMerchantModel merchant;
     final SequentialIdGenerator ids = new SequentialIdGenerator("id");
     final OrchestratorConfig config;
     private PaymentInstrument payment = PaymentInstrument.mockCard("pi_1", FaultyMerchantModel.TOKEN_OK);
@@ -73,7 +73,13 @@ final class Lab {
     }
 
     Lab(OrchestratorConfig config) {
+        this(config, FaultyMerchantModel.Mode.LAB);
+    }
+
+    /** A lab whose merchant runs in {@code mode} (14.1 "Merchant strictness"). */
+    Lab(OrchestratorConfig config, FaultyMerchantModel.Mode mode) {
         this.config = config;
+        this.merchant = new FaultyMerchantModel(SHOP, mode, clock, new SequentialIdGenerator("m"));
     }
 
     /** One orchestrator instance with its approval service, both using {@code workerId} as lease owner. */

@@ -10,6 +10,7 @@ import dev.ucplab.core.intent.ProposedLine;
 import dev.ucplab.core.intent.PurchaseIntent;
 import dev.ucplab.core.intent.StepResult;
 import dev.ucplab.core.merchant.MerchantGateway;
+import dev.ucplab.core.merchant.fake.FaultyMerchantModel;
 import dev.ucplab.core.merchant.fake.FaultRule;
 import java.time.Duration;
 import java.time.Instant;
@@ -44,6 +45,8 @@ final class ScheduleExecutor {
             List.of(new ProposedLine("item_123", 2), new ProposedLine("item_456", 1)));
 
     static final int MAX_STEPS = 5_000;
+    /** A lease is free once lease_until is in the past; the clock's resolution makes that 1 ns after it (7.6). */
+    static final Duration CLAIM_GRANULARITY = Duration.ofNanos(1);
     static final Duration HORIZON = Duration.ofHours(4);
     /** After the drain: longer than any proxy hold the generator makes. */
     static final Duration SETTLE = ScheduleGenerator.MAX_HOLD.plusMinutes(1);
@@ -63,9 +66,12 @@ final class ScheduleExecutor {
     };
 
     private final WorkerFactory factory;
+    private final FaultyMerchantModel.Mode mode;
 
-    ScheduleExecutor(WorkerFactory factory) {
+    /** Runs schedules against a merchant in {@code mode} (14.1: every property runs in both modes). */
+    ScheduleExecutor(WorkerFactory factory, FaultyMerchantModel.Mode mode) {
         this.factory = factory;
+        this.mode = mode;
     }
 
     Observations run(Schedule schedule) {
@@ -82,7 +88,7 @@ final class ScheduleExecutor {
     }
 
     private final class Execution {
-        private final Lab lab = new Lab();
+        private final Lab lab = new Lab(OrchestratorConfig.defaults(), mode);
         private final AtomicInteger seq = new AtomicInteger();
         private final ProbeGateway probe = new ProbeGateway(lab.merchant, lab.clock, seq);
         private final Map<Integer, IntentId> slots = new HashMap<>();
@@ -116,7 +122,7 @@ final class ScheduleExecutor {
             lab.clock.advance(SETTLE);
             lab.merchant.settle();
             return new Observations(slots, probe.calls(), lab.merchant.log(), lab.merchant.orders(), decisions,
-                    crashes, samples, aborts, lab.config.reconcileDeadline(), lab.config.lease());
+                    crashes, samples, aborts, lab.config);
         }
 
         private void apply(ScheduleEntry entry) {
@@ -243,7 +249,8 @@ final class ScheduleExecutor {
                 Optional<Instant> expiry = worker.approvalService().pending(lab.alice(), id)
                         .map(p -> p.snapshot().expiresAt()).filter(now::isBefore);
                 if (!intent.state().isTerminal() && leasedUntil.isPresent()) {
-                    due.put(id, leasedUntil.get().plusMillis(1));
+                    // claim needs lease_until strictly in the past: the earliest takeover is 1 ns later (7.6).
+                    due.put(id, leasedUntil.get().plus(CLAIM_GRANULARITY));
                 } else if (expiry.isPresent()) {
                     due.put(id, expiry.get());
                 } else {

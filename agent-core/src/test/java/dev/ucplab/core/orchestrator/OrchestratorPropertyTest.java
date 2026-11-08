@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import dev.ucplab.core.PropertySettings;
 import dev.ucplab.core.intent.IntentState;
 import dev.ucplab.core.merchant.IdempotencyKey;
+import dev.ucplab.core.merchant.fake.FaultyMerchantModel;
 import dev.ucplab.core.merchant.fake.MerchantCall;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -15,49 +16,63 @@ import java.util.List;
 import java.util.Set;
 import java.util.function.Function;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 /**
  * Seeded property tests (section 14, level 2; M1 acceptance in section 16): DefaultOrchestrator against
  * FaultyMerchantModel under generated schedules of user actions, per-call faults, merchant-side events, re-quotes
  * (P7, P8) and crash points (7.3, S9). Each invariant is checked on its own run of {@link PropertyRunner#DEFAULT_TRIES}
- * schedules, or {@code -Dproperty.tries} (14.1).
+ * schedules, or {@code -Dproperty.tries} (14.1), once against the lab merchant and once against the strict one.
  */
 class OrchestratorPropertyTest {
 
-    private final ScheduleExecutor executor = new ScheduleExecutor(ScheduleExecutor.DEFAULT_ORCHESTRATOR);
+    /** For the generator and reach checks, which are about the schedules, not the merchant. */
+    private final ScheduleExecutor executor =
+            new ScheduleExecutor(ScheduleExecutor.DEFAULT_ORCHESTRATOR, FaultyMerchantModel.Mode.LAB);
 
-    private Function<Schedule, List<String>> holds(Function<Observations, List<String>> invariant) {
-        return schedule -> invariant.apply(executor.run(schedule));
+    private static void check(String invariant, FaultyMerchantModel.Mode mode,
+            Function<Observations, List<String>> property) {
+        ScheduleExecutor executor = new ScheduleExecutor(ScheduleExecutor.DEFAULT_ORCHESTRATOR, mode);
+        PropertyRunner.check(invariant + " [" + mode + "]", schedule -> property.apply(executor.run(schedule)));
     }
 
-    // Covers: I1, S2, S3, S4, S5, S6, S7, S9, S13, S16, S17, P7, P8
-    @Test
-    void property_atMostOneOrderPerIntent_forEveryGeneratedSchedule() {
-        PropertyRunner.check("I1", holds(Invariants::i1));
+    // Covers: I1, S2, S3, S4, S5, S6, S7, S9, S13, S16, S17, P7, P8, 14.1 Merchant strictness
+    @ParameterizedTest(name = "{0} merchant")
+    @EnumSource(FaultyMerchantModel.Mode.class)
+    void property_atMostOneOrderPerIntent_forEveryGeneratedSchedule(FaultyMerchantModel.Mode mode) {
+        check("I1", mode, Invariants::i1);
     }
 
-    // Covers: I3, I2, S5, S16, P7, P8, 9.2
-    @Test
-    void property_completeOnlyUnderValidUnconsumedMatchingApproval_forEveryGeneratedSchedule() {
-        PropertyRunner.check("I3", holds(Invariants::i3));
+    // Covers: I3, I2, S5, S16, P7, P8, 9.2, 14.1 Merchant strictness
+    @ParameterizedTest(name = "{0} merchant")
+    @EnumSource(FaultyMerchantModel.Mode.class)
+    void property_completeOnlyUnderValidUnconsumedMatchingApproval_forEveryGeneratedSchedule(
+            FaultyMerchantModel.Mode mode) {
+        check("I3", mode, Invariants::i3);
     }
 
-    // Covers: I4, S2, S9, S17
-    @Test
-    void property_sessionNeverChangesAfterFirstComplete_forEveryGeneratedSchedule() {
-        PropertyRunner.check("I4", holds(Invariants::i4));
+    // Covers: I4, S2, S9, S17, 14.1 Merchant strictness
+    @ParameterizedTest(name = "{0} merchant")
+    @EnumSource(FaultyMerchantModel.Mode.class)
+    void property_sessionNeverChangesAfterFirstComplete_forEveryGeneratedSchedule(FaultyMerchantModel.Mode mode) {
+        check("I4", mode, Invariants::i4);
     }
 
-    // Covers: I5, NFR4, S9, 7.5, 7.6
-    @Test
-    void property_everyIntentTerminalOrEscalatedByItsDeadline_forEveryGeneratedSchedule() {
-        PropertyRunner.check("I5", holds(Invariants::i5));
+    // Covers: I5, NFR4, S9, 7.5, 7.6 (liveness bounds), 14.1 Merchant strictness
+    @ParameterizedTest(name = "{0} merchant")
+    @EnumSource(FaultyMerchantModel.Mode.class)
+    void property_everyIntentTerminalOrEscalatedWithinItsBound_forEveryGeneratedSchedule(
+            FaultyMerchantModel.Mode mode) {
+        check("I5", mode, Invariants::i5);
     }
 
-    // Covers: I7, S2, S3, S9, S16, S17, 7.4
-    @Test
-    void property_resendsReuseKeyAndBodyAndNewApprovalGetsNewKey_forEveryGeneratedSchedule() {
-        PropertyRunner.check("I7", holds(Invariants::i7));
+    // Covers: I7, S2, S3, S9, S16, S17, 7.4, 14.1 Merchant strictness
+    @ParameterizedTest(name = "{0} merchant")
+    @EnumSource(FaultyMerchantModel.Mode.class)
+    void property_resendsReuseKeyAndBodyAndNewApprovalGetsNewKey_forEveryGeneratedSchedule(
+            FaultyMerchantModel.Mode mode) {
+        check("I7", mode, Invariants::i7);
     }
 
     /** The first {@code n} schedules a run from {@code base} checks (14.1 seed chain). */

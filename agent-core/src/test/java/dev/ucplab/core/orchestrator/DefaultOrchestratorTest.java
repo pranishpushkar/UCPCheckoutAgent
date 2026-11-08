@@ -208,6 +208,32 @@ class DefaultOrchestratorTest {
                         IdempotencyKey.derive(id, MutatingOp.COMPLETE, 1));
     }
 
+    // Covers: 7.5 rule 1 (the deadline is per complete key), I5, I1 (found by the property tests in 46 of 100,000
+    // schedules: the first key's uncertainty is followed by a re-quote and a re-approval more than 60 s later; the
+    // second key's complete is held at the proxy, and with the first key's uncertain_since the intent escalated at
+    // once although the held complete then created the order)
+    @Test
+    void reconcile_startsFreshDeadline_forNewCompleteKeyAfterReQuote() {
+        IntentId id = approved();
+        lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 1, new Fault.PriceChange("item_123", 2600)));
+        lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 1, new Fault.CommitThenDrop()));
+        lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 2, new Fault.DelayForward(Duration.ofSeconds(15))));
+        Instant firstUncertainty = lab.clock.instant();
+
+        assertThat(lab.drive(w, id)).isEqualTo(AWAITING_APPROVAL);
+        assertThat(lab.intent(id).requoteCount()).isEqualTo(1);
+        lab.clock.advance(Duration.ofSeconds(50));
+        assertThat(lab.clock.instant()).isAfter(firstUncertainty.plus(lab.config.reconcileDeadline()));
+        assertThat(lab.decide(w, id, true)).isInstanceOf(ApprovalDecision.Approved.class);
+        Instant secondKeySent = lab.clock.instant();
+
+        assertThat(lab.drive(w, id)).isEqualTo(COMPLETED);
+        assertThat(lab.merchant.orders()).singleElement()
+                .satisfies(o -> assertThat(o.totalMinor()).isEqualTo(5616));
+        assertThat(lab.intent(id).uncertainSince()).contains(secondKeySent);
+        assertThat(lab.clock.instant()).isBefore(secondKeySent.plus(lab.config.reconcileDeadline()));
+    }
+
     // Covers: 7.5 (deadline from uncertain_since -> ESCALATED, never FAILED_NOT_CHARGED), I5 (a restart keeps it)
     @Test
     void reconcile_escalatesAtDeadline_andRestartDoesNotResetIt() {

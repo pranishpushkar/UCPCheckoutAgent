@@ -57,6 +57,28 @@ class FaultyMerchantModelTest {
         return ok(merchant.create(twoShirts(), CREATE_KEY)).id();
     }
 
+    // Covers: 14.1 Merchant strictness, A.1, I1 (LAB: a completed session is never charged again; STRICT: a new key
+    // charges it again and makes a second order, while the same key still replays its stored result)
+    @Test
+    void complete_newKeyOnCompletedSession_chargesAgainOnlyInStrictMode() {
+        SessionId lab = createSession();
+        ok(merchant.complete(lab, PAY_OK, COMPLETE_KEY));
+        ok(merchant.complete(lab, PAY_OK, COMPLETE_KEY_1));
+        assertThat(merchant.orders()).hasSize(1);
+
+        FaultyMerchantModel strict = new FaultyMerchantModel(new MerchantId("shop-1"), FaultyMerchantModel.Mode.STRICT,
+                clock, new SequentialIdGenerator("s"));
+        SessionId session = ok(strict.create(twoShirts(), CREATE_KEY)).id();
+        CheckoutView first = ok(strict.complete(session, PAY_OK, COMPLETE_KEY));
+        CheckoutView replay = ok(strict.complete(session, PAY_OK, COMPLETE_KEY));
+        CheckoutView second = ok(strict.complete(session, PAY_OK, COMPLETE_KEY_1));
+
+        assertThat(replay.order()).isEqualTo(first.order());
+        assertThat(second.order()).isPresent().isNotEqualTo(first.order());
+        assertThat(strict.orders()).hasSize(2).allSatisfy(o -> assertThat(o.sessionId()).isEqualTo(session));
+        assertThat(strict.stock("item_123")).isEqualTo(96);
+    }
+
     // Covers: A.1, A.2 (create prices at the catalog, adds 8% tax half up, is ready with items and an email)
     @Test
     void create_quotesCatalogPricesWithTax_andIsReady() {

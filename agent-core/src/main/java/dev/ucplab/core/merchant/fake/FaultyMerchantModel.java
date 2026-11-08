@@ -61,6 +61,12 @@ import java.util.function.Consumer;
  * {@code item_unavailable}; create checks stock but does not reserve it; a token other than {@code tok_ok} or
  * {@code tok_decline} gets {@code payment_invalid}; a refused cancel gets {@code checkout_not_cancelable}.
  *
+ * <p><b>Modes</b> (14.1). {@link Mode#LAB} is the lab merchant: a completed or charging session answers any further
+ * {@code complete} without charging, so one session can never produce two orders. {@link Mode#STRICT} drops that
+ * per-session protection, as a merchant that relies on idempotency keys alone might: a {@code complete} under a new key
+ * re-checks and charges again, so each key can create its own order. Keys still replay their stored result, and a
+ * canceled session is still refused.
+ *
  * <p>Time is the injected clock. Held requests ({@link Fault.DelayForward}, {@link Fault.HoldInProgress}) are
  * delivered at the start of the next call or lab read once the clock has passed their due time. All state is guarded
  * by one {@link ReentrantLock} (7.8); nothing blocks while holding it.
@@ -74,7 +80,16 @@ public final class FaultyMerchantModel implements MerchantGateway {
     public static final String TOKEN_DECLINE = "tok_decline";
     private static final int TAX_PERCENT = 8;
 
+    /** How much the merchant protects a session against a second charge (14.1 "Merchant strictness"). */
+    public enum Mode {
+        /** The lab merchant (A.1): a completed or charging session is never charged again. */
+        LAB,
+        /** No per-session protection: each idempotency key can create its own order. */
+        STRICT
+    }
+
     private final MerchantId merchantId;
+    private final Mode mode;
     private final Clock clock;
     private final IdGenerator ids;
     private final ReentrantLock lock = new ReentrantLock();
@@ -91,7 +106,12 @@ public final class FaultyMerchantModel implements MerchantGateway {
     private long heldSeq;
 
     public FaultyMerchantModel(MerchantId merchantId, Clock clock, IdGenerator ids) {
+        this(merchantId, Mode.LAB, clock, ids);
+    }
+
+    public FaultyMerchantModel(MerchantId merchantId, Mode mode, Clock clock, IdGenerator ids) {
         this.merchantId = Objects.requireNonNull(merchantId, "merchantId");
+        this.mode = Objects.requireNonNull(mode, "mode");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.ids = Objects.requireNonNull(ids, "ids");
         catalog.put("item_123", new Item(2500, 100));
@@ -399,18 +419,23 @@ public final class FaultyMerchantModel implements MerchantGateway {
         }
         switch (s.status) {
             case COMPLETED -> {
-                return Optional.of(ok(200, s, List.of()));
+                if (mode == Mode.LAB) {
+                    return Optional.of(ok(200, s, List.of()));
+                }
             }
             case CANCELED -> {
                 return Optional.of(ok(200, s, List.of(message("error", "checkout_not_modifiable", "checkout is canceled"))));
             }
             case COMPLETE_IN_PROGRESS -> {
-                return Optional.of(ok(200, s, List.of(message("warning", "checkout_busy", "a charge is in progress"))));
+                if (mode == Mode.LAB) {
+                    return Optional.of(ok(200, s, List.of(message("warning", "checkout_busy", "a charge is in progress"))));
+                }
             }
             default -> {
                 // Fall through to the re-checks below.
             }
         }
+        // STRICT: a completed or charging session reaches the re-checks and is charged again.
 
         List<MerchantMessage> problems = new ArrayList<>();
         for (int i = 0; i < s.lines.size(); i++) {

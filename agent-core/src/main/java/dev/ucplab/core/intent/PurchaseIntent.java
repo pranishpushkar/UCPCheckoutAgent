@@ -126,6 +126,13 @@ public record PurchaseIntent(
                 updatedAt);
     }
 
+    /** Clears uncertain_since when a new complete key is issued: the deadline is per key (7.5 rule 1). */
+    public PurchaseIntent withoutUncertainSince() {
+        return new PurchaseIntent(
+                id, owner, merchantId, dedupeKey, lines, buyerEmail, state, version, sessionId, approvedSnapshotHash,
+                requoteCount, orderId, failureReason, Optional.empty(), leaseOwner, leaseUntil, createdAt, updatedAt);
+    }
+
     public PurchaseIntent withVersion(long newVersion) {
         return new PurchaseIntent(
                 id, owner, merchantId, dedupeKey, lines, buyerEmail, state, newVersion, sessionId,

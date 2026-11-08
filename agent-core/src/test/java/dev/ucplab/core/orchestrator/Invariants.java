@@ -42,8 +42,10 @@ final class Invariants {
 
     /** P8 allows 2 re-quotes, so a correct run uses complete revisions 0 to 2; the margin catches a runaway counter. */
     static final int MAX_REVISION = 8;
-    /** Steps the executor runs back to back (quote retries, an owed cancel) all happen at one instant. */
-    static final Duration TRANSIENT_ALLOWANCE = Duration.ofSeconds(1);
+    /** One RecoveryWorker pass (7.6: it runs every 5 s). */
+    static final Duration WORKER_PASS = Duration.ofSeconds(5);
+    /** The request timeout of create and update (8.3); complete's is in OrchestratorConfig. */
+    static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(5);
 
     private Invariants() {}
 
@@ -83,7 +85,9 @@ final class Invariants {
                 "I3: the approval service accepted a token from an earlier approval for " + d.intent().value()
                         + " at " + d.at()));
         Map<IdempotencyKey, KeyOwner> owners = keyOwners(o);
-        Map<String, IdempotencyKey> keyOfApproval = new HashMap<>();
+        // Approvals are told apart by the user's decision, not the hash: two approvals of the same intent can have
+        // byte-identical snapshots (same lines, total and expires_at when re-quotes happen at one instant).
+        Map<Integer, IdempotencyKey> keyOfApproval = new HashMap<>();
         for (Observations.ClientCall c : completes(o)) {
             Optional<KeyOwner> owner = c.key().map(owners::get);
             if (owner.isEmpty()) {
@@ -106,7 +110,7 @@ final class Invariants {
             if (!approval.at().isBefore(snapshot.expiresAt())) {
                 v.add("I3: " + where + ": approved at " + approval.at() + ", after it expired at " + snapshot.expiresAt());
             }
-            IdempotencyKey bound = keyOfApproval.putIfAbsent(approval.snapshotHash(), c.key().get());
+            IdempotencyKey bound = keyOfApproval.putIfAbsent(approval.seq(), c.key().get());
             if (bound != null && !bound.equals(c.key().get())) {
                 v.add("I3: " + where + " uses an approval already consumed by key " + bound.value());
             }
@@ -184,15 +188,19 @@ final class Invariants {
 
     // ---------------------------------------------------------------- I5
 
-    private enum Stretch { TRANSIENT, AWAITING_APPROVAL, UNCERTAIN }
-
     /**
-     * I5: once the run drains, every intent is terminal (ESCALATED included), and no intent overstays a deadline on
-     * the way. The deadlines: COMPLETING or RECONCILING for at most the reconciliation deadline from the step that
-     * entered them (7.5); AWAITING_APPROVAL until the pending approval's expiry (9.2); PROPOSED, QUOTING and APPROVED
-     * only for back-to-back steps. Each crash inside a stretch extends it by one lease, because the next worker must
-     * wait for the dead one's lease to end (7.6). A sample taken before a step may sit exactly on the deadline (that
-     * step must resolve it); one taken after a step may not.
+     * I5 with the liveness bounds of 7.6: once the run drains every intent is terminal (ESCALATED included), and on
+     * the way no intent stays in a state longer than its bound:
+     * <ul>
+     *   <li>PROPOSED, QUOTING, APPROVED: one worker pass plus the request timeouts of the calls that state makes
+     *       (none; a create or update with its retries; one complete);
+     *   <li>AWAITING_APPROVAL: the pending approval's {@code expires_at};
+     *   <li>COMPLETING and RECONCILING, taken together: the reconciliation deadline from the step that entered them.
+     *       A new complete key leaves them through QUOTING, so each key gets its own deadline (7.5 rule 1).
+     * </ul>
+     * Each crash inside a stretch adds one lease period, plus the 1 ns before a claim can take the lease over
+     * ({@link ScheduleExecutor#CLAIM_GRANULARITY}). A sample taken before a step may sit exactly on the bound (that
+     * step must leave the state); one taken after a step may not.
      */
     static List<String> i5(Observations o) {
         List<String> v = new ArrayList<>(o.aborts());
@@ -203,11 +211,11 @@ final class Invariants {
             samples.stream().filter(s -> s.phase() == Observations.Phase.END).findFirst()
                     .filter(s -> !s.state().isTerminal())
                     .ifPresent(s -> v.add("I5: " + id.value() + " is still " + s.state() + " after the run drained"));
-            Optional<Stretch> stretch = Optional.empty();
+            Optional<String> stretch = Optional.empty();
             Instant start = Instant.MIN;
-            Instant deadline = Instant.MAX;
+            Instant bound = Instant.MAX;
             for (Observations.Sample s : samples) {
-                Optional<Stretch> now = stretchOf(s.state());
+                Optional<String> now = stretchOf(s.state());
                 if (now.isEmpty()) {
                     stretch = now;
                     continue;
@@ -215,15 +223,14 @@ final class Invariants {
                 if (!now.equals(stretch)) {
                     stretch = now;
                     start = s.at();
-                    deadline = extendForCrashes(firstDeadline(now.get(), s, o), start, crashes, o.lease());
+                    bound = extendForCrashes(firstBound(s, o), start, crashes, o.config().lease());
                 }
                 boolean overdue = s.phase() == Observations.Phase.BEFORE_STEP
-                        ? s.at().isAfter(deadline)
-                        : !s.at().isBefore(deadline);
+                        ? s.at().isAfter(bound)
+                        : !s.at().isBefore(bound);
                 if (overdue) {
                     v.add("I5: " + id.value() + " was still " + s.state() + " at " + s.at() + " (" + s.phase()
-                            + "), past its deadline " + deadline + " for the " + now.get() + " stretch begun at "
-                            + start);
+                            + "), past its bound " + bound + " for the " + now.get() + " stretch begun at " + start);
                     break;
                 }
             }
@@ -231,38 +238,43 @@ final class Invariants {
         return v;
     }
 
-    private static Optional<Stretch> stretchOf(IntentState state) {
+    /** The rows of the 7.6 table: each state is its own stretch, except COMPLETING and RECONCILING together. */
+    private static Optional<String> stretchOf(IntentState state) {
         return switch (state) {
-            case PROPOSED, QUOTING, APPROVED -> Optional.of(Stretch.TRANSIENT);
-            case AWAITING_APPROVAL -> Optional.of(Stretch.AWAITING_APPROVAL);
-            case COMPLETING, RECONCILING -> Optional.of(Stretch.UNCERTAIN);
+            case PROPOSED, QUOTING, APPROVED, AWAITING_APPROVAL -> Optional.of(state.name());
+            case COMPLETING, RECONCILING -> Optional.of("COMPLETING/RECONCILING");
             case COMPLETED, REJECTED, FAILED_NOT_CHARGED, ESCALATED -> Optional.empty();
         };
     }
 
-    private static Instant firstDeadline(Stretch stretch, Observations.Sample s, Observations o) {
-        return switch (stretch) {
-            case TRANSIENT -> s.at().plus(TRANSIENT_ALLOWANCE);
+    private static Instant firstBound(Observations.Sample s, Observations o) {
+        OrchestratorConfig c = o.config();
+        return switch (s.state()) {
+            case PROPOSED -> s.at().plus(WORKER_PASS);
+            case QUOTING -> s.at().plus(WORKER_PASS).plus(REQUEST_TIMEOUT.multipliedBy(c.maxQuoteRetries() + 1L));
+            case APPROVED -> s.at().plus(WORKER_PASS).plus(c.completeRequestTimeout());
             case AWAITING_APPROVAL -> s.approvalExpiresAt().orElse(s.at().plus(DefaultApprovalService.DEFAULT_TTL));
-            case UNCERTAIN -> s.at().plus(o.reconcileDeadline());
+            case COMPLETING, RECONCILING -> s.at().plus(c.reconcileDeadline());
+            case COMPLETED, REJECTED, FAILED_NOT_CHARGED, ESCALATED -> Instant.MAX;
         };
     }
 
-    private static Instant extendForCrashes(Instant deadline, Instant start, List<Instant> crashes, Duration lease) {
-        Instant d = deadline;
+    private static Instant extendForCrashes(Instant bound, Instant start, List<Instant> crashes, Duration lease) {
+        Instant b = bound;
         for (Instant crash : crashes) {
-            if (!crash.isBefore(start) && !crash.isAfter(d)) {
-                d = d.plus(lease).plus(TRANSIENT_ALLOWANCE);
+            if (!crash.isBefore(start) && !crash.isAfter(b)) {
+                b = b.plus(lease).plus(ScheduleExecutor.CLAIM_GRANULARITY);
             }
         }
-        return d;
+        return b;
     }
 
     // ---------------------------------------------------------------- I7
 
     /**
      * I7: every {@code complete} sent under one approval carries the same key and a byte-identical body; a later
-     * approval of the same intent uses a key no earlier approval used. Keys and body hashes are the merchant's own
+     * approval of the same intent uses a key no earlier approval used. An approval is the user's decision, not its
+     * hash, because two approvals can have identical snapshots. Keys and body hashes are the merchant's own
      * log; the wire record only says which approval was in force, and must agree with the log call for call.
      */
     static List<String> i7(Observations o) {
@@ -293,7 +305,7 @@ final class Invariants {
             }
             String approval = lastDecision(o, owner.intent(), c.seq())
                     .filter(Observations.Decision::approve)
-                    .map(d -> owner.intent().value() + "/" + d.snapshotHash().substring(0, 12))
+                    .map(d -> owner.intent().value() + "/decision#" + d.seq() + "/" + d.snapshotHash().substring(0, 12))
                     .orElse(owner.intent().value() + "/no-approval");
             keysByApproval.computeIfAbsent(approval, k -> new LinkedHashSet<>()).add(key);
             approvalsByKey.computeIfAbsent(key, k -> new LinkedHashSet<>()).add(approval);
