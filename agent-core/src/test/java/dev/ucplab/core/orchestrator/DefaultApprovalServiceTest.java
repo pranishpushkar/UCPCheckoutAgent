@@ -11,7 +11,11 @@ import dev.ucplab.core.identity.AuthContext;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentState;
 import dev.ucplab.core.intent.PurchaseIntent;
+import dev.ucplab.core.merchant.fake.Fault;
+import dev.ucplab.core.merchant.fake.FaultRule;
+import dev.ucplab.core.merchant.fake.MerchantCall;
 import java.time.Duration;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 /** DefaultApprovalService through the orchestrator it serves; lives here to share {@link Lab}. */
@@ -51,6 +55,34 @@ class DefaultApprovalServiceTest {
         assertThat(w.approvalService().decide(lab.alice(), id, pending.token() + "x", true))
                 .isInstanceOf(ApprovalDecision.InvalidToken.class);
         assertThat(lab.intent(id).state()).isEqualTo(IntentState.AWAITING_APPROVAL);
+    }
+
+    // Covers: 9.2 "Snapshot and token details", I3 (found by the property tests: the price goes 2500 -> 2800 -> 2500
+    // within one instant, so approvals 1 and 3 have byte-identical snapshots and hashes; the token carries the approval
+    // id, so the consumed token of approval 1 is refused for approval 3, whose own token is accepted)
+    @Test
+    void decide_refusesConsumedTokenOfEarlierApproval_whenSnapshotsAreIdentical() {
+        lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 1, new Fault.PriceChange("item_123", 2800)));
+        lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 2, new Fault.PriceChange("item_123", 2500)));
+        assertThat(w.approvalService().decide(lab.alice(), id, pending.token(), true))
+                .isInstanceOf(ApprovalDecision.Approved.class);
+        assertThat(lab.drive(w, id)).isEqualTo(IntentState.AWAITING_APPROVAL);
+        assertThat(lab.decide(w, id, true)).isInstanceOf(ApprovalDecision.Approved.class);
+        assertThat(lab.drive(w, id)).isEqualTo(IntentState.AWAITING_APPROVAL);
+
+        PendingApproval third = lab.pending(w, id);
+        List<ApprovalRecord> all = lab.approvals.listForSystem(id);
+        assertThat(all).hasSize(3);
+        assertThat(all.get(0).status()).isEqualTo(ApprovalStatus.CONSUMED);
+        assertThat(third.snapshot()).isEqualTo(pending.snapshot());
+        assertThat(third.snapshotHash()).isEqualTo(pending.snapshotHash());
+        assertThat(third.token()).isNotEqualTo(pending.token());
+
+        assertThat(w.approvalService().decide(lab.alice(), id, pending.token(), true))
+                .isInstanceOf(ApprovalDecision.InvalidToken.class);
+        assertThat(lab.intent(id).state()).isEqualTo(IntentState.AWAITING_APPROVAL);
+        assertThat(w.approvalService().decide(lab.alice(), id, third.token(), true))
+                .isInstanceOf(ApprovalDecision.Approved.class);
     }
 
     // Covers: 9.2, I3, I10 (approval is single use and records decided_by)

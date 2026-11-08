@@ -18,15 +18,18 @@ import dev.ucplab.core.intent.AttemptOp;
 import dev.ucplab.core.intent.AttemptStatus;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentNotFoundException;
+import dev.ucplab.core.intent.IntentState;
 import dev.ucplab.core.intent.LeaseLostException;
 import dev.ucplab.core.intent.MerchantAttempt;
 import dev.ucplab.core.intent.ProposalResult;
 import dev.ucplab.core.intent.ProposedLine;
 import dev.ucplab.core.intent.StepResult;
+import dev.ucplab.core.merchant.CallOutcome;
 import dev.ucplab.core.merchant.CheckoutStatus;
 import dev.ucplab.core.merchant.IdempotencyKey;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MutatingOp;
+import dev.ucplab.core.merchant.SessionId;
 import dev.ucplab.core.merchant.fake.CallRecord;
 import dev.ucplab.core.merchant.fake.Fault;
 import dev.ucplab.core.merchant.fake.FaultRule;
@@ -232,6 +235,39 @@ class DefaultOrchestratorTest {
                 .satisfies(o -> assertThat(o.totalMinor()).isEqualTo(5616));
         assertThat(lab.intent(id).uncertainSince()).contains(secondKeySent);
         assertThat(lab.clock.instant()).isBefore(secondKeySent.plus(lab.config.reconcileDeadline()));
+    }
+
+    // Covers: 7.2 (defensive QUOTING row: an update shows the session completed -> RECONCILING), I1, I2 (the order is
+    // recorded through reconciliation, nothing new is sent, and nothing throws)
+    @Test
+    void requote_movesToReconcilingAndRecordsOrder_whenUpdateShowsSessionCompleted() {
+        IntentId id = approved();
+        lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 1, new Fault.PriceChange("item_123", 2600)));
+        assertThat(w.orchestrator().advance(id).after()).isEqualTo(IntentState.QUOTING);
+        assertThat(lab.intent(id).requoteCount()).isEqualTo(1);
+        // A late complete lands on the session after the re-quote began (here sent outside the orchestrator).
+        lab.merchant.setPrice("item_123", 2500);
+        MerchantAttempt first = attempts(id, AttemptOp.COMPLETE).get(0);
+        SessionId session = lab.intent(id).sessionId().orElseThrow();
+        assertThat(lab.merchant.complete(session, first.requestBody().orElseThrow(),
+                IdempotencyKey.derive(id, MutatingOp.COMPLETE, 5))).isInstanceOf(CallOutcome.Ok.class);
+        assertThat(lab.merchant.orders()).hasSize(1);
+        int completesDelivered = lab.merchant.delivered(MerchantCall.COMPLETE);
+
+        assertThat(w.orchestrator().advance(id).after()).isEqualTo(RECONCILING);
+        assertThat(attempts(id, AttemptOp.UPDATE)).singleElement()
+                .satisfies(a -> assertThat(a.status()).isEqualTo(AttemptStatus.RESPONDED));
+        assertThat(lab.intent(id).uncertainSince()).isPresent();
+        assertThat(lab.intents.events(id)).filteredOn(e -> e.type().equals("transition"))
+                .extracting(e -> e.payloadJson())
+                .anySatisfy(p -> assertThat(p).contains("\"from\":\"QUOTING\"").contains("\"event\":\"OBSERVED_COMPLETED\"")
+                        .contains("\"to\":\"RECONCILING\""));
+
+        assertThat(lab.drive(w, id)).isEqualTo(COMPLETED);
+        assertThat(lab.intent(id).orderId()).contains(lab.merchant.orders().get(0).orderId());
+        assertThat(lab.merchant.orders()).hasSize(1);
+        assertThat(lab.merchant.delivered(MerchantCall.COMPLETE)).isEqualTo(completesDelivered);
+        assertThat(attempts(id, AttemptOp.COMPLETE)).hasSize(1);
     }
 
     // Covers: 7.5 (deadline from uncertain_since -> ESCALATED, never FAILED_NOT_CHARGED), I5 (a restart keeps it)

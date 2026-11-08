@@ -87,8 +87,8 @@ public final class DefaultApprovalService implements ApprovalService {
                 quote.lines().stream().map(l -> new SnapshotLine(l.itemId(), l.quantity(), l.unitPriceMinor())).toList(),
                 quote.currency(), quote.totalMinor(), quote.totalMinor(), now.plus(ttl));
         String hash = snapshot.hash();
-        String token = tokens.mint(intent.id(), hash);
         String approvalId = ids.next();
+        String token = tokens.mint(approvalId, intent.id(), hash);
         approvals.insert(new ApprovalRecord(approvalId, intent.id(), intent.owner(), snapshot, hash,
                 ApprovalTokens.hashForStorage(token), snapshot.expiresAt(), ApprovalStatus.PENDING, Optional.empty(),
                 Optional.empty()));
@@ -115,7 +115,7 @@ public final class DefaultApprovalService implements ApprovalService {
         Instant now = clock.instant();
         return approvals.findLatest(auth.user(), id)
                 .filter(a -> a.status() == ApprovalStatus.PENDING && now.isBefore(a.expiresAt()))
-                .map(a -> new PendingApproval(a.snapshot(), a.snapshotHash(), tokens.mint(id, a.snapshotHash())));
+                .map(a -> new PendingApproval(a.snapshot(), a.snapshotHash(), tokens.mint(a.id(), id, a.snapshotHash())));
     }
 
     @Override
@@ -139,7 +139,7 @@ public final class DefaultApprovalService implements ApprovalService {
         if (!now.isBefore(approval.expiresAt())) {
             return new ApprovalDecision.NotPending();
         }
-        if (!tokens.verify(token, id, approval.snapshotHash())) {
+        if (!tokens.verify(token, approval.id(), id, approval.snapshotHash())) {
             return new ApprovalDecision.InvalidToken();
         }
 

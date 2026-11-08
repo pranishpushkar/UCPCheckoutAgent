@@ -46,6 +46,9 @@ final class Invariants {
     static final Duration WORKER_PASS = Duration.ofSeconds(5);
     /** The request timeout of create and update (8.3); complete's is in OrchestratorConfig. */
     static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(5);
+    /** 8.2 retry backoff: exponential from 200 ms, factor 2, capped at 2 s, full jitter (so at most the capped delay). */
+    static final Duration BACKOFF_BASE = Duration.ofMillis(200);
+    static final Duration BACKOFF_CAP = Duration.ofSeconds(2);
 
     private Invariants() {}
 
@@ -192,14 +195,16 @@ final class Invariants {
      * I5 with the liveness bounds of 7.6: once the run drains every intent is terminal (ESCALATED included), and on
      * the way no intent stays in a state longer than its bound:
      * <ul>
-     *   <li>PROPOSED, QUOTING, APPROVED: one worker pass plus the request timeouts of the calls that state makes
-     *       (none; a create or update with its retries; one complete);
+     *   <li>PROPOSED: one worker pass;
+     *   <li>QUOTING: one worker pass plus at most 4 attempts of one create or update and their backoff (8.2), about
+     *       26 s (5 s + 4 &times; 5 s + 0.2 s + 0.4 s + 0.8 s);
+     *   <li>APPROVED: one worker pass plus the first complete's 10 s timeout;
      *   <li>AWAITING_APPROVAL: the pending approval's {@code expires_at};
      *   <li>COMPLETING and RECONCILING, taken together: the reconciliation deadline from the step that entered them.
      *       A new complete key leaves them through QUOTING, so each key gets its own deadline (7.5 rule 1).
      * </ul>
-     * Each crash inside a stretch adds one lease period, plus the 1 ns before a claim can take the lease over
-     * ({@link ScheduleExecutor#CLAIM_GRANULARITY}). A sample taken before a step may sit exactly on the bound (that
+     * Each crash inside a stretch adds at most one lease period plus one worker period (30 s + 5 s = 35 s) before
+     * another worker takes over. A sample taken before a step may sit exactly on the bound (that
      * step must leave the state); one taken after a step may not.
      */
     static List<String> i5(Observations o) {
@@ -251,7 +256,8 @@ final class Invariants {
         OrchestratorConfig c = o.config();
         return switch (s.state()) {
             case PROPOSED -> s.at().plus(WORKER_PASS);
-            case QUOTING -> s.at().plus(WORKER_PASS).plus(REQUEST_TIMEOUT.multipliedBy(c.maxQuoteRetries() + 1L));
+            case QUOTING -> s.at().plus(WORKER_PASS).plus(REQUEST_TIMEOUT.multipliedBy(c.maxQuoteRetries() + 1L))
+                    .plus(worstBackoff(c.maxQuoteRetries()));
             case APPROVED -> s.at().plus(WORKER_PASS).plus(c.completeRequestTimeout());
             case AWAITING_APPROVAL -> s.approvalExpiresAt().orElse(s.at().plus(DefaultApprovalService.DEFAULT_TTL));
             case COMPLETING, RECONCILING -> s.at().plus(c.reconcileDeadline());
@@ -263,10 +269,21 @@ final class Invariants {
         Instant b = bound;
         for (Instant crash : crashes) {
             if (!crash.isBefore(start) && !crash.isAfter(b)) {
-                b = b.plus(lease).plus(ScheduleExecutor.CLAIM_GRANULARITY);
+                b = b.plus(lease).plus(WORKER_PASS);
             }
         }
         return b;
+    }
+
+    /** The longest the 8.2 backoff can wait before {@code retries} retries: the sum of the capped delays. */
+    static Duration worstBackoff(int retries) {
+        Duration total = Duration.ZERO;
+        Duration delay = BACKOFF_BASE;
+        for (int i = 0; i < retries; i++) {
+            total = total.plus(delay.compareTo(BACKOFF_CAP) > 0 ? BACKOFF_CAP : delay);
+            delay = delay.multipliedBy(2);
+        }
+        return total;
     }
 
     // ---------------------------------------------------------------- I7

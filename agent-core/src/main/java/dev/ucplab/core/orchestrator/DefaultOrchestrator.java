@@ -351,16 +351,25 @@ public final class DefaultOrchestrator implements Orchestrator {
                 CheckoutView view = ok.value();
                 Optional<Integer> http = Optional.of(ok.httpStatus());
                 Optional<String> summary = Optional.of(CheckoutWire.responseSummary(view));
-                if (view.status() == CheckoutStatus.COMPLETED || view.status() == CheckoutStatus.COMPLETE_IN_PROGRESS) {
-                    // DESIGN GAP: table 7.2 has no QUOTING row for a session that has, or may soon have, an order (a
-                    // late complete landed after the re-quote began). Keep the evidence and fail loudly rather than
-                    // report FAILED_NOT_CHARGED for a purchase that may have been charged.
-                    intents.resolveAttempt(attempt.id(), AttemptStatus.RESPONDED, http, summary);
-                    throw new IllegalTransitionException(QUOTING, TransitionEvent.OBSERVED_COMPLETED,
-                            "quote response shows the session " + view.status().wire() + "; table 7.2 has no row");
-                }
                 if (!create && !view.id().equals(requireSession(written))) {
                     throw new IllegalStateException("I4: update answered for another session: " + view.id());
+                }
+                if (view.status() == CheckoutStatus.COMPLETED) {
+                    // Defensive row (7.2): a late complete landed after the re-quote began. Send nothing new; the
+                    // reconciliation read records the order.
+                    Move m = move(written, TransitionEvent.OBSERVED_COMPLETED);
+                    PurchaseIntent next = withUncertainSince(m.next());
+                    resolve(attempt, AttemptStatus.RESPONDED, http, summary, next, written.version());
+                    transitionEvent(written.id(), m.transition());
+                    yield moved(written, next);
+                }
+                if (view.status() == CheckoutStatus.COMPLETE_IN_PROGRESS) {
+                    // DESIGN GAP: table 7.2 has no QUOTING row for complete_in_progress (the defensive row covers
+                    // completed only). Keep the evidence and fail loudly rather than report FAILED_NOT_CHARGED for a
+                    // purchase that may be charged.
+                    intents.resolveAttempt(attempt.id(), AttemptStatus.RESPONDED, http, summary);
+                    throw new IllegalTransitionException(QUOTING, TransitionEvent.OBSERVED_COMPLETE_IN_PROGRESS,
+                            "quote response shows the session " + view.status().wire() + "; table 7.2 has no row");
                 }
                 PurchaseIntent base = create ? written.withSessionId(view.id()) : written;
                 Set<String> codes = codes(view);
