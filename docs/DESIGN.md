@@ -116,9 +116,9 @@ These are the properties the evaluation checks. Each must be enforced in code an
 | I2 | Any order matches the approved snapshot: same merchant, items, quantities and currency, and a total not above the approved maximum |
 | I3 | `COMPLETING` is reachable only from `APPROVED`, with a valid, unexpired, unconsumed approval whose hash matches the current quote |
 | I4 | After the first `complete` request is sent, the intent's merchant session id never changes and no new session is created for that intent |
-| I5 | Every non-terminal intent reaches a terminal state, or `ESCALATED`, within its deadline (liveness) |
+| I5 | Every non-terminal intent reaches a terminal state, or `ESCALATED`, within its deadline (liveness). The deadline for each state is set in 7.6 |
 | I6 | The model's tool set contains no operation that can complete, cancel or approve |
-| I7 | A `complete` retry reuses the same idempotency key and a byte-identical body |
+| I7 | A `complete` retry under the same approval reuses the same idempotency key and a byte-identical body. A new approval after a re-quote gets a new key; its frozen body may be byte-identical to the previous one, because it holds only the payment instrument (7.4) |
 | I8 | Secrets, tokens and card credentials are never written to logs, events or traces |
 | I9 | Tenant isolation: a user can read, approve or act on only their own intents, approvals and runs |
 | I10 | Only the intent's owner, with a sign-in no older than maxApprovalAuthAge, can approve it, and the approval records decided\_by |
@@ -169,7 +169,7 @@ These are the properties the evaluation checks. Each must be enforced in code an
 | `eval-harness` | Scenario runner, invariant checks, report | JDK, client libraries |
 | `merchant` | System under test | JDK only |
 
-An ArchUnit test must fail the build if `agent-core` imports anything outside `java.*`, or if any module other than `agent-adk` imports an ADK type.
+An ArchUnit test must fail the build if `agent-core` imports anything outside `java.*` or `javax.crypto.*`, or if any module other than `agent-adk` imports an ADK type.
 
 ### 5.3 Happy path
 
@@ -291,6 +291,7 @@ Any event that is not in this table for the current state is a programming error
 | RECONCILING | deadline reached | none | ESCALATED | event listing all attempts |
 | COMPLETING or RECONCILING | price\_changed, checkout incomplete or observed incomplete | requote\_count has reached the P8 cap | REJECTED | failure\_reason price\_unstable, cancel session. Not ESCALATED: no money has moved and the outcome is known |
 | RECONCILING | observed ready\_for\_complete | quiet period (7.5) not yet elapsed | RECONCILING | poll again; do not resend |
+| QUOTING | an update or GET shows the session completed or complete_in_progress | none | RECONCILING | send nothing new; reconciliation records the order. Defensive: a correct orchestrator should never reach this, but it must never throw here |
 
 ### 7.3 Step function and write-ahead protocol \[CONTRACT\]
 
@@ -317,14 +318,16 @@ Create and update are safe to resend with the same key. `complete` is never rese
 `key = 'ucp-' + first 26 chars of base32(sha256(intentId + '|' + op + '|' + revision))`
 
 - `op` is one of `create`, `update`, `complete`, `cancel`.
-- `revision` is 0 for create, complete and cancel. For update it is the number of updates already issued for the intent.
+- `revision` is 0 for create and cancel. For update it is the number of updates already issued for the intent. For `complete` it is the intent's `requote_count` at the time of approval: 0 for the first approval, 1 after the first re-quote and new approval, and so on. Every approval therefore gets its own `complete` key, and all resends under that approval share it.
 - The `complete` body is built once, when the intent becomes `APPROVED`, from the approved snapshot and the payment instrument. It is stored in `merchant_attempt.request_body`, and every resend reads that stored body (I7).
+
+**New complete key guard \[CONTRACT\].** A `complete` with a new key (a higher `requote_count`) may be sent only when every earlier `complete` attempt for the intent is RESPONDED with a definitive no-charge outcome (price_changed, out_of_stock, incomplete or payment_declined). If any earlier `complete` attempt is SENT or UNCERTAIN, the intent must first reconcile (7.5). This stops a new key from being sent while an older request could still create an order. A definitive answer to any request under a key settles every earlier attempt under that same key, because the merchant keeps one result per key (A.1). UCP requires merchants to keep idempotency results for at least 24 hours, far longer than the reconciliation deadline; VERIFY this for each real merchant. Why the key must change: the merchant stores the result per key (A.1), so reusing the old key after a re-quote would replay the stored price_changed result, or return 409 because the body differs, and S5 could never complete.
 
 ### 7.5 Reconciliation \[CONTRACT\]
 
-Parameters (configuration): `pollInitial` 250 ms, `pollMax` 2 s, jitter 20%, `deadline` 60 s measured from the first uncertainty, `maxCompleteResends` 3.
+Parameters (configuration): `pollInitial` 250 ms, `pollMax` 2 s, jitter 20%, `deadline` 60 s measured from the first uncertainty, `maxCompleteResends` 2, `resendQuietPeriod` 20 s.
 
-1. On entering `RECONCILING`, persist `uncertain_since` once. A restart must not reset the deadline.
+1. On entering `RECONCILING`, persist `uncertain_since` once. A restart must not reset the deadline. The deadline is per complete key: when a new complete key is issued after a re-quote, uncertain_since is cleared, and the next uncertainty starts a fresh deadline. P8 limits the number of keys, so the total time stays bounded.
 2. Call `get(session)`. Reads follow the retry rules in section 8.3 and bypass the circuit breaker.
 3. Act on the observed status according to table 7.2.
 4. If the read itself fails, back off and repeat until the deadline.
@@ -332,7 +335,11 @@ Parameters (configuration): `pollInitial` 250 ms, `pollMax` 2 s, jitter 20%, `de
 
 Rules: reconciliation never creates a session, and never resends `complete` unless the merchant reports `ready_for_complete`.
 
-**Quiet period before a resend \[CONTRACT\].** `complete` is resent only when the merchant reports `ready_for_complete` **and** at least `resendQuietPeriod` has passed since the last `complete` attempt was sent. Default 10 s; configuration validation fails at startup if it is shorter than the `complete` request timeout in 8.3. Until then, keep polling.
+**Who waits \[CONTRACT\].** `advance` never sleeps. When the next step is a poll or a resend, it returns a `StepResult` with `nextAttemptAt`, computed from `pollInitial`, `pollMax` and jitter using the injected `Clock` and a seeded random source. The caller (`RecoveryWorker` from M3, or a test) does the waiting and calls `advance` again at or after that time.
+
+**Reconciliation defaults \[CONTRACT\].** `maxCompleteResends` is 2, not 3: with a 20 s quiet period and a 60 s deadline, `complete` can go out at 0, 20 and 40 s before the intent escalates, so two resends is the most the defaults allow. Configuration validation fails at startup unless `deadline` is greater than `maxCompleteResends` × `resendQuietPeriod`, so the cap can always be reached.
+
+**Quiet period before a resend \[CONTRACT\].** `complete` is resent only when the merchant reports `ready_for_complete` **and** at least `resendQuietPeriod` has passed since the last `complete` attempt was sent. Default 20 s, twice the complete request timeout, so a request held just past the timeout still lands before any resend; configuration validation fails at startup if it is shorter than the `complete` request timeout in 8.3. Until then, keep polling.
 
 Why: a GET can show `ready_for_complete` while the first `complete` is still queued in the proxy or the merchant. Resending at that moment puts two requests with the same key in flight. The first GET is not delayed, because a read is always safe; only the resend waits.
 
@@ -341,6 +348,22 @@ Why: a GET can show `ready_for_complete` while the first `complete` is still que
 ### 7.6 Recovery and leases
 
 A `RecoveryWorker` runs every 5 s and once at startup. It selects intents in `QUOTING`, `COMPLETING` or `RECONCILING` whose `lease_until` is null or in the past, claims one with a conditional UPDATE that sets `lease_owner` and `lease_until` (now + 30 s), and calls `advance`. Reconciliation is a series of short `advance` calls, not one long call, so the lease is checked and renewed between steps rather than by a background heartbeat.
+
+**What the worker picks up \[CONTRACT\].** Besides `QUOTING`, `COMPLETING` and `RECONCILING`, each pass also handles:
+
+- `APPROVED`: calls `advance`, which sends `complete`. Without this, a crash between approval and the first `complete` would leave the intent stuck.
+- `AWAITING_APPROVAL` past the approval's `expires_at`: marks the approval `EXPIRED` and moves the intent to `REJECTED` with reason `approval_expired`.
+- Any intent with `cancel_pending` set, which happens when `REJECTED` or `FAILED_NOT_CHARGED` owes a best-effort cancel: sends `cancel` with its usual key, clears the flag on any definitive answer, and gives up after 3 attempts. A failed cancel never changes the intent's state.
+
+**Liveness bounds for I5 \[CONTRACT\].**
+
+| State | Must leave it within |
+|---|---|
+| `PROPOSED`, `QUOTING`, `APPROVED` | One worker pass plus at most 4 attempts of a single call and their backoff (8.2): about 26 s for create or update (4 × 5 s timeouts plus backoff), 10 s for the first complete |
+| `AWAITING_APPROVAL` | The approval's `expires_at` (10 minutes) |
+| `COMPLETING`, `RECONCILING` | The reconciliation deadline (60 s per complete key, 7.5) |
+
+Each crash adds at most one lease period plus one worker period (30 s + 5 s = 35 s) before another worker takes over.
 
 Lease rules \[CONTRACT\]:
 
@@ -396,24 +419,24 @@ Connect timeout 2 s. Request timeout 5 s, except `complete` at 10 s. One circuit
 
 - A new `Request-Id` (UUID) for every HTTP attempt. Log it with the attempt id.
 - `UCP-Agent` comes from configuration.
-- Mutating bodies use canonical JSON (sorted keys, no extra whitespace) so a replay is byte-identical.
+- Mutating bodies use canonical JSON (keys sorted by UTF-16 code units, as String.compareTo does and as RFC 8785 specifies; no extra whitespace) so a replay is byte-identical.
 - Ignore unknown JSON fields. Amounts are integers.
 
 ## 9. Policy and approval
 
 ### 9.1 Policy rules \[CONTRACT\]
 
-Configuration file `policy.yaml`. `PolicyEngine.evaluate(...)` returns `PolicyDecision{allowed, ruleId, reason}`, and every decision is stored as an event.
+Configuration file `policy.yaml`. `PolicyEngine.evaluateProposal(...)` and `evaluateQuote(...)` (Appendix B) return `PolicyDecision{allowed, ruleId, reason}`, and every decision is stored as an event.
 
 | Rule | Default | Meaning |
 | --- | --- | --- |
 | P1 merchant allowlist | `localhost` entries only | Reject merchants that are not ACTIVE in the merchant registry (section 19) |
 | P2 per-purchase cap | 20000 minor units | Reject a quote above the cap |
-| P3 daily cap per user | 50000 minor units | Reject when the daily total would exceed the cap |
+| P3 daily cap per user | 50000 minor units | Reject when the user's spend over the last 24 hours (a rolling window, not a calendar day, so time zones don't matter) would exceed the cap. Counts intents in AWAITING\_APPROVAL, APPROVED, COMPLETING, RECONCILING, COMPLETED or ESCALATED; an intent being re-quoted is counted once |
 | P4 size limits | 5 per line, 5 lines | Reject larger proposals |
 | P5 proposal rate limit | 10 per user per hour | Guards against a looping agent |
 | P6 approval required | true | May not be false in the `prod` profile |
-| P7 re-approval | on | A re-quote with a higher total needs a new approval |
+| P7 re-approval | on | Every re-quote needs a new approval, whether the price went up or down (table 7.2). Always on and not configurable; listed so the rule is visible in policy decisions. Its outcome is "new approval required" (the intent returns to AWAITING\_APPROVAL), never a rejection; only P8 rejects a re-quote |
 | P8 re-quote cap | 2 per intent | Counts re-quotes caused by a price change or an incomplete checkout. When the cap is reached, the next re-quote ends the intent as REJECTED with reason price\_unstable. Enforced by the orchestrator, not AgentBudget, because the model is not involved in re-quoting |
 
 ### 9.2 Approval snapshot and token \[CONTRACT\]
@@ -421,10 +444,19 @@ Configuration file `policy.yaml`. `PolicyEngine.evaluate(...)` returns `PolicyDe
 `ApprovalSnapshot` fields: `intentId`, `merchantId`, `sessionId`, `lines[{itemId, quantity, unitPriceMinor}]`, `currency`, `totalMinor`, `maxTotalMinor`, `expiresAt`. The snapshot is built from the **merchant's response**, never from model output.
 
 - `snapshotHash = sha256_hex(canonicalJson(snapshot))`.
-- `approvalToken = base64url(HMAC_SHA256(approvalSecret, intentId + ':' + snapshotHash))`.
+- `approvalToken = base64url(HMAC_SHA256(approvalSecret, approvalId + ':' + intentId + ':' + snapshotHash))`.
 - Single use. TTL 10 minutes. Constant-time comparison.
 - `ApprovalService` is the only code that can move an intent to `APPROVED`.
 - The token goes to the approver channel only. It is never in a tool result or a prompt (I6, I8).
+
+**Snapshot and token details \[CONTRACT\].**
+
+- Before hashing, `lines` are sorted by `itemId`, then `quantity`, then `unitPriceMinor`, so the order in which the merchant lists them does not change `snapshotHash`.
+- `expiresAt` is written as ISO-8601 UTC.
+- `maxTotalMinor` defaults to the quoted `totalMinor`.
+- `approvalToken` is base64url without padding. The HMAC uses `javax.crypto.Mac` (`HmacSHA256`), and tokens are compared with `MessageDigest.isEqual`. This is why `agent-core` may also import `javax.crypto.*` (5.2).
+- `approvalSecret` must be at least 32 bytes, or startup fails. The `prod` profile also refuses a secret that starts with `change-me`.
+- The token includes the approval id, so two approvals with byte-identical snapshots (for example when a price goes back to its old value) get different tokens, and a consumed token can never verify against a later approval.
 
 ### 9.3 Defence in depth against prompt injection
 
@@ -454,7 +486,8 @@ CREATE TABLE purchase_intent (
   requote_count INTEGER NOT NULL DEFAULT 0, -- P8
   order_id TEXT,
   failure_reason TEXT,
-  uncertain_since TEXT,
+  uncertain_since TEXT,                 -- per complete key; cleared when a new complete key is issued (7.5)
+  cancel_pending INTEGER NOT NULL DEFAULT 0, -- 1 while a best-effort cancel is still owed (7.6)
   lease_owner TEXT,
   lease_until TEXT,
   created_at TEXT NOT NULL,
@@ -628,7 +661,7 @@ Two modes. **Scripted** uses `ScriptedModel`: deterministic, free, used in CI, 2
 | S14 | 24 concurrent complete calls for one session | one order | I1 | scripted |
 | S15 | two workers on one intent: worker A pauses past its lease during RECONCILING, worker B takes over, then A resumes | A's next write fails with LeaseLostException; COMPLETED with one order | I1, I5, I7 | scripted |
 | S16 | price changes before every complete; the approver approves each new quote | REJECTED with price\_unstable after 2 re-quotes; no order; exactly 3 approvals requested | I1, I2, I3, I5 | scripted |
-| S17 | complete held at the proxy (forward delayed 8 s); the client times out and a GET shows ready\_for\_complete | no resend inside the quiet period; COMPLETED with one order | I1, I7 | scripted |
+| S17 | complete held at the proxy (forward delayed 12 s: longer than the 10 s complete timeout, shorter than the 20 s quiet period); the client times out and a GET shows ready\_for\_complete | no resend inside the quiet period; COMPLETED with one order | I1, I7 | scripted |
 | S18 | user B tries to read and approve user A's intent | 404 for both; A's intent unchanged | I9, I10 | scripted |
 | S19 | approval sent with a sign-in older than 15 minutes; then with a freshly refreshed token whose auth\_time is still old; then after signing in again | first two refused with reauth\_required; third accepted; COMPLETED | I3, I10 | scripted |
 | S20 | three merchants; one returns 503 on every call | search returns the healthy merchants' items; a purchase at a healthy merchant completes; only the failing merchant's breaker opens | I1, I11 | scripted |
@@ -659,7 +692,7 @@ Per scenario: runs; terminal-state distribution; invariant violations; time to t
 | Level | What | Tooling |
 | --- | --- | --- |
 | 1. Unit | Every row of table 7.2 and every illegal transition (table-driven), policy rules, approval, idempotency key, canonical JSON, redaction | JUnit 5, AssertJ |
-| 2. Property-based (most valuable) | Random sequences of events and fault schedules against `FaultyMerchantModel`, an in-memory fake with the real merchant's semantics (idempotent keys, session states, commit-then-drop-response). Properties: I1, I3, I4, I5, I7 hold for every generated schedule | jqwik |
+| 2. Property-based (most valuable) | Random sequences of events and fault schedules against `FaultyMerchantModel`, an in-memory fake with the real merchant's semantics (idempotent keys, session states, commit-then-drop-response). Properties: I1, I3, I4, I5, I7 hold for every generated schedule | JUnit 5 with an in-house seeded schedule generator (14.1) |
 | 3. Component | Orchestrator with the SQL adapter and a fake gateway. Crash injection at each boundary in 7.3, then restart the recovery worker | JUnit 5 |
 | 4. Contract | `agent-ucp` against the real merchant module started in-process. Every row of table 8.1 exercised through the fault proxy | JUnit 5 |
 | 5. Conformance | The official UCP conformance suite against the merchant. See the repositories listed at https://ucp.dev/documentation/contributing/ (**VERIFY** how its simulation hook works) | pytest (external) |
@@ -669,6 +702,19 @@ Per scenario: runs; terminal-state distribution; invariant violations; time to t
 | 9. Mutation (optional) | Target a mutation score of at least 80% on the orchestrator and approval packages | PIT |
 
 Test naming: `unit_behaviour_condition`. Each test carries a comment citing the requirement or invariant IDs it covers.
+
+### 14.1 Property tests without a library \[CONTRACT\]
+
+jqwik was removed. Its author asks that it not be used with AI coding agents, and its output includes a message telling agents to ignore its test results, which conflicts with a workflow where an agent must act on real test failures. Property tests use plain JUnit 5 instead.
+
+- **Generator.** `ScheduleGenerator(long seed)`, built on `java.util.SplittableRandom`, produces one schedule: the user's actions (propose, approve, reject), per-call faults (not sent, commit then drop the response, delay past the timeout, duplicate) and merchant-side events (price change, stock change), all within fixed bounds.
+- **Runner.** Each property runs at least 10,000 schedules per `./mvnw verify`. `-Dproperty.tries=N` overrides the count. The base seed is fixed by default so builds are reproducible; `-Dproperty.seed=<n>` sets it, and `-Dproperty.seed=random` picks one and prints it.
+- **On failure.** Report the seed and the full schedule, then shrink: repeatedly remove single entries and keep any shorter schedule that still fails, up to 1,000 attempts. Report the smallest failing schedule and its seed.
+- **Replay.** `-Dproperty.seed=<seed> -Dproperty.tries=1` reproduces one run exactly.
+- **Determinism.** No wall clock and no shared static state. `Clock` and `IdGenerator` are fakes driven by the schedule.
+- **Merchant strictness.** `FaultyMerchantModel` also has a strict mode in which each idempotency key can create its own order, as a merchant without per-session protection might. Every property runs in both modes, so I1 detects key misuse directly instead of only through I3 and I7.
+- **Bounds.** The generator's limits are constants in `ScheduleGenerator`, documented in its Javadoc: up to 3 baskets and 40 entries per schedule, faults on the first 6 calls of each kind, up to 2 crashes and 4 decisions per basket, proxy holds of 1 to 30 s, and waits of up to 11 minutes.
+- **Reach check.** A committed test confirms that generated schedules reach every terminal state, include crashes and same-key resends, and hit the P8 cap, so the property counts are meaningful.
 
 ## 15. Repository, stack and build
 
@@ -690,7 +736,7 @@ ucp-checkout-lab/
   .env.example
 ```
 
-**Stack.** Java 21. Maven multi-module. Spring Boot 3.x in `agent-service` only. Jackson. JDBC with SQLite and Flyway. JUnit 5, AssertJ, jqwik, ArchUnit. OpenTelemetry API. A small hand-written circuit breaker is acceptable (about 80 lines); record the choice in an ADR. Use the latest stable versions at generation time and record them in the parent pom. **VERIFY** the ADK for Java version and coordinates at https://adk.dev.
+**Stack.** Java 21. Maven multi-module. Spring Boot 3.x in `agent-service` only. Jackson. JDBC with SQLite and Flyway. JUnit 5, AssertJ, ArchUnit (no property-testing library; see 14.1). OpenTelemetry API. A small hand-written circuit breaker is acceptable (about 80 lines); record the choice in an ADR. Use the latest stable versions at generation time and record them in the parent pom. **VERIFY** the ADK for Java version and coordinates at https://adk.dev.
 
 **Conventions.** Package root `dev.ucplab`. Records for DTOs. Sealed interfaces for outcomes. No Lombok. No null returns (use `Optional`). `Clock` and `IdGenerator` are injected. One top-level type per file. Javadoc on every port cites the contract IDs it implements.
 
@@ -996,7 +1042,7 @@ In `prod` these routes do not exist (404).
 
 ### 23.5 Errors and limits
 
-Errors use one shape: `{code, message, request_id}`. Codes: `unauthenticated` (401), `reauth_required` (401), `csrf_failed` (403), `not_found` (404), `approval_not_pending` (409), `validation_failed` (422), `rate_limited` (429, with `Retry-After`), `internal` (500, no internals in the message). `POST /api/runs` is limited per user by P5 and returns 429 when exceeded.
+Errors use one shape: `{code, message, request_id}`. Codes: `unauthenticated` (401), `reauth_required` (401), `csrf_failed` (403), `not_found` (404), `approval_not_pending` (409), `intent_busy` (409, with Retry-After set to the remaining lease time; returned when another worker still holds the intent's lease, for example for up to 30 s after a crash), `validation_failed` (422), `rate_limited` (429, with `Retry-After`), `internal` (500, no internals in the message). `POST /api/runs` is limited per user by P5 and returns 429 when exceeded.
 
 ## 24. Lab console (UI)
 
@@ -1074,9 +1120,9 @@ AGENT_PROFILE=local
 DATABASE_URL=jdbc:postgresql://postgres:5432/ucplab
 OIDC_ISSUER=http://localhost:8081/realms/ucplab
 OIDC_CLIENT_ID=ucplab-agent
-OIDC_CLIENT_SECRET=change-me-local-only
+OIDC_CLIENT_SECRET=change-me-local-only-at-least-32-bytes
 OIDC_REDIRECT_URI=http://localhost:8080/auth/callback
-APPROVAL_SECRET=change-me-local-only
+APPROVAL_SECRET=change-me-local-only-at-least-32-bytes
 MERCHANTS_FILE=/config/merchants.local.yaml
 POLICY_FILE=/config/policy.yaml
 GEMINI_API_KEY=          # live mode only
@@ -1290,6 +1336,8 @@ Create `.github/copilot-instructions.md` with this content before generating any
 - User identity comes only from AuthContext. Every repository call on intents, approvals
   or runs takes the owner's UserId (section 18). Never trust a user id from a request body.
 - Never cache checkout sessions, quotes, approvals or reconciliation reads (section 20).
+- Don't add jqwik or any other property-testing library. Property tests follow section 14.1.
+- Never add Co-Authored-By, Claude-Session or "Generated with Claude Code" lines to commits or PRs.
 - Work one milestone at a time (section 16). A milestone is done only when its acceptance
   criteria pass under ./mvnw verify.
 ```
@@ -1301,7 +1349,7 @@ Use one prompt per step, in Copilot agent mode, and run `./mvnw verify` after ea
 1. *Set up M0 from section 15: parent pom, empty modules, CI workflow and the ArchUnit rules from 5.2. Move the existing merchant into `merchant/` unchanged and run its self-test in the build.*
 2. *Implement section 7.1 and 7.2 in agent-core: the IntentState enum, a transition table, and a table-driven test with one case per row plus illegal transitions.*
 3. *Implement section 7.4 and 9.2 with unit tests: idempotency keys, canonical JSON, snapshot hash and approval tokens.*
-4. *Implement FaultyMerchantModel (section 14, level 2) and the orchestrator step function (7.3, 7.5). Add jqwik properties for I1, I3, I4, I5 and I7.*
+4. *Implement FaultyMerchantModel (section 14, level 2) and the orchestrator step function (7.3, 7.5). Add the seeded property tests (14.1) for I1, I3, I4, I5 and I7.*
 5. *Implement agent-ucp (section 8, Appendix B) with a contract test per row of table 8.1, against the merchant started in-process.*
 6. *Implement agent-persistence (section 10), RecoveryWorker and leases (7.6), with crash-injection tests at each boundary in 7.3.*
 7. *Implement fault-proxy (section 12) and eval-harness (section 13) with scenarios S0 to S9, S11, S13, S14 in scripted mode.*

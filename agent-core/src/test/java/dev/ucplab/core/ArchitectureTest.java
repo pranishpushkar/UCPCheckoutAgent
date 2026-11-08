@@ -13,11 +13,12 @@ class ArchitectureTest {
             .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
             .importPackages("dev.ucplab.core");
 
-    // Covers: section 5.2 (agent-core depends on the JDK only; this also excludes ADK types)
+    // Covers: section 5.2 (agent-core depends on java.* and javax.crypto.* only; this also excludes ADK types)
     @Test
     void architecture_coreImportsOnlyJavaPackages_always() {
         classes()
-                .should().onlyDependOnClassesThat().resideInAnyPackage("java..", "dev.ucplab.core..")
+                .should().onlyDependOnClassesThat()
+                .resideInAnyPackage("java..", "javax.crypto..", "dev.ucplab.core..")
                 // The module has no classes until M1.
                 .allowEmptyShould(true)
                 .check(PRODUCTION_CLASSES);
