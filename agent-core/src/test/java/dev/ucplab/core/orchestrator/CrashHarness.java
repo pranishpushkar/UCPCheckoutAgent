@@ -25,6 +25,8 @@ import dev.ucplab.core.merchant.MerchantStatus;
 import dev.ucplab.core.merchant.PaymentInstrument;
 import dev.ucplab.core.merchant.fake.FaultyMerchantModel;
 import dev.ucplab.core.policy.PolicyConfig;
+import dev.ucplab.core.recovery.RecoveryConfig;
+import dev.ucplab.core.recovery.RecoveryWorker;
 import dev.ucplab.core.policy.PolicyUsage;
 import dev.ucplab.core.policy.RequotePolicy;
 import dev.ucplab.core.policy.RuleBasedPolicyEngine;
@@ -148,35 +150,10 @@ final class CrashHarness {
         throw new AssertionError("intent did not settle in " + MAX_STEPS + " steps: " + intent());
     }
 
-    /** One recovery pass: what a worker does every 5 s (7.6), driven to idle. */
+    /** One recovery pass: what a worker does every 5 s (7.6), driven to idle; the worker sleeps by moving the clock. */
     void recoverOnce(Process p) {
-        List<IntentId> claimed = p.intents().claimRecoverable(p.id(), config.lease(), 100).stream()
-                .map(PurchaseIntent::id).toList();
-        List<IntentId> due = stores.scan().approvalsDue(clock.instant(), 100).stream()
-                .filter(id -> !claimed.contains(id)).toList();
-        for (IntentId id : claimed) {
-            driveRenewing(p, id);
-        }
-        for (IntentId id : due) {
-            driveRenewing(p, id);
-        }
-    }
-
-    /** A claimed intent has its lease renewed before each step; an intent from the scan is claimed by advance. */
-    private void driveRenewing(Process p, IntentId id) {
-        boolean claimed = intent().map(i -> i.leaseOwner().equals(Optional.of(p.id()))).orElse(false);
-        for (int i = 0; i < MAX_STEPS; i++) {
-            if (claimed && !p.intents().renewLease(id, p.id(), config.lease())) {
-                return;
-            }
-            StepResult r = p.orchestrator().advance(id);
-            if (r.idle()) {
-                return;
-            }
-            r.nextAttemptAt().filter(t -> t.isAfter(clock.instant()))
-                    .ifPresent(t -> clock.advance(Duration.between(clock.instant(), t)));
-        }
-        throw new AssertionError("intent did not settle in " + MAX_STEPS + " steps: " + intent());
+        new RecoveryWorker(p.intents(), stores.scan(), p.orchestrator(), clock, clock::advance, Runnable::run,
+                new RecoveryConfig(Duration.ofSeconds(5), config.lease(), 100, MAX_STEPS), p.id()).runOnce();
     }
 
     /** The restart: time passes until the dead worker's lease has lapsed and one worker period has gone by (7.6). */
