@@ -139,6 +139,20 @@ class CheckoutParserTest {
         assertThat(view(bytes(json)).totalMinor()).isEqualTo(5400);
     }
 
+    // Covers: 8.4 (null, decimals and unknown fields are ignored wherever the client does not use them), decision P2
+    @Test
+    void parseCheckout_ignoresNullAndDecimalInUnusedFields() {
+        String json = checkoutJson("\"ready_for_complete\"", "\"USD\"",
+                "[{\"id\":\"li_1\",\"item\":{\"id\":\"item_123\",\"price\":2500,\"weight\":1.25,\"image\":null},"
+                        + "\"quantity\":2,\"discount_rate\":0.5}]",
+                TOTALS, ",\"continue_url\":null,\"loyalty\":{\"points\":12.5,\"tier\":null},\"tags\":[null,1.5]");
+
+        CheckoutView v = view(bytes(json));
+
+        assertThat(v.totalMinor()).isEqualTo(5400);
+        assertThat(v.lines()).containsExactly(new LineView("item_123", 2, 2500));
+    }
+
     // Covers: 8.1 (subtotal and tax are optional in the schema and read as 0; the total is required)
     @Test
     void parseCheckout_readsMissingSubtotalAndTaxAsZero() {
@@ -211,8 +225,8 @@ class CheckoutParserTest {
                         ",\"order\":\"ord_1\"")),
                 Arguments.of("error envelope without messages",
                         "{\"ucp\":{\"version\":\"2026-08-25\",\"status\":\"error\"}}"),
-                Arguments.of("null value (unsupported by CanonicalJson)", checkoutJson("\"incomplete\"", "\"USD\"",
-                        LINES, TOTALS, ",\"continue_url\":null")),
+                Arguments.of("null in a field we use", checkoutJson("\"incomplete\"", "\"USD\"",
+                        "[{\"item\":{\"id\":\"item_123\",\"price\":null},\"quantity\":1}]", TOTALS, "")),
                 Arguments.of("not an object", "[1,2,3]"),
                 Arguments.of("truncated JSON", "{\"id\":\"chk_1\",\"status\":\"incompl"),
                 Arguments.of("not JSON", "<html>502 Bad Gateway</html>"),

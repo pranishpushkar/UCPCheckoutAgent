@@ -1,6 +1,6 @@
 package dev.ucplab.ucp;
 
-import dev.ucplab.core.json.CanonicalJson;
+import dev.ucplab.core.json.LenientJson;
 import dev.ucplab.core.merchant.CheckoutStatus;
 import dev.ucplab.core.merchant.CheckoutView;
 import dev.ucplab.core.merchant.LineView;
@@ -26,10 +26,8 @@ import java.util.Optional;
  * {@code currency}, {@code line_items} (each with {@code item.id}, {@code item.price} and {@code quantity}), and
  * {@code totals} with exactly one {@code total}. Unknown fields are ignored. {@code subtotal} and {@code tax} are
  * optional in the schema; when absent they read as 0. Money is an integer in minor units, never negative here.
- * Fields this client does not use ({@code links}, {@code ucp}, {@code buyer}) are never required.
- *
- * <p>Limit (TODO): the JSON reader is core's {@link CanonicalJson}, which refuses {@code null} and non-integer numbers
- * anywhere in a document, so a merchant that sends either in a field we ignore makes the whole body invalid.
+ * Fields this client does not use ({@code links}, {@code ucp}, {@code buyer}) are never required, and may hold
+ * {@code null} or decimals (the reader is {@link LenientJson}, 8.4); a field it does use must have the right type.
  */
 public final class CheckoutParser {
 
@@ -75,7 +73,7 @@ public final class CheckoutParser {
     public static Parsed parseCheckout(byte[] body) {
         Objects.requireNonNull(body, "body");
         try {
-            Map<String, Object> root = CanonicalJson.readObject(decode(body));
+            Map<String, Object> root = LenientJson.readObject(decode(body));
             if (!root.containsKey("id")) {
                 return rejectedEnvelope(root);
             }
@@ -93,7 +91,7 @@ public final class CheckoutParser {
     public static ErrorBody parseError(byte[] body) {
         Objects.requireNonNull(body, "body");
         try {
-            Map<String, Object> root = CanonicalJson.readObject(decode(body));
+            Map<String, Object> root = LenientJson.readObject(decode(body));
             String code = root.get("code") instanceof String s && !s.isBlank() ? clean(s, 64) : "unknown";
             String content = root.get("content") instanceof String s ? clean(s, MAX_ERROR_CONTENT) : "";
             return new ErrorBody(code, content);

@@ -34,7 +34,7 @@ public final class CanonicalJson {
      */
     public static Object read(String json) {
         Objects.requireNonNull(json, "json");
-        Reader r = new Reader(json);
+        Reader r = new Reader(json, false);
         Object value = r.value();
         r.skipWhitespace();
         if (r.pos != json.length()) {
@@ -52,12 +52,18 @@ public final class CanonicalJson {
         return (Map<String, Object>) map;
     }
 
-    private static final class Reader {
+    /**
+     * The tokenizer behind {@link #read} (strict) and {@link LenientJson} (lenient: {@code null}, decimals and big
+     * integers allowed). Writing and hashing never use it.
+     */
+    static final class Reader {
         private final String s;
+        private final boolean lenient;
         private int pos;
 
-        Reader(String s) {
+        Reader(String s, boolean lenient) {
             this.s = s;
+            this.lenient = lenient;
         }
 
         Object value() {
@@ -72,12 +78,17 @@ public final class CanonicalJson {
                 case '"' -> string();
                 case 't' -> literal("true", Boolean.TRUE);
                 case 'f' -> literal("false", Boolean.FALSE);
-                case 'n' -> throw error("null is not allowed in canonical JSON");
+                case 'n' -> {
+                    if (!lenient) {
+                        throw error("null is not allowed in canonical JSON");
+                    }
+                    yield literal("null", null);
+                }
                 default -> number();
             };
         }
 
-        private Map<String, Object> object() {
+        Map<String, Object> object() {
             pos++;
             TreeMap<String, Object> m = new TreeMap<>();
             skipWhitespace();
@@ -93,9 +104,10 @@ public final class CanonicalJson {
                 String key = string();
                 skipWhitespace();
                 expect(':');
-                if (m.put(key, value()) != null) {
+                if (m.containsKey(key)) {
                     throw error("duplicate key " + key);
                 }
+                m.put(key, value());
                 skipWhitespace();
                 if (peek() == ',') {
                     pos++;
@@ -112,7 +124,7 @@ public final class CanonicalJson {
             skipWhitespace();
             if (peek() == ']') {
                 pos++;
-                return List.copyOf(list);
+                return frozen(list);
             }
             while (true) {
                 list.add(value());
@@ -121,7 +133,7 @@ public final class CanonicalJson {
                     pos++;
                 } else {
                     expect(']');
-                    return List.copyOf(list);
+                    return frozen(list);
                 }
             }
         }
@@ -173,7 +185,7 @@ public final class CanonicalJson {
             }
         }
 
-        private Long number() {
+        private Number number() {
             int start = pos;
             if (peek() == '-') {
                 pos++;
@@ -181,18 +193,53 @@ public final class CanonicalJson {
             while (pos < s.length() && Character.isDigit(s.charAt(pos))) {
                 pos++;
             }
+            boolean integral = true;
             if (pos < s.length() && ".eE".indexOf(s.charAt(pos)) >= 0) {
-                throw error("only integers are allowed");
+                if (!lenient) {
+                    throw error("only integers are allowed");
+                }
+                integral = false;
+                if (s.charAt(pos) == '.') {
+                    pos++;
+                    while (pos < s.length() && Character.isDigit(s.charAt(pos))) {
+                        pos++;
+                    }
+                }
+                if (pos < s.length() && (s.charAt(pos) == 'e' || s.charAt(pos) == 'E')) {
+                    pos++;
+                    if (pos < s.length() && (s.charAt(pos) == '+' || s.charAt(pos) == '-')) {
+                        pos++;
+                    }
+                    while (pos < s.length() && Character.isDigit(s.charAt(pos))) {
+                        pos++;
+                    }
+                }
             }
             String digits = s.substring(start, pos);
             if (digits.isEmpty() || digits.equals("-")) {
                 throw error("unexpected character");
             }
             try {
+                return integral ? parseIntegral(digits) : new java.math.BigDecimal(digits);
+            } catch (NumberFormatException ex) {
+                throw error("bad number");
+            }
+        }
+
+        private Number parseIntegral(String digits) {
+            try {
                 return Long.parseLong(digits);
             } catch (NumberFormatException ex) {
+                if (lenient) {
+                    return new java.math.BigDecimal(digits);
+                }
                 throw error("integer out of range");
             }
+        }
+
+        private static List<Object> frozen(List<Object> list) {
+            // List.copyOf refuses null, which the lenient reader keeps.
+            return java.util.Collections.unmodifiableList(list);
         }
 
         private Boolean literal(String word, Boolean value) {
@@ -220,6 +267,12 @@ public final class CanonicalJson {
         void skipWhitespace() {
             while (pos < s.length() && " \t\n\r".indexOf(s.charAt(pos)) >= 0) {
                 pos++;
+            }
+        }
+
+        void requireEnd() {
+            if (pos != s.length()) {
+                throw error("trailing characters");
             }
         }
 
