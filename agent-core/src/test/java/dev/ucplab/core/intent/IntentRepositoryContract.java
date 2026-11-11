@@ -238,6 +238,86 @@ public abstract class IntentRepositoryContract {
         assertThat(repo.findForSystem(claimed.id()).orElseThrow().cancelPending()).isFalse();
     }
 
+    private List<MerchantAttempt> twoSentAttempts(PurchaseIntent claimed) {
+        MerchantAttempt first = attempt("a1", claimed);
+        MerchantAttempt second = attempt("a2", claimed);
+        repo.recordAttempt(first, claimed.withState(IntentState.QUOTING, clock.instant()), 0, W1);
+        repo.recordAttempt(second, repo.findForSystem(claimed.id()).orElseThrow(), 1, W1);
+        return List.of(first, second);
+    }
+
+    // Covers: 7.6 (settling is a fenced write: it resolves every named attempt and leaves the intent and its version alone)
+    @Test
+    void resolveAttempts_settlesAllAttemptsAndKeepsVersion_whenFencingMatches() {
+        PurchaseIntent claimed = insertAndClaim("i1", ALICE, "d1", W1);
+        List<MerchantAttempt> sent = twoSentAttempts(claimed);
+
+        repo.resolveAttempts(claimed.id(), List.of(sent.get(0).id(), sent.get(1).id()), AttemptStatus.RESPONDED,
+                Optional.empty(), Optional.of("{\"observed\":\"completed\"}"), 2, W1);
+
+        assertThat(repo.attempts(claimed.id())).hasSize(2).allSatisfy(a -> {
+            assertThat(a.status()).isEqualTo(AttemptStatus.RESPONDED);
+            assertThat(a.responseJson()).contains("{\"observed\":\"completed\"}");
+            assertThat(a.respondedAt()).contains(clock.instant());
+        });
+        assertThat(repo.findForSystem(claimed.id()).orElseThrow().version()).isEqualTo(2);
+    }
+
+    // Covers: 7.6 (a worker whose lease was taken cannot settle: LeaseLost, and no attempt changes)
+    @Test
+    void resolveAttempts_throwsLeaseLostAndChangesNothing_whenAnotherWorkerHoldsTheLease() {
+        PurchaseIntent claimed = insertAndClaim("i1", ALICE, "d1", W1);
+        List<MerchantAttempt> sent = twoSentAttempts(claimed);
+        clock.advance(LEASE.plusSeconds(1));
+        assertThat(repo.claim(claimed.id(), W2, LEASE)).isPresent();
+
+        assertThatThrownBy(() -> repo.resolveAttempts(claimed.id(), List.of(sent.get(0).id()), AttemptStatus.RESPONDED,
+                Optional.empty(), Optional.empty(), 2, W1)).isInstanceOf(LeaseLostException.class);
+
+        assertThat(repo.attempts(claimed.id())).extracting(MerchantAttempt::status)
+                .containsOnly(AttemptStatus.SENT);
+    }
+
+    // Covers: 7.6, 7.8 (a stale version cannot settle either)
+    @Test
+    void resolveAttempts_throwsStaleVersionAndChangesNothing_whenVersionIsOld() {
+        PurchaseIntent claimed = insertAndClaim("i1", ALICE, "d1", W1);
+        List<MerchantAttempt> sent = twoSentAttempts(claimed);
+
+        assertThatThrownBy(() -> repo.resolveAttempts(claimed.id(), List.of(sent.get(0).id()), AttemptStatus.RESPONDED,
+                Optional.empty(), Optional.empty(), 1, W1)).isInstanceOf(StaleVersionException.class);
+
+        assertThat(repo.attempts(claimed.id())).extracting(MerchantAttempt::status)
+                .containsOnly(AttemptStatus.SENT);
+    }
+
+    // Covers: 7.6 (all or none: one attempt of another intent or an unknown one refuses the whole call)
+    @Test
+    void resolveAttempts_changesNothing_whenOneAttemptIsForeignOrUnknown() {
+        PurchaseIntent claimed = insertAndClaim("i1", ALICE, "d1", W1);
+        PurchaseIntent other = insertAndClaim("i2", ALICE, "d2", W1);
+        List<MerchantAttempt> sent = twoSentAttempts(claimed);
+        repo.recordAttempt(attempt("b1", other), other.withState(IntentState.QUOTING, clock.instant()), 0, W1);
+
+        assertThatThrownBy(() -> repo.resolveAttempts(claimed.id(), List.of(sent.get(0).id(), new AttemptId("b1")),
+                AttemptStatus.RESPONDED, Optional.empty(), Optional.empty(), 2, W1))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> repo.resolveAttempts(claimed.id(), List.of(sent.get(0).id(), new AttemptId("nope")),
+                AttemptStatus.RESPONDED, Optional.empty(), Optional.empty(), 2, W1))
+                .isInstanceOf(IntentNotFoundException.class);
+
+        assertThat(repo.attempts(claimed.id())).extracting(MerchantAttempt::status)
+                .containsOnly(AttemptStatus.SENT);
+        assertThat(repo.attempts(other.id())).extracting(MerchantAttempt::status).containsOnly(AttemptStatus.SENT);
+    }
+
+    // Covers: 7.6 (an unknown intent is a programming error, not a lost lease)
+    @Test
+    void resolveAttempts_throwsNotFound_forUnknownIntent() {
+        assertThatThrownBy(() -> repo.resolveAttempts(new IntentId("ghost"), List.of(), AttemptStatus.RESPONDED,
+                Optional.empty(), Optional.empty(), 0, W1)).isInstanceOf(IntentNotFoundException.class);
+    }
+
     // Covers: 7.8 (an update for an unknown intent is a programming error, not a stale write)
     @Test
     void update_throwsNotFound_forUnknownIntent() {

@@ -559,7 +559,7 @@ public final class DefaultOrchestrator implements Orchestrator {
             if (view.status() == CheckoutStatus.COMPLETED && view.order().isPresent()) {
                 Move m = move(written, TransitionEvent.MERCHANT_COMPLETED);
                 PurchaseIntent next = m.next().withOrderId(view.order().get().id());
-                settleSiblings(attempt, "completed");
+                settleSiblings(written, attempt, "completed");
                 resolve(attempt, AttemptStatus.RESPONDED, http, summary, next, written.version());
                 transitionEvent(written.id(), m.transition());
                 return moved(written, next);
@@ -571,7 +571,7 @@ public final class DefaultOrchestrator implements Orchestrator {
                         ? TransitionEvent.PRICE_CHANGED
                         : TransitionEvent.CHECKOUT_INCOMPLETE;
                 Move m = requote(written, event);
-                settleSiblings(attempt, "incomplete");
+                settleSiblings(written, attempt, "incomplete");
                 resolve(attempt, AttemptStatus.RESPONDED, http, summary, m.next(), written.version());
                 requoteEvents(written, m);
                 return moved(written, m.next());
@@ -580,7 +580,7 @@ public final class DefaultOrchestrator implements Orchestrator {
                     && (codes.contains(PAYMENT_DECLINED) || codes.contains(PAYMENT_INVALID))) {
                 Move m = move(written, TransitionEvent.PAYMENT_DECLINED);
                 PurchaseIntent next = m.next().withFailureReason(PAYMENT_DECLINED);
-                settleSiblings(attempt, "payment_declined");
+                settleSiblings(written, attempt, "payment_declined");
                 resolve(attempt, AttemptStatus.RESPONDED, http, summary, next, written.version());
                 transitionEvent(written.id(), m.transition());
                 return moved(written, next);
@@ -595,7 +595,7 @@ public final class DefaultOrchestrator implements Orchestrator {
                 Move m = move(written, TransitionEvent.PAYMENT_DECLINED);
                 PurchaseIntent next = m.next().withFailureReason(
                         CANCEL_OWED.contains(code) ? code : COMPLETE_ERROR_PREFIX + code);
-                settleSiblings(attempt, "not_charged");
+                settleSiblings(written, attempt, "not_charged");
                 resolve(attempt, AttemptStatus.RESPONDED, http, summary, next, written.version());
                 transitionEvent(written.id(), m.transition());
                 return moved(written, next);
@@ -689,7 +689,7 @@ public final class DefaultOrchestrator implements Orchestrator {
                 if (view.order().isEmpty()) {
                     yield pastDeadline ? escalate(intent, attempts) : waiting(intent, "completed_without_order");
                 }
-                settle(sameKey, "reconciliation", "completed");
+                settle(intent, sameKey, "reconciliation", "completed");
                 Move m = move(intent, TransitionEvent.OBSERVED_COMPLETED);
                 PurchaseIntent next = m.next().withOrderId(view.order().get().id());
                 intents.update(next, intent.version(), workerId);
@@ -697,7 +697,7 @@ public final class DefaultOrchestrator implements Orchestrator {
                 yield moved(intent, next);
             }
             case CANCELED -> {
-                settle(sameKey, "reconciliation", "canceled");
+                settle(intent, sameKey, "reconciliation", "canceled");
                 Move m = move(intent, TransitionEvent.OBSERVED_CANCELED);
                 PurchaseIntent next = m.next().withFailureReason(CANCELED_BY_MERCHANT);
                 intents.update(next, intent.version(), workerId);
@@ -741,7 +741,7 @@ public final class DefaultOrchestrator implements Orchestrator {
                     // session and charge an unapproved total. Wait out the quiet period first, as for a resend.
                     yield pastDeadline ? escalate(intent, attempts) : waiting(intent, "incomplete_within_quiet_period");
                 }
-                settle(sameKey, "reconciliation", "incomplete");
+                settle(intent, sameKey, "reconciliation", "incomplete");
                 Move m = requote(intent, TransitionEvent.OBSERVED_INCOMPLETE);
                 intents.update(m.next(), intent.version(), workerId);
                 requoteEvents(intent, m);
@@ -774,14 +774,21 @@ public final class DefaultOrchestrator implements Orchestrator {
         return new Step(intent.state(), intent.state(), false, Optional.empty());
     }
 
-    /** Records what was established for attempts whose own response was lost (the 7.4 guard reads it). */
-    private void settle(List<MerchantAttempt> sameKey, String resolvedBy, String observed) {
-        for (MerchantAttempt a : sameKey) {
-            if (a.status() != AttemptStatus.RESPONDED) {
-                intents.resolveAttempt(a.id(), AttemptStatus.RESPONDED, Optional.empty(), Optional.of(
-                        CanonicalJson.write(Map.of("resolved_by", resolvedBy, "observed", observed))));
-            }
+    /**
+     * Records what was established for attempts whose own response was lost (the 7.4 guard reads it). A fenced write
+     * (7.6): a worker whose lease was taken, or whose copy is stale, fails here and settles nothing. The intent is
+     * written by the caller's own fenced write that follows, at the same {@code expectedVersion}.
+     */
+    private void settle(
+            PurchaseIntent intent, List<MerchantAttempt> sameKey, String resolvedBy, String observed) {
+        List<AttemptId> unresolved = sameKey.stream().filter(a -> a.status() != AttemptStatus.RESPONDED)
+                .map(MerchantAttempt::id).toList();
+        if (unresolved.isEmpty()) {
+            return;
         }
+        intents.resolveAttempts(intent.id(), unresolved, AttemptStatus.RESPONDED, Optional.empty(),
+                Optional.of(CanonicalJson.write(Map.of("resolved_by", resolvedBy, "observed", observed))),
+                intent.version(), workerId);
     }
 
     /**
@@ -789,8 +796,8 @@ public final class DefaultOrchestrator implements Orchestrator {
      * also settles the earlier attempts under that key; a late arrival of any of them replays the same result.
      * Written before the fenced outcome write, so a crash in between cannot leave them unresolved (7.4 guard).
      */
-    private void settleSiblings(MerchantAttempt answered, String observed) {
-        settle(completesUnder(intents.attempts(answered.intentId()), answered.revision()).stream()
+    private void settleSiblings(PurchaseIntent written, MerchantAttempt answered, String observed) {
+        settle(written, completesUnder(intents.attempts(answered.intentId()), answered.revision()).stream()
                 .filter(a -> !a.id().equals(answered.id())).toList(), "same_key_answer", observed);
     }
 

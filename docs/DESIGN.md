@@ -1317,9 +1317,9 @@ public interface IntentRepository {
   void resolveAttempt(AttemptId id, AttemptStatus status, Optional<Integer> httpStatus, Optional<String> responseJson);
   /** QUOTING, APPROVED, COMPLETING and RECONCILING intents, and any intent with cancel_pending set, whose lease is empty or expired (7.6). */
   List<PurchaseIntent> claimRecoverable(String owner, Duration lease, int limit);
-  /** Settles attempts under the same fencing as update (7.6): version and lease owner. */
-  void resolveAttempts(List<AttemptId> ids, AttemptStatus status, Optional<Integer> httpStatus, Optional<String> responseJson,
-      PurchaseIntent intent, long expectedVersion, String leaseOwner);
+  /** Settles attempts under the same fencing as update (7.6): lease owner, then version. Writes only the attempts; the intent's version is unchanged. All or none. */
+  void resolveAttempts(IntentId intentId, List<AttemptId> ids, AttemptStatus status, Optional<Integer> httpStatus,
+      Optional<String> responseJson, long expectedVersion, String leaseOwner);
   boolean renewLease(IntentId id, String owner, Duration lease); // false = lease lost (7.6)
 }
 

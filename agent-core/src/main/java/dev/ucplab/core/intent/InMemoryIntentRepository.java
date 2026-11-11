@@ -189,6 +189,37 @@ public final class InMemoryIntentRepository implements IntentRepository {
     }
 
     @Override
+    public void resolveAttempts(
+            IntentId intentId, List<AttemptId> ids, AttemptStatus status, Optional<Integer> httpStatus,
+            Optional<String> responseJson, long expectedVersion, String leaseOwner) {
+        Objects.requireNonNull(intentId, "intentId");
+        Objects.requireNonNull(ids, "ids");
+        Objects.requireNonNull(status, "status");
+        Objects.requireNonNull(httpStatus, "httpStatus");
+        Objects.requireNonNull(responseJson, "responseJson");
+        lock.lock();
+        try {
+            // Every check comes before the first write, so a failure leaves nothing behind (7.6).
+            fenced(intentId, expectedVersion, leaseOwner);
+            for (AttemptId id : ids) {
+                MerchantAttempt attempt = attempts.get(id);
+                if (attempt == null) {
+                    throw new IntentNotFoundException("no such attempt: " + id);
+                }
+                if (!attempt.intentId().equals(intentId)) {
+                    throw new IllegalArgumentException("attempt " + id + " belongs to another intent");
+                }
+            }
+            Instant now = clock.instant();
+            for (AttemptId id : ids) {
+                attempts.put(id, attempts.get(id).resolved(status, httpStatus, responseJson, now));
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
     public Optional<PurchaseIntent> claim(IntentId id, String owner, Duration lease) {
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(owner, "owner");

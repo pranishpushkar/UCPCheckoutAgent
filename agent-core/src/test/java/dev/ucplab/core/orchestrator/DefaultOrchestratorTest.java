@@ -618,6 +618,57 @@ class DefaultOrchestratorTest {
         assertThat(a.orchestrator().advance(id).idle()).isTrue();
     }
 
+    // Covers: 7.6 fencing, S15, I1 (a paused worker whose lease was taken cannot settle attempts after its read:
+    // the settle is a fenced write, so the attempt stays UNCERTAIN for the worker that holds the lease)
+    @Test
+    void reconcile_leavesAttemptsUnsettled_whenLeaseIsTakenDuringRead() {
+        InterceptingGateway gateway = new InterceptingGateway(lab.merchant);
+        Lab.Worker a = lab.worker("worker-a", gateway);
+        Lab.Worker b = lab.worker("worker-b");
+        IntentId id = lab.propose(a, TWO_SHIRTS).intentId();
+        lab.decide(a, id, true);
+        lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 1, new Fault.CommitThenDrop()));
+        assertThat(a.orchestrator().advance(id).after()).isEqualTo(RECONCILING);
+        gateway.duringNext(MerchantCall.GET, () -> {
+            lab.clock.advance(lab.config.lease().plusSeconds(1));
+            assertThat(lab.intents.claim(id, "worker-b", lab.config.lease())).isPresent();
+        });
+
+        assertThatThrownBy(() -> a.orchestrator().advance(id)).isInstanceOf(LeaseLostException.class);
+
+        assertThat(attempts(id, AttemptOp.COMPLETE)).singleElement()
+                .satisfies(x -> assertThat(x.status()).isEqualTo(AttemptStatus.UNCERTAIN));
+        assertThat(lab.drive(b, id)).isEqualTo(COMPLETED);
+        assertThat(attempts(id, AttemptOp.COMPLETE)).singleElement()
+                .satisfies(x -> assertThat(x.status()).isEqualTo(AttemptStatus.RESPONDED));
+        assertThat(lab.merchant.orders()).hasSize(1);
+    }
+
+    // Covers: 7.6 fencing, S15, 7.4 (the same for the earlier attempts under a key that a resend's answer settles)
+    @Test
+    void resend_leavesEarlierAttemptsUnsettled_whenLeaseIsTakenDuringCall() {
+        InterceptingGateway gateway = new InterceptingGateway(lab.merchant);
+        Lab.Worker a = lab.worker("worker-a", gateway);
+        Lab.Worker b = lab.worker("worker-b");
+        IntentId id = lab.propose(a, TWO_SHIRTS).intentId();
+        lab.decide(a, id, true);
+        lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 1, new Fault.NotSent()));
+        assertThat(a.orchestrator().advance(id).after()).isEqualTo(RECONCILING);
+        lab.clock.advance(lab.config.resendQuietPeriod());
+        assertThat(a.orchestrator().advance(id).after()).isEqualTo(COMPLETING);
+        gateway.duringNext(MerchantCall.COMPLETE, () -> {
+            lab.clock.advance(lab.config.lease().plusSeconds(1));
+            assertThat(lab.intents.claim(id, "worker-b", lab.config.lease())).isPresent();
+        });
+
+        assertThatThrownBy(() -> a.orchestrator().advance(id)).isInstanceOf(LeaseLostException.class);
+
+        assertThat(attempts(id, AttemptOp.COMPLETE)).hasSize(2);
+        assertThat(attempts(id, AttemptOp.COMPLETE).get(0).status()).isEqualTo(AttemptStatus.UNCERTAIN);
+        assertThat(lab.drive(b, id)).isEqualTo(COMPLETED);
+        assertThat(lab.merchant.orders()).hasSize(1);
+    }
+
     // Covers: 7.5 "Who waits" (advance never sleeps; it returns when to poll, backed off from uncertain_since,
     // within jitter, never past the deadline; an approved resend is due now; idle steps carry no time)
     @Test

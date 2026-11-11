@@ -63,6 +63,21 @@ public interface IntentRepository {
             PurchaseIntent intent, long expectedVersion, String leaseOwner);
 
     /**
+     * Settles several attempts of one intent at once, under the same fencing as {@link #update} (7.6): the stored lease
+     * owner must be {@code leaseOwner}, then the stored version must be {@code expectedVersion}. It writes only the
+     * attempts: the intent and its version are unchanged, so the caller's own fenced write that follows still carries
+     * {@code expectedVersion}. All or none: when it throws, no attempt has changed.
+     *
+     * @throws LeaseLostException the stored lease owner differs
+     * @throws StaleVersionException the stored version differs
+     * @throws IntentNotFoundException the intent or one of the attempts does not exist
+     * @throws IllegalArgumentException an attempt belongs to another intent
+     */
+    void resolveAttempts(
+            IntentId intentId, List<AttemptId> ids, AttemptStatus status, Optional<Integer> httpStatus,
+            Optional<String> responseJson, long expectedVersion, String leaseOwner);
+
+    /**
      * Takes or renews the lease on one intent when it is free, expired or already held by {@code owner}, setting it
      * to now + {@code lease} (7.6). Empty when another worker holds a live lease or the intent does not exist.
      */
