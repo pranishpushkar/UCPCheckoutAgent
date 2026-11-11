@@ -116,6 +116,7 @@ public final class DefaultOrchestrator implements Orchestrator {
     static final String OUTCOME_UNKNOWN = "outcome_unknown";
     static final String POLICY_PREFIX = "policy_";
     static final String MERCHANT_ERROR_PREFIX = "merchant_error_";
+    static final String COMPLETE_ERROR_PREFIX = "complete_error:";
 
     /** failure_reason values whose table 7.2 row includes a session cancel. */
     private static final Set<String> CANCEL_OWED = Set.of(OUT_OF_STOCK, ITEM_UNAVAILABLE, QUANTITY_ADJUSTED,
@@ -573,6 +574,21 @@ public final class DefaultOrchestrator implements Orchestrator {
                 transitionEvent(written.id(), m.transition());
                 return moved(written, next);
             }
+            // 7.2: the merchant answered, did not complete, is not charging, and gave an error: not charged. A
+            // complete_in_progress answer is excluded (a charge may be running), and so is a bare Ok with no error.
+            Optional<MerchantMessage> error = view.messages().stream()
+                    .filter(m -> m.type().equals("error")).findFirst();
+            if (error.isPresent() && view.status() != CheckoutStatus.COMPLETED
+                    && view.status() != CheckoutStatus.COMPLETE_IN_PROGRESS) {
+                String code = error.get().code();
+                Move m = move(written, TransitionEvent.PAYMENT_DECLINED);
+                PurchaseIntent next = m.next().withFailureReason(
+                        CANCEL_OWED.contains(code) ? code : COMPLETE_ERROR_PREFIX + code);
+                settleSiblings(attempt, "not_charged");
+                resolve(attempt, AttemptStatus.RESPONDED, http, summary, next, written.version());
+                transitionEvent(written.id(), m.transition());
+                return moved(written, next);
+            }
             // Any other answer does not establish the outcome (8.1: when in doubt, Uncertain).
             return toReconciling(written, attempt, http, summary);
         }
@@ -787,7 +803,8 @@ public final class DefaultOrchestrator implements Orchestrator {
 
     private Step cancelIfOwed(PurchaseIntent intent, List<MerchantAttempt> attempts) {
         String reason = intent.failureReason().orElse("");
-        boolean owed = CANCEL_OWED.contains(reason) || reason.startsWith(POLICY_PREFIX);
+        boolean owed = CANCEL_OWED.contains(reason) || reason.startsWith(POLICY_PREFIX)
+                || reason.startsWith(COMPLETE_ERROR_PREFIX);
         if (!owed || intent.sessionId().isEmpty() || attempts.stream().anyMatch(a -> a.op() == AttemptOp.CANCEL)) {
             return idle(intent);
         }

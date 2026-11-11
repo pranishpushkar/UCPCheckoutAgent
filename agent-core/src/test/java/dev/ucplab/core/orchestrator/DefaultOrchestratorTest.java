@@ -356,6 +356,66 @@ class DefaultOrchestratorTest {
         });
     }
 
+    private IntentId approvedWith(Lab.Worker worker) {
+        IntentId id = worker.orchestrator().propose(lab.alice(), Lab.SHOP, TWO_SHIRTS, "buy").intentId();
+        assertThat(lab.decide(worker, id, true)).isInstanceOf(ApprovalDecision.Approved.class);
+        return id;
+    }
+
+    // Covers: 7.2, I1 (complete answered Ok with a status that is neither completed nor complete_in_progress and an
+    // error message is the merchant saying "not charged": FAILED_NOT_CHARGED, session cancelled, failure_reason is
+    // the error code; no reconciliation, no resend)
+    @Test
+    void complete_endsFailedNotCharged_onOkWithErrorMessageAndNoTerminalStatus() {
+        Lab.Worker answering = lab.worker("worker-ans", new CompleteAnswerGateway(lab.merchant,
+                CheckoutStatus.READY_FOR_COMPLETE, List.of(CompleteAnswerGateway.error("out_of_stock"))));
+        IntentId id = approvedWith(answering);
+
+        assertThat(lab.drive(answering, id)).isEqualTo(FAILED_NOT_CHARGED);
+
+        assertThat(lab.intent(id).failureReason()).contains("out_of_stock");
+        assertThat(attempts(id, AttemptOp.COMPLETE)).singleElement()
+                .satisfies(a -> assertThat(a.status()).isEqualTo(AttemptStatus.RESPONDED));
+        assertThat(lab.merchant.session(lab.intent(id).sessionId().orElseThrow()).orElseThrow().status())
+                .isEqualTo(CheckoutStatus.CANCELED);
+        assertThat(lab.merchant.orders()).isEmpty();
+    }
+
+    // Covers: 7.2 (any error code counts; an unknown one is kept as complete_error:<code> and still cancels the session)
+    @Test
+    void complete_endsFailedNotCharged_forAnyErrorCode_andCancels() {
+        Lab.Worker answering = lab.worker("worker-ans", new CompleteAnswerGateway(lab.merchant,
+                CheckoutStatus.CANCELED, List.of(CompleteAnswerGateway.error("checkout_canceled"))));
+        IntentId id = approvedWith(answering);
+
+        assertThat(lab.drive(answering, id)).isEqualTo(FAILED_NOT_CHARGED);
+
+        assertThat(lab.intent(id).failureReason()).contains("complete_error:checkout_canceled");
+        assertThat(attempts(id, AttemptOp.CANCEL)).hasSize(1);
+    }
+
+    // Covers: 7.2 (Ok with only a warning and no terminal status does not settle anything: RECONCILING)
+    @Test
+    void complete_goesToReconciling_onOkWithoutErrorMessage() {
+        Lab.Worker answering = lab.worker("worker-ans", new CompleteAnswerGateway(lab.merchant,
+                CheckoutStatus.READY_FOR_COMPLETE, List.of(CompleteAnswerGateway.warning("quantity_adjusted"))));
+        IntentId id = approvedWith(answering);
+
+        assertThat(answering.orchestrator().advance(id).after()).isEqualTo(RECONCILING);
+        assertThat(attempts(id, AttemptOp.COMPLETE)).singleElement()
+                .satisfies(a -> assertThat(a.status()).isEqualTo(AttemptStatus.UNCERTAIN));
+    }
+
+    // Covers: 7.2 (complete_in_progress always reconciles, whatever its messages: a charge may be running)
+    @Test
+    void complete_goesToReconciling_whenStatusIsCompleteInProgress_evenWithAnErrorMessage() {
+        Lab.Worker answering = lab.worker("worker-ans", new CompleteAnswerGateway(lab.merchant,
+                CheckoutStatus.COMPLETE_IN_PROGRESS, List.of(CompleteAnswerGateway.error("complete_in_progress"))));
+        IntentId id = approvedWith(answering);
+
+        assertThat(answering.orchestrator().advance(id).after()).isEqualTo(RECONCILING);
+    }
+
     // Covers: 7.2 (defensive QUOTING row: an update shows the session completed -> RECONCILING), I1, I2 (the order is
     // recorded through reconciliation, nothing new is sent, and nothing throws)
     @Test
