@@ -464,6 +464,7 @@ One circuit breaker per `host:port`, held in memory and driven by the injected `
 
 - One `UcpHttpGateway` per merchant, bound at construction to its base URL. `discover(MerchantId)` throws `IllegalArgumentException` if the id is not the bound merchant.
 - `discover` retries like `get` (8.2) and is cached per gateway. The profile must show version 2026-08-25 and the capability `dev.ucp.shopping.checkout`. If discovery fails or the check fails, no create is sent to that merchant.
+- The M2 check that the checkout endpoint is on the same host and port as the merchant's base URL is a lab simplification (it also stops a profile from pointing the client at another server): M6a must allow a checkout endpoint on another host of the same merchant, for example one of the endpoints the profile declares.
 
 ## 9. Policy and approval
 
