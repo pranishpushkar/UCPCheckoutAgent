@@ -18,5 +18,20 @@
             <groupId>dev.ucplab</groupId>
             <artifactId>agent-core</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <!-- Database configures connections through org.sqlite.SQLiteConfig (ADR 0002). -->
+        <dependency>
+            <groupId>org.xerial</groupId>
+            <artifactId>sqlite-jdbc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>dev.ucplab</groupId>
+            <artifactId>agent-core</artifactId>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 </project>
