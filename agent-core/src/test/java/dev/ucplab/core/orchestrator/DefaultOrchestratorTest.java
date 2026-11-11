@@ -155,6 +155,52 @@ class DefaultOrchestratorTest {
         assertThat(lab.merchant.orders()).isEmpty();
     }
 
+    // Covers: I2, Q2 (no partial approval: a quote whose quantity the merchant cut, with its quantity_adjusted
+    // warning, ends FAILED_NOT_CHARGED with the session cancelled; no approval is opened and nothing is bought)
+    @Test
+    void propose_failsNotChargedAndCancels_whenMerchantAdjustsTheQuantity() {
+        Lab.Worker adjusting = lab.worker("worker-adj", new QuantityAdjustingGateway(lab.merchant, 1, true, false));
+
+        ProposalResult r = adjusting.orchestrator().propose(lab.alice(), Lab.SHOP, TWO_SHIRTS, "buy");
+
+        assertThat(r.state()).isEqualTo(FAILED_NOT_CHARGED);
+        assertThat(lab.intent(r.intentId()).failureReason()).contains("quantity_adjusted");
+        assertThat(lab.approvals.listForSystem(r.intentId())).isEmpty();
+        assertThat(lab.drive(adjusting, r.intentId())).isEqualTo(FAILED_NOT_CHARGED);
+        assertThat(lab.merchant.session(lab.intent(r.intentId()).sessionId().orElseThrow()).orElseThrow().status())
+                .isEqualTo(CheckoutStatus.CANCELED);
+        assertThat(lab.merchant.orders()).isEmpty();
+    }
+
+    // Covers: I2, I1, Q2 (the same on a re-quote: after a price change the update comes back with a reduced quantity;
+    // no second approval is opened and no order is created at the reduced quantity)
+    @Test
+    void requote_failsNotCharged_whenMerchantAdjustsTheQuantity() {
+        Lab.Worker adjusting = lab.worker("worker-adj", new QuantityAdjustingGateway(lab.merchant, 1, true, true));
+        IntentId id = adjusting.orchestrator().propose(lab.alice(), Lab.SHOP, TWO_SHIRTS, "buy").intentId();
+        assertThat(lab.decide(adjusting, id, true)).isInstanceOf(ApprovalDecision.Approved.class);
+        lab.merchant.setPrice("item_123", 2600);
+
+        assertThat(lab.drive(adjusting, id)).isEqualTo(FAILED_NOT_CHARGED);
+
+        assertThat(lab.intent(id).failureReason()).contains("quantity_adjusted");
+        assertThat(lab.approvals.listForSystem(id)).hasSize(1);
+        assertThat(lab.merchant.orders()).isEmpty();
+    }
+
+    // Covers: I2 (a quote whose lines differ from the proposal is refused even with no warning: the check is on the
+    // lines, not on a message)
+    @Test
+    void propose_failsNotCharged_whenQuoteLinesDifferFromTheProposal() {
+        Lab.Worker adjusting = lab.worker("worker-adj", new QuantityAdjustingGateway(lab.merchant, 1, false, false));
+
+        ProposalResult r = adjusting.orchestrator().propose(lab.alice(), Lab.SHOP, TWO_SHIRTS, "buy");
+
+        assertThat(r.state()).isEqualTo(FAILED_NOT_CHARGED);
+        assertThat(lab.intent(r.intentId()).failureReason()).contains("quote_lines_differ");
+        assertThat(lab.approvals.listForSystem(r.intentId())).isEmpty();
+    }
+
     // Covers: FR3, 7.2 (AWAITING_APPROVAL expired -> REJECTED, then cancel session)
     @Test
     void advance_expiresApprovalAfterTtl_andCancelsSession() {

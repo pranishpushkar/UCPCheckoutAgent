@@ -107,6 +107,8 @@ public final class DefaultOrchestrator implements Orchestrator {
     static final String PAYMENT_INVALID = "payment_invalid";
     static final String QUOTE_RETRIES_EXHAUSTED = "quote_retries_exhausted";
     static final String CREATE_REJECTED_REASON = "create_rejected";
+    static final String QUANTITY_ADJUSTED = "quantity_adjusted";
+    static final String QUOTE_LINES_DIFFER = "quote_lines_differ";
     static final String APPROVAL_EXPIRED = "approval_expired";
     static final String CANCELED_BY_MERCHANT = "canceled_by_merchant";
     static final String OUTCOME_UNKNOWN = "outcome_unknown";
@@ -114,7 +116,8 @@ public final class DefaultOrchestrator implements Orchestrator {
     static final String MERCHANT_ERROR_PREFIX = "merchant_error_";
 
     /** failure_reason values whose table 7.2 row includes a session cancel. */
-    private static final Set<String> CANCEL_OWED = Set.of(OUT_OF_STOCK, ITEM_UNAVAILABLE, PAYMENT_DECLINED,
+    private static final Set<String> CANCEL_OWED = Set.of(OUT_OF_STOCK, ITEM_UNAVAILABLE, QUANTITY_ADJUSTED,
+            QUOTE_LINES_DIFFER, PAYMENT_DECLINED,
             RequotePolicy.PRICE_UNSTABLE, DefaultApprovalService.APPROVAL_REJECTED, APPROVAL_EXPIRED);
 
     private static final int MAX_RATIONALE = 300;
@@ -371,6 +374,14 @@ public final class DefaultOrchestrator implements Orchestrator {
                 if (codes.contains(ITEM_UNAVAILABLE)) {
                     yield finish(base, attempt, AttemptStatus.RESPONDED, http, summary,
                             move(base, TransitionEvent.ITEM_UNAVAILABLE), ITEM_UNAVAILABLE);
+                }
+                if (!sameBasket(base, view)) {
+                    // I2, Q2: no partial approval. A quote that is not the basket the user proposed (the merchant cut
+                    // a quantity, with or without a quantity_adjusted warning) is refused; re-propose instead.
+                    // Uses the QUOTING out_of_stock row (FAILED_NOT_CHARGED, cancel the session).
+                    yield finish(base, attempt, AttemptStatus.RESPONDED, http, summary,
+                            move(base, TransitionEvent.OUT_OF_STOCK),
+                            codes.contains(QUANTITY_ADJUSTED) ? QUANTITY_ADJUSTED : QUOTE_LINES_DIFFER);
                 }
                 if (view.status() == CheckoutStatus.READY_FOR_COMPLETE) {
                     yield quoteReady(base, attempt, http, summary, view);
@@ -849,6 +860,15 @@ public final class DefaultOrchestrator implements Orchestrator {
 
     private static Set<String> codes(CheckoutView view) {
         return view.messages().stream().map(MerchantMessage::code).collect(Collectors.toSet());
+    }
+
+    /** Whether the quote has exactly the items and quantities of the proposal (summed per item, order ignored). */
+    private static boolean sameBasket(PurchaseIntent intent, CheckoutView view) {
+        Map<String, Integer> proposed = new java.util.HashMap<>();
+        intent.lines().forEach(l -> proposed.merge(l.itemId(), l.quantity(), Integer::sum));
+        Map<String, Integer> quoted = new java.util.HashMap<>();
+        view.lines().forEach(l -> quoted.merge(l.itemId(), l.quantity(), Integer::sum));
+        return proposed.equals(quoted);
     }
 
     private static String rejectedReason(CallOutcome.Rejected<CheckoutView> r) {
