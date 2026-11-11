@@ -57,26 +57,64 @@ public final class RetryExecutor {
         this.ids = Objects.requireNonNull(ids, "ids");
     }
 
+    /** The result of {@link #fetch}: the reply of a 200 or 201, or the final failure outcome. */
+    public sealed interface Fetched {
+
+        record Body(HttpReply reply) implements Fetched {}
+
+        record Failed(CallOutcome<CheckoutView> outcome) implements Fetched {}
+    }
+
+    private sealed interface Attempt {
+
+        record Result(CallOutcome<CheckoutView> outcome) implements Attempt {}
+
+        record Replied(HttpReply reply) implements Attempt {}
+    }
+
+    /** Sends a call whose 200 or 201 body is a checkout, and applies the matrix of 8.2. */
     public CallOutcome<CheckoutView> execute(ApiCall call) {
         Objects.requireNonNull(call, "call");
+        return ((Attempt.Result) loop(call, false)).outcome();
+    }
+
+    /**
+     * Sends a call whose 200 or 201 body is not a checkout (the discovery profile) with the same retry rules, and
+     * returns that reply as it came; any other result is classified as in {@link #execute}.
+     */
+    public Fetched fetch(ApiCall call) {
+        Objects.requireNonNull(call, "call");
+        return switch (loop(call, true)) {
+            case Attempt.Replied r -> new Fetched.Body(r.reply());
+            case Attempt.Result r -> new Fetched.Failed(r.outcome());
+        };
+    }
+
+    private Attempt loop(ApiCall call, boolean raw) {
         int maxAttempts = config.maxRetries() + 1;
         for (int attempt = 1;; attempt++) {
             if (!call.bypassGate() && !gate.tryAcquire()) {
-                return FailureClassifier.circuitOpen(call.hostPort());
+                return new Attempt.Result(FailureClassifier.circuitOpen(call.hostPort()));
             }
-            CallOutcome<CheckoutView> outcome = once(call);
+            Attempt result = once(call, raw);
             if (!call.bypassGate()) {
-                gate.record(outcome);
+                switch (result) {
+                    case Attempt.Result r -> gate.record(r.outcome());
+                    case Attempt.Replied r -> gate.recordReplied();
+                }
             }
-            Optional<Duration> wait = attempt >= maxAttempts ? Optional.empty() : retryDelay(call.op(), outcome, attempt);
+            if (!(result instanceof Attempt.Result r)) {
+                return result;
+            }
+            Optional<Duration> wait = attempt >= maxAttempts ? Optional.empty() : retryDelay(call.op(), r.outcome(), attempt);
             if (wait.isEmpty()) {
-                return outcome;
+                return result;
             }
             try {
                 sleeper.sleep(wait.get());
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                return outcome;
+                return result;
             }
         }
     }
@@ -109,13 +147,17 @@ public final class RetryExecutor {
         return Duration.ofMillis(random.nextLong(ceiling + 1));
     }
 
-    private CallOutcome<CheckoutView> once(ApiCall call) {
+    private Attempt once(ApiCall call, boolean raw) {
         HttpCall http = new HttpCall(call.method(), call.uri(), headers(call), call.body(),
                 call.op() == AttemptOp.COMPLETE ? config.completeTimeout() : config.requestTimeout());
         try {
-            return classifier.classify(call.op(), transport.send(http));
+            HttpReply reply = transport.send(http);
+            if (raw && (reply.status() == 200 || reply.status() == 201)) {
+                return new Attempt.Replied(reply);
+            }
+            return new Attempt.Result(classifier.classify(call.op(), reply));
         } catch (IOException | RuntimeException e) {
-            return classifier.classify(call.op(), e);
+            return new Attempt.Result(classifier.classify(call.op(), e));
         }
     }
 

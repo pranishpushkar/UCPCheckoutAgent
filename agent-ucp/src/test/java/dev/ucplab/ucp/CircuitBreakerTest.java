@@ -8,10 +8,7 @@ import dev.ucplab.core.merchant.CallOutcome;
 import dev.ucplab.core.merchant.CheckoutView;
 import java.net.ConnectException;
 import java.net.URI;
-import java.time.Clock;
 import java.time.Duration;
-import java.time.Instant;
-import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
 import java.util.SplittableRandom;
@@ -19,30 +16,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 class CircuitBreakerTest {
-
-    /** A clock the test moves by hand. */
-    private static final class TestClock extends Clock {
-        private Instant now = Instant.parse("2026-11-12T10:00:00Z");
-
-        void advance(Duration d) {
-            now = now.plus(d);
-        }
-
-        @Override
-        public ZoneId getZone() {
-            return ZoneId.of("UTC");
-        }
-
-        @Override
-        public Clock withZone(ZoneId zone) {
-            return this;
-        }
-
-        @Override
-        public Instant instant() {
-            return now;
-        }
-    }
 
     private static final UcpConfig CONFIG = UcpConfig.defaults("profile=\"https://agent.example/.well-known/ucp\"");
     private static final CallOutcome<CheckoutView> NOT_SENT = new CallOutcome.NotSent<>("refused");

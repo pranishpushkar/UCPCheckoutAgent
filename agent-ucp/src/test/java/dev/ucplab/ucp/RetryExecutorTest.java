@@ -373,6 +373,11 @@ class RetryExecutorTest {
         public void record(CallOutcome<?> outcome) {
             recorded.add(outcome);
         }
+
+        @Override
+        public void recordReplied() {
+            // not used by these tests
+        }
     }
 
     // Covers: 8.3, decision I (a gate that refuses gives NotSent at once: nothing is sent, nothing is retried or slept)

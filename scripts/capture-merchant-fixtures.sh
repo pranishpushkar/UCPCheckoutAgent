@@ -23,6 +23,8 @@ PAY_OK='{"payment":{"instruments":[{"id":"pi_1","handler_id":"mock_pay_1","type"
 PAY_NO='{"payment":{"instruments":[{"id":"pi_1","handler_id":"mock_pay_1","type":"mock_card","credential":{"type":"MOCK","token":"tok_decline"}}]}}'
 EMAIL='"buyer":{"email":"a@example.com"}'
 lab reset '{}'
+# Discovery: the merchant derives its endpoint from the Host header, so the random port is rewritten to a fixed one.
+curl -s "${H[@]}" "$B/.well-known/ucp" | sed "s/127.0.0.1:$PORT/127.0.0.1:8081/g" > "$OUT/discovery.json"
 post create_ready /checkout-sessions k1 "{$EMAIL,\"line_items\":[{\"item\":{\"id\":\"item_123\"},\"quantity\":2}]}"
 post create_incomplete_no_buyer /checkout-sessions k2 '{"line_items":[{"item":{"id":"item_456"},"quantity":1}]}'
 post create_partial_unavailable /checkout-sessions k3 "{$EMAIL,\"line_items\":[{\"item\":{\"id\":\"item_123\"},\"quantity\":1},{\"item\":{\"id\":\"no_such_item\"},\"quantity\":1}]}"

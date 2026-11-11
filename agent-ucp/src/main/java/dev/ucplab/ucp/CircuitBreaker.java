@@ -68,7 +68,15 @@ public final class CircuitBreaker implements Gate {
     @Override
     public void record(CallOutcome<?> outcome) {
         Objects.requireNonNull(outcome, "outcome");
-        boolean failure = isFailure(outcome);
+        record(isFailure(outcome));
+    }
+
+    @Override
+    public void recordReplied() {
+        record(false);
+    }
+
+    private void record(boolean failure) {
         lock.lock();
         try {
             switch (state) {

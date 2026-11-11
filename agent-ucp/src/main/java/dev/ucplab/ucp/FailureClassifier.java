@@ -70,6 +70,17 @@ public final class FailureClassifier {
         if (status == 200 || status == 201) {
             return fromBody(op, reply);
         }
+        return classifyError(op, reply);
+    }
+
+    /**
+     * Classifies a reply whose status is not 200 or 201 (8.1, 8.2, decisions C and D). Used by the gateway for a body
+     * that is not a checkout, such as the discovery profile, where the caller reads a 200 itself.
+     */
+    public CallOutcome<CheckoutView> classifyError(AttemptOp op, HttpReply reply) {
+        Objects.requireNonNull(op, "op");
+        Objects.requireNonNull(reply, "reply");
+        int status = reply.status();
         if (status == 400 || status == 401 || status == 403 || status == 404 || status == 409 || status == 422) {
             return protocolError(reply, Optional.empty());
         }

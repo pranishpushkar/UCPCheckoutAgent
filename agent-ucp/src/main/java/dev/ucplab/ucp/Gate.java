@@ -19,6 +19,11 @@ public interface Gate {
         public void record(CallOutcome<?> outcome) {
             // nothing to record
         }
+
+        @Override
+        public void recordReplied() {
+            // nothing to record
+        }
     };
 
     /** Whether this attempt may be sent. False means the call is rejected without sending (NotSent). */
@@ -26,4 +31,7 @@ public interface Gate {
 
     /** The outcome of an attempt that {@link #tryAcquire} admitted. */
     void record(CallOutcome<?> outcome);
+
+    /** An admitted attempt got a usable reply whose body is not a checkout (a discovery profile): the host is alive. */
+    void recordReplied();
 }
