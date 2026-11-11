@@ -106,6 +106,7 @@ public final class DefaultOrchestrator implements Orchestrator {
     static final String PAYMENT_DECLINED = "payment_declined";
     static final String PAYMENT_INVALID = "payment_invalid";
     static final String QUOTE_RETRIES_EXHAUSTED = "quote_retries_exhausted";
+    static final String CREATE_REJECTED_REASON = "create_rejected";
     static final String APPROVAL_EXPIRED = "approval_expired";
     static final String CANCELED_BY_MERCHANT = "canceled_by_merchant";
     static final String OUTCOME_UNKNOWN = "outcome_unknown";
@@ -381,6 +382,13 @@ public final class DefaultOrchestrator implements Orchestrator {
                 yield retryOrExhaust(base, attempt, AttemptStatus.RESPONDED, http, summary, TransitionEvent.UNCERTAIN,
                         attemptsUnderKey);
             }
+            case CallOutcome.Rejected<CheckoutView> r when create -> finish(written, attempt, AttemptStatus.RESPONDED,
+                    Optional.of(r.httpStatus()), Optional.of(describe(r)), move(written, TransitionEvent.CREATE_REJECTED),
+                    rejectedReason(r));
+            // Rejected is valid only for create (8.1). On an update it cannot settle anything, so it is retried
+            // like an answer that is neither a quote nor a known failure.
+            case CallOutcome.Rejected<CheckoutView> r -> retryOrExhaust(written, attempt, AttemptStatus.RESPONDED,
+                    Optional.of(r.httpStatus()), Optional.of(describe(r)), TransitionEvent.UNCERTAIN, attemptsUnderKey);
             case CallOutcome.ProtocolError<CheckoutView> e when isRetryable(e) -> retryOrExhaust(written, attempt,
                     AttemptStatus.RESPONDED, Optional.of(e.httpStatus()), Optional.of(describe(e)),
                     TransitionEvent.NOT_SENT, attemptsUnderKey);
@@ -388,7 +396,8 @@ public final class DefaultOrchestrator implements Orchestrator {
                 Optional<Integer> http = Optional.of(e.httpStatus());
                 Optional<String> response = Optional.of(describe(e));
                 if (OUT_OF_STOCK.equals(e.code())) {
-                    // A create with every item unavailable has no session id (A.1, FaultyMerchantModel).
+                    // Kept for a merchant that reports unavailability as a protocol error; the gateway reports a
+                    // create with every item unavailable as Rejected (8.1).
                     yield finish(written, attempt, AttemptStatus.RESPONDED, http, response,
                             move(written, TransitionEvent.OUT_OF_STOCK), OUT_OF_STOCK);
                 }
@@ -839,6 +848,12 @@ public final class DefaultOrchestrator implements Orchestrator {
         return view.messages().stream().map(MerchantMessage::code).collect(Collectors.toSet());
     }
 
+    private static String rejectedReason(CallOutcome.Rejected<CheckoutView> r) {
+        Set<String> codes = r.messages().stream().map(MerchantMessage::code).collect(Collectors.toSet());
+        return codes.contains(OUT_OF_STOCK) ? OUT_OF_STOCK
+                : codes.contains(ITEM_UNAVAILABLE) ? ITEM_UNAVAILABLE : CREATE_REJECTED_REASON;
+    }
+
     private static boolean isRetryable(CallOutcome.ProtocolError<CheckoutView> e) {
         return e.retryAfter().isPresent() || e.httpStatus() == 429 || e.httpStatus() == 503;
     }
@@ -853,6 +868,7 @@ public final class DefaultOrchestrator implements Orchestrator {
             case CallOutcome.NotSent<?> n -> "not_sent";
             case CallOutcome.Uncertain<?> u -> "uncertain";
             case CallOutcome.ProtocolError<?> e -> "protocol_error";
+            case CallOutcome.Rejected<?> r -> "rejected";
         };
     }
 
@@ -867,6 +883,10 @@ public final class DefaultOrchestrator implements Orchestrator {
                 m.put("code", e.code());
             }
             case CallOutcome.Ok<?> ok -> m.put("http_status", ok.httpStatus());
+            case CallOutcome.Rejected<?> r -> {
+                m.put("http_status", r.httpStatus());
+                m.put("codes", r.messages().stream().map(MerchantMessage::code).toList());
+            }
         }
         return CanonicalJson.write(m);
     }

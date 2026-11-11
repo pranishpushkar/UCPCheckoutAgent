@@ -30,6 +30,16 @@ public sealed interface CallOutcome<T> {
         }
     }
 
+    /**
+     * Valid only for create: every line was unavailable, so the merchant answered 200 with {@code ucp.status} error and
+     * no session id (8.1, 7.2 {@code create_rejected}). No session exists, so nothing is resent or cancelled.
+     */
+    record Rejected<T>(int httpStatus, List<MerchantMessage> messages) implements CallOutcome<T> {
+        public Rejected {
+            messages = List.copyOf(Objects.requireNonNull(messages, "messages"));
+        }
+    }
+
     record ProtocolError<T>(int httpStatus, String code, String content, Optional<Duration> retryAfter)
             implements CallOutcome<T> {
         public ProtocolError {

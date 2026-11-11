@@ -52,9 +52,8 @@ import java.util.function.Consumer;
  *       unchanged with no new order.</li>
  *   <li>PUT re-prices at the current catalog price. It is refused with {@code checkout_busy} during
  *       {@code complete_in_progress} and with {@code checkout_not_modifiable} once completed or canceled.</li>
- *   <li>A create whose every item is unavailable has no session id. Per 8.1 (a body missing a required field fails
- *       closed) the client reports it as {@code ProtocolError(200, "out_of_stock")}; the HTTP gateway in M2 must map it
- *       the same way.</li>
+ *   <li>A create whose every item is unavailable has no session id. The client reports it as
+ *       {@code Rejected(200, messages)} (8.1, 7.2 {@code create_rejected}); the HTTP gateway maps it the same way.</li>
  * </ul>
  *
  * <p>Assumptions where Appendix A is silent (the merchant source is not in this repository): unknown items get
@@ -380,8 +379,8 @@ public final class FaultyMerchantModel implements MerchantGateway {
     private CallOutcome<CheckoutView> doCreate(CreateCheckout request) {
         Priced priced = price(request.lines());
         if (priced.availableCount == 0) {
-            return new CallOutcome.ProtocolError<>(200, "out_of_stock",
-                    "every item is unavailable; no checkout was created", Optional.empty());
+            return new CallOutcome.Rejected<>(200, List.of(
+                    message("error", "out_of_stock", "$.line_items", "every item is unavailable; no checkout was created")));
         }
         Session s = new Session(new SessionId("cs_" + ids.next()), priced.lines, request.buyerEmail());
         s.status = readiness(s, priced.messages);

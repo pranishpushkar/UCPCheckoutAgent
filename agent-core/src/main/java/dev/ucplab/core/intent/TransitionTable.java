@@ -51,7 +51,9 @@ public final class TransitionTable {
             row(RECONCILING, TransitionEvent.OBSERVED_READY_FOR_COMPLETE, TransitionGuard.QUIET_PERIOD_NOT_ELAPSED, RECONCILING, SideEffect.POLL_AGAIN),
             // Defensive: a correct orchestrator never reaches this, but it must never throw here.
             row(QUOTING, TransitionEvent.OBSERVED_COMPLETED, TransitionGuard.NONE, RECONCILING, SideEffect.NONE),
-            row(QUOTING, TransitionEvent.OBSERVED_COMPLETE_IN_PROGRESS, TransitionGuard.NONE, RECONCILING, SideEffect.NONE));
+            row(QUOTING, TransitionEvent.OBSERVED_COMPLETE_IN_PROGRESS, TransitionGuard.NONE, RECONCILING, SideEffect.NONE),
+            // A create with every item unavailable has no session: nothing to cancel.
+            row(QUOTING, TransitionEvent.CREATE_REJECTED, TransitionGuard.NONE, FAILED_NOT_CHARGED, SideEffect.NONE));
 
     private TransitionTable() {
     }

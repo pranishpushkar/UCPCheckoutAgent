@@ -10,6 +10,7 @@ public enum TransitionEvent {
     QUOTE_READY,
     ITEM_UNAVAILABLE,
     OUT_OF_STOCK,
+    CREATE_REJECTED,
     NOT_SENT,
     UNCERTAIN,
     RETRIES_EXHAUSTED,

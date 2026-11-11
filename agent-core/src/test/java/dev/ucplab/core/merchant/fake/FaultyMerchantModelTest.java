@@ -132,16 +132,17 @@ class FaultyMerchantModelTest {
         assertThat(merchant.sessionsCreated()).isEqualTo(1);
     }
 
-    // Covers: A.1, 8.1 (every item unavailable: no session id, reported as ProtocolError out_of_stock)
+    // Covers: A.1, 8.1, 7.2 create_rejected (every item unavailable: no session id, reported as Rejected)
     @Test
-    void create_failsClosedWithOutOfStock_whenEveryItemIsUnavailable() {
+    void create_isRejected_whenEveryItemIsUnavailable() {
         CallOutcome<CheckoutView> outcome = merchant.create(new CreateCheckout(
                 List.of(new ProposedLine("item_789", 4), new ProposedLine("nope", 1)), Optional.of("a@example.com")),
                 CREATE_KEY);
 
-        assertThat(outcome).isInstanceOfSatisfying(CallOutcome.ProtocolError.class, e -> {
-            assertThat(e.httpStatus()).isEqualTo(200);
-            assertThat(e.code()).isEqualTo("out_of_stock");
+        assertThat(outcome).isInstanceOfSatisfying(CallOutcome.Rejected.class, r -> {
+            assertThat(r.httpStatus()).isEqualTo(200);
+            assertThat(r.messages()).hasSize(1);
+            assertThat(((MerchantMessage) r.messages().get(0)).code()).isEqualTo("out_of_stock");
         });
         assertThat(merchant.sessionsCreated()).isZero();
     }
