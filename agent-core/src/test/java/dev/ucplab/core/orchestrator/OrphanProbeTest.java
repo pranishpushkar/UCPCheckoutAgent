@@ -15,7 +15,15 @@ import dev.ucplab.core.intent.AttemptStatus;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.MerchantAttempt;
 import dev.ucplab.core.intent.PurchaseIntent;
+import dev.ucplab.core.merchant.CallOutcome;
 import dev.ucplab.core.merchant.CheckoutStatus;
+import dev.ucplab.core.merchant.CheckoutView;
+import dev.ucplab.core.merchant.CreateCheckout;
+import dev.ucplab.core.merchant.MerchantGateway;
+import dev.ucplab.core.merchant.MerchantId;
+import dev.ucplab.core.merchant.MerchantProfile;
+import dev.ucplab.core.merchant.SessionId;
+import dev.ucplab.core.merchant.UpdateCheckout;
 import dev.ucplab.core.merchant.FrozenBody;
 import dev.ucplab.core.merchant.IdempotencyKey;
 import dev.ucplab.core.merchant.MutatingOp;
@@ -193,5 +201,56 @@ class OrphanProbeTest {
         assertThat(lab.intents.findActiveByDedupeKey(DefaultOrchestrator.dedupeKey(ALICE, SHOP, TWO_SHIRTS)).orElseThrow()
                 .state()).isEqualTo(QUOTING);
         assertThat(calls(MerchantCall.CREATE)).isZero();
+    }
+
+    /** Answers every create with Rejected (the merchant holds no session for the key), everything else as the lab does. */
+    private final class RejectingCreate implements MerchantGateway {
+        @Override
+        public MerchantProfile discover(MerchantId merchant) {
+            return lab.merchant.discover(merchant);
+        }
+
+        @Override
+        public CallOutcome<CheckoutView> create(CreateCheckout request, IdempotencyKey key) {
+            return new CallOutcome.Rejected<>(200, List.of());
+        }
+
+        @Override
+        public CallOutcome<CheckoutView> update(SessionId id, UpdateCheckout request, IdempotencyKey key) {
+            return lab.merchant.update(id, request, key);
+        }
+
+        @Override
+        public CallOutcome<CheckoutView> complete(SessionId id, dev.ucplab.core.merchant.FrozenBody body, IdempotencyKey key) {
+            return lab.merchant.complete(id, body, key);
+        }
+
+        @Override
+        public CallOutcome<CheckoutView> cancel(SessionId id, IdempotencyKey key) {
+            return lab.merchant.cancel(id, key);
+        }
+
+        @Override
+        public CallOutcome<CheckoutView> get(SessionId id) {
+            return lab.merchant.get(id);
+        }
+    }
+
+    // Covers: 7.6, 8.1 (a Rejected probe answer means the merchant holds no session for the key: the probe ends at once)
+    @Test
+    void advance_endsProbe_whenProbeAnswerIsRejected() {
+        lab.merchant.addRule(FaultRule.nth(MerchantCall.CREATE, 1, new Fault.CommitThenDrop()));
+        IntentId id = lab.propose(w, TWO_SHIRTS).intentId();
+        lab.clock.advance(lab.config.lease().plusSeconds(1));
+
+        assertThat(lab.drive(lab.worker("worker-b", new RejectingCreate()), id)).isEqualTo(FAILED_NOT_CHARGED);
+
+        assertThat(attempts(id, AttemptOp.CREATE)).extracting(MerchantAttempt::status)
+                .containsExactly(AttemptStatus.UNCERTAIN, AttemptStatus.RESPONDED);
+        assertThat(lab.intent(id).cancelPending()).isFalse();
+        assertThat(lab.intent(id).sessionId()).isEmpty();
+        assertThat(lab.intents.events(id)).anyMatch(e -> e.type().equals("orphan_probe_no_session"))
+                .noneMatch(e -> e.type().equals("orphan_probe_gave_up"));
+        assertThat(attempts(id, AttemptOp.CANCEL)).isEmpty();
     }
 }

@@ -971,7 +971,8 @@ public final class DefaultOrchestrator implements Orchestrator {
      * {@code cancel_pending} set with no session id. One step re-sends that create under its own key, only when the body
      * rebuilt from the intent is byte-identical to the frozen one (else nothing is sent), to learn the session id from the
      * merchant's stored result; the next step cancels it. It never completes: the intent is terminal. At most
-     * {@link #MAX_PROBE_ATTEMPTS} probes; any answer that is not Ok counts, and the last one gives up with an event.
+     * {@link #MAX_PROBE_ATTEMPTS} probes; a Rejected answer ends the probe (no session exists), any other answer that is not Ok
+     * counts, and the last one gives up with an event.
      */
     private Step probeOrphanSession(PurchaseIntent intent, List<MerchantAttempt> attempts) {
         List<MerchantAttempt> creates = attempts.stream()
@@ -1009,13 +1010,18 @@ public final class DefaultOrchestrator implements Orchestrator {
             event(intent.id(), "orphan_session_found", Map.of("probe", probes + 1));
             return new Step(intent.state(), intent.state(), false, Optional.empty());
         }
-        boolean answered = outcome instanceof CallOutcome.Rejected<CheckoutView>
-                || outcome instanceof CallOutcome.ProtocolError<CheckoutView>;
-        Optional<Integer> http = switch (outcome) {
-            case CallOutcome.ProtocolError<CheckoutView> e -> Optional.of(e.httpStatus());
-            case CallOutcome.Rejected<CheckoutView> r -> Optional.of(r.httpStatus());
-            default -> Optional.empty();
-        };
+        if (outcome instanceof CallOutcome.Rejected<CheckoutView> r) {
+            // The merchant answered the create with no session: it holds none for this key, so there is nothing to cancel.
+            PurchaseIntent next = written.withCancelPending(false).withState(written.state(), clock.instant());
+            resolve(attempt, AttemptStatus.RESPONDED, Optional.of(r.httpStatus()), Optional.of(describe(r)), next,
+                    written.version());
+            event(intent.id(), "orphan_probe_no_session", Map.of("probe", probes + 1));
+            return new Step(intent.state(), intent.state(), false, Optional.empty());
+        }
+        boolean answered = outcome instanceof CallOutcome.ProtocolError<CheckoutView>;
+        Optional<Integer> http = outcome instanceof CallOutcome.ProtocolError<CheckoutView> e
+                ? Optional.of(e.httpStatus())
+                : Optional.empty();
         boolean last = probes + 1 >= MAX_PROBE_ATTEMPTS;
         PurchaseIntent next = written.withCancelPending(!last).withState(written.state(), clock.instant());
         resolve(attempt, answered ? AttemptStatus.RESPONDED : AttemptStatus.UNCERTAIN, http,
