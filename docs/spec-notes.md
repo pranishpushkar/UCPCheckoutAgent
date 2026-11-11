@@ -39,7 +39,7 @@ Facts the M2 client relies on, read on 2026-11-12 from the raw sources, not from
 ## Idempotency (signatures page)
 
 - Servers store the key with the result for at least 24 hours (48 recommended).
-- Key entropy: at least 128 bits (for example UUID v4, or 22 or more alphanumeric characters). Our key is `ucp-` plus 26 base32 characters, 130 bits.
+- Key entropy: at least 128 bits (for example UUID v4, or 22 or more alphanumeric characters). The page contradicts itself: a UUID, including its own v4 example, carries 122 variable bits. Our key is a deterministic UUID version 8 from a SHA-256 digest (7.4), which is a UUID as the OpenAPI asks and has 122 input-dependent bits.
 - Uniqueness: per client and per operation type.
 - A duplicate with a matching payload returns the cached response and does not execute again. The payload is compared by the SHA-256 of the raw body bytes.
 - A duplicate with a different payload is rejected with 409.
@@ -66,7 +66,7 @@ Operations in the OpenAPI document, all `POST` and all answering 200: `/catalog/
 | --- | --- | --- |
 | Checkout REST page, two error-envelope examples (create with every item unavailable) | `ucp.version` is `2026-01-11` | An example not updated to the pin. We ignore the version inside error envelopes |
 | Conformance README, example `conformance_input.json` | `ucp_version` is `2026-04-08` | The suite example targets an older version than our pin. Also the version R12 mentions for a real plugin |
-| OpenAPI parameters `Idempotency-Key` and `Request-Id` | `format: uuid` | Our key (`ucp-` plus base32, 7.4) and a generated Request-Id differ in format. The Request-Id is UUID-formatted by decision H. The key keeps the contract in 7.4; entropy meets the spec's minimum |
+| OpenAPI parameters `Idempotency-Key` and `Request-Id` | `format: uuid` | The earlier `ucp-` plus base32 key was not a UUID. 7.4 now derives a UUIDv8 key, and the Request-Id is UUID-formatted (decision H) |
 
 ## Differences between the sources and the design or merchant
 
