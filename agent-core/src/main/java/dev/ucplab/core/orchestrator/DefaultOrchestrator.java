@@ -344,7 +344,7 @@ public final class DefaultOrchestrator implements Orchestrator {
             boolean orphanPossible = create && attempts.stream()
                     .anyMatch(a -> a.op() == AttemptOp.CREATE && a.revision() == 0 && mayHaveCreatedSession(a));
             PurchaseIntent next = m.next().withFailureReason(QUOTE_RETRIES_EXHAUSTED)
-                    .withCancelPending(orphanPossible && intent.sessionId().isEmpty());
+                    .withCancelPending(m.next().cancelPending() || (orphanPossible && intent.sessionId().isEmpty()));
             intents.update(next, intent.version(), workerId);
             transitionEvent(intent.id(), m.transition());
             return moved(intent, next);

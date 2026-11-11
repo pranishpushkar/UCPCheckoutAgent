@@ -275,7 +275,7 @@ Any event that is not in this table for the current state is a programming error
 | QUOTING | quote\_ready | policy allows the quoted items and total | AWAITING\_APPROVAL | create approval and snapshot hash |
 | QUOTING | item\_unavailable or out\_of\_stock | none | FAILED\_NOT\_CHARGED | cancel session, best effort |
 | QUOTING | not\_sent or uncertain | retries left | QUOTING | resend with the same key (safe) |
-| QUOTING | retries exhausted | none | FAILED\_NOT\_CHARGED | no money has moved |
+| QUOTING | retries exhausted | none | FAILED\_NOT\_CHARGED | no money has moved; if the intent has a session id, set cancel\_pending in the same write (best-effort cancel, 7.6); with no session id and a create that may have reached the merchant, the orphan probe applies (7.6 M3 note) |
 | AWAITING\_APPROVAL | approved | token valid, hash matches, unexpired, unconsumed | APPROVED | consume the approval |
 | AWAITING\_APPROVAL | rejected or expired | none | REJECTED | cancel session |
 | APPROVED | send\_complete | attempt row persisted first | COMPLETING | POST complete |

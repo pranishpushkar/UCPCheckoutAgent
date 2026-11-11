@@ -29,7 +29,8 @@ public final class TransitionTable {
             row(QUOTING, TransitionEvent.OUT_OF_STOCK, TransitionGuard.NONE, FAILED_NOT_CHARGED, SideEffect.CANCEL_SESSION_BEST_EFFORT),
             row(QUOTING, TransitionEvent.NOT_SENT, TransitionGuard.RETRIES_LEFT, QUOTING, SideEffect.RESEND_SAME_KEY),
             row(QUOTING, TransitionEvent.UNCERTAIN, TransitionGuard.RETRIES_LEFT, QUOTING, SideEffect.RESEND_SAME_KEY),
-            row(QUOTING, TransitionEvent.RETRIES_EXHAUSTED, TransitionGuard.NONE, FAILED_NOT_CHARGED, SideEffect.NONE),
+            // Cancel when a session id is known (Transition.owesCancel + PurchaseIntent.moved set cancel_pending then).
+            row(QUOTING, TransitionEvent.RETRIES_EXHAUSTED, TransitionGuard.NONE, FAILED_NOT_CHARGED, SideEffect.CANCEL_SESSION_BEST_EFFORT),
             row(AWAITING_APPROVAL, TransitionEvent.APPROVED, TransitionGuard.APPROVAL_VALID, APPROVED, SideEffect.CONSUME_APPROVAL),
             row(AWAITING_APPROVAL, TransitionEvent.REJECTED, TransitionGuard.NONE, IntentState.REJECTED, SideEffect.CANCEL_SESSION),
             row(AWAITING_APPROVAL, TransitionEvent.EXPIRED, TransitionGuard.NONE, IntentState.REJECTED, SideEffect.CANCEL_SESSION),
