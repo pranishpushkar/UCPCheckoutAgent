@@ -48,7 +48,9 @@ class TransitionTableTest {
             row(22, "QUOTING", "OBSERVED_COMPLETED", "NONE", "RECONCILING", "NONE"),
             row(22, "QUOTING", "OBSERVED_COMPLETE_IN_PROGRESS", "NONE", "RECONCILING", "NONE"),
             row(23, "QUOTING", "CREATE_REJECTED", "NONE", "FAILED_NOT_CHARGED", "NONE"),
-            row(24, "COMPLETING", "PROTOCOL_ERROR", "NONE", "RECONCILING", "NONE"));
+            row(24, "COMPLETING", "PROTOCOL_ERROR", "NONE", "RECONCILING", "NONE"),
+            // Added in M3: the approval behind an APPROVED intent is not usable, so nothing is sent (I3).
+            row(25, "APPROVED", "APPROVAL_INVALID", "NONE", "ESCALATED", "ESCALATION_EVENT"));
 
     static Stream<Arguments> expectedRows() {
         return EXPECTED.stream();

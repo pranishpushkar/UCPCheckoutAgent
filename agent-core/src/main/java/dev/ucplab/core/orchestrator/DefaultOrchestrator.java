@@ -118,6 +118,7 @@ public final class DefaultOrchestrator implements Orchestrator {
     static final String APPROVAL_EXPIRED = "approval_expired";
     static final String CANCELED_BY_MERCHANT = "canceled_by_merchant";
     static final String OUTCOME_UNKNOWN = "outcome_unknown";
+    static final String APPROVAL_INVALID = "approval_invalid";
     static final String POLICY_PREFIX = "policy_";
     static final String MERCHANT_ERROR_PREFIX = "merchant_error_";
     static final String COMPLETE_ERROR_PREFIX = "complete_error:";
@@ -524,14 +525,18 @@ public final class DefaultOrchestrator implements Orchestrator {
     // ---------------------------------------------------------------- APPROVED -> COMPLETING
 
     private Step sendComplete(PurchaseIntent intent, List<MerchantAttempt> attempts) {
-        String hash = intent.approvedSnapshotHash()
-                .orElseThrow(() -> new IllegalStateException("I3: APPROVED without a snapshot hash: " + intent.id()));
-        // PENDING is accepted for the case where decide moved the intent and crashed before recording the decision.
-        ApprovalRecord approval = approvals.findLatestForSystem(intent.id())
-                .filter(a -> a.snapshotHash().equals(hash))
+        // I3, checked before the write-ahead so a refusal leaves no attempt behind. PENDING is accepted for the case
+        // where decide moved the intent and crashed before recording the decision.
+        Optional<String> hash = intent.approvedSnapshotHash();
+        Optional<ApprovalRecord> latest = approvals.findLatestForSystem(intent.id());
+        Optional<ApprovalRecord> usable = latest
+                .filter(a -> hash.isPresent() && a.snapshotHash().equals(hash.get()))
                 .filter(a -> Set.of(ApprovalStatus.PENDING, ApprovalStatus.APPROVED, ApprovalStatus.CONSUMED)
-                        .contains(a.status()))
-                .orElseThrow(() -> new IllegalStateException("I3: no approval matches the approved hash: " + intent.id()));
+                        .contains(a.status()));
+        if (usable.isEmpty()) {
+            return escalateInvalidApproval(intent, attempts, latest, hash);
+        }
+        ApprovalRecord approval = usable.get();
         SessionId session = requireSession(intent);
         if (!approval.snapshot().sessionId().equals(session)) {
             throw new IllegalStateException("I3, I4: the approved snapshot is for another session: " + intent.id());
@@ -791,6 +796,28 @@ public final class DefaultOrchestrator implements Orchestrator {
         Move m = move(intent, TransitionEvent.DEADLINE_REACHED);
         PurchaseIntent next = m.next().withFailureReason(OUTCOME_UNKNOWN);
         intents.update(next, intent.version(), workerId);
+        event(intent.id(), "escalated", Map.of("attempts", attempts.stream().map(a -> Map.of(
+                "attempt_id", a.id().value(), "op", a.op().name(), "revision", a.revision(),
+                "status", a.status().name(), "sent_at", a.sentAt().toString())).toList()));
+        transitionEvent(intent.id(), m.transition());
+        return moved(intent, next);
+    }
+
+    /**
+     * I3: the newest approval is missing, decided against, expired, or for another snapshot than the one the intent was
+     * approved with. Nothing is sent and no attempt is written; the intent goes to ESCALATED with a reason, so a human
+     * looks at it instead of the worker retrying forever.
+     */
+    private Step escalateInvalidApproval(
+            PurchaseIntent intent, List<MerchantAttempt> attempts, Optional<ApprovalRecord> latest,
+            Optional<String> approvedHash) {
+        Move m = move(intent, TransitionEvent.APPROVAL_INVALID);
+        PurchaseIntent next = m.next().withFailureReason(APPROVAL_INVALID);
+        intents.update(next, intent.version(), workerId);
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("approval_status", latest.map(a -> a.status().name()).orElse("NONE"));
+        payload.put("hash_matches", latest.isPresent() && approvedHash.equals(latest.map(ApprovalRecord::snapshotHash)));
+        event(intent.id(), "approval_invalid", payload);
         event(intent.id(), "escalated", Map.of("attempts", attempts.stream().map(a -> Map.of(
                 "attempt_id", a.id().value(), "op", a.op().name(), "revision", a.revision(),
                 "status", a.status().name(), "sent_at", a.sentAt().toString())).toList()));

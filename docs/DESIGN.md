@@ -289,6 +289,7 @@ Any event that is not in this table for the current state is a programming error
 | RECONCILING | observed canceled | none | FAILED\_NOT\_CHARGED | none |
 | RECONCILING | observed incomplete | none | QUOTING | re-quote on the same session, requote\_count + 1. Only while requote\_count is below the P8 cap |
 | RECONCILING | deadline reached | none | ESCALATED | event listing all attempts |
+| APPROVED | approval\_invalid | the newest approval is not PENDING, APPROVED or CONSUMED, or its snapshot hash differs from the intent's approved snapshot (I3) | ESCALATED | failure\_reason approval\_invalid; send nothing and write no attempt. Checked before the write-ahead of `complete` |
 | COMPLETING or RECONCILING | price\_changed, checkout incomplete or observed incomplete | requote\_count has reached the P8 cap | REJECTED | failure\_reason price\_unstable, cancel session. Not ESCALATED: no money has moved and the outcome is known |
 | RECONCILING | observed ready\_for\_complete | quiet period (7.5) not yet elapsed | RECONCILING | poll again; do not resend |
 | QUOTING | an update or GET shows the session completed or complete_in_progress | none | RECONCILING | send nothing new; reconciliation records the order. Defensive: a correct orchestrator should never reach this, but it must never throw here |
