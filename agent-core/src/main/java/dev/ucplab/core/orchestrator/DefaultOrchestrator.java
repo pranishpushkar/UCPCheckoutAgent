@@ -456,7 +456,8 @@ public final class DefaultOrchestrator implements Orchestrator {
 
     /**
      * Whether a create attempt may have left a session at the merchant: it is still SENT (a crash), or it is UNCERTAIN
-     * after an answer other than NotSent, which proves the request never left (8.1).
+     * after an answer other than NotSent, so the request may have left. A NotSent answer proves it never did (8.1), and
+     * a RESPONDED attempt was answered, so neither can have left a session the intent does not know.
      */
     private static boolean mayHaveCreatedSession(MerchantAttempt create) {
         return switch (create.status()) {
