@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import dev.ucplab.core.MutableClock;
 import dev.ucplab.core.approval.ApprovalDecision;
+import dev.ucplab.core.approval.ApprovalRepository;
 import dev.ucplab.core.approval.ApprovalSecret;
 import dev.ucplab.core.approval.ApprovalTokens;
 import dev.ucplab.core.approval.DefaultApprovalService;
@@ -94,16 +95,21 @@ final class Lab {
     }
 
     Worker worker(String workerId, MerchantGateway gateway) {
+        return worker(workerId, gateway, approvals);
+    }
+
+    /** A worker whose approval repository is {@code approvalRepository}, for tests that crash its writes. */
+    Worker worker(String workerId, MerchantGateway gateway, ApprovalRepository approvalRepository) {
         PolicyConfig policyConfig = PolicyConfig.defaults();
         RuleBasedPolicyEngine policy = new RuleBasedPolicyEngine(policyConfig,
                 m -> m.equals(SHOP)
                         ? Optional.of(new MerchantEntry(SHOP, URI.create("http://127.0.0.1:8081"), "Shop", MerchantStatus.ACTIVE))
                         : Optional.empty(),
                 NO_USAGE, clock);
-        DefaultApprovalService approvalService = new DefaultApprovalService(intents, approvals,
+        DefaultApprovalService approvalService = new DefaultApprovalService(intents, approvalRepository,
                 new ApprovalTokens(SECRET), clock, ids, workerId, config.lease(), DefaultApprovalService.DEFAULT_TTL,
                 DefaultApprovalService.DEFAULT_MAX_AUTH_AGE);
-        DefaultOrchestrator orchestrator = new DefaultOrchestrator(intents, approvals, approvalService, gateway, policy,
+        DefaultOrchestrator orchestrator = new DefaultOrchestrator(intents, approvalRepository, approvalService, gateway, policy,
                 new RequotePolicy(policyConfig), payment, config, clock, ids, workerId, new SplittableRandom(42));
         return new Worker(workerId, orchestrator, approvalService);
     }

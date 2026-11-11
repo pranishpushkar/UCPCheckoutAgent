@@ -221,6 +221,27 @@ class DefaultOrchestratorTest {
         assertThat(lab.merchant.orders()).isEmpty();
     }
 
+    // Covers: I5, FR3, 7.6 (expiry writes the intent before the approval, so a crash between the two writes cannot
+    // leave an AWAITING_APPROVAL intent whose approval is already EXPIRED and therefore never picked up again)
+    @Test
+    void advance_rejectsExpiredIntent_whenProcessDiesAfterApprovalWrite() {
+        ProposalResult r = lab.propose(w, TWO_SHIRTS);
+        lab.clock.advance(Duration.ofMinutes(10));
+        CrashingApprovalRepository crashing = new CrashingApprovalRepository(lab.approvals);
+        crashing.crashAfterNext(CrashingApprovalRepository.Op.TRANSITION);
+        Lab.Worker dying = lab.worker("worker-b", lab.merchant, crashing);
+
+        assertThatThrownBy(() -> dying.orchestrator().advance(r.intentId()))
+                .isInstanceOf(InterceptingGateway.SimulatedCrash.class);
+        lab.clock.advance(lab.config.lease().plusSeconds(1)); // a lease ends strictly after lease_until
+        Lab.Worker restarted = lab.worker("worker-c");
+
+        assertThat(lab.drive(restarted, r.intentId())).isEqualTo(REJECTED);
+        assertThat(lab.intent(r.intentId()).failureReason()).contains(DefaultOrchestrator.APPROVAL_EXPIRED);
+        assertThat(lab.merchant.session(r.quote().get().id()).orElseThrow().status())
+                .isEqualTo(CheckoutStatus.CANCELED);
+    }
+
     // Covers: FR3, 7.2 (AWAITING_APPROVAL rejected -> REJECTED; the cancel is the orchestrator's next call)
     @Test
     void reject_movesToRejected_andNextAdvanceCancelsSession() {

@@ -481,21 +481,29 @@ public final class DefaultOrchestrator implements Orchestrator {
 
     // ---------------------------------------------------------------- AWAITING_APPROVAL
 
-    /** Approve and reject are decided by ApprovalService (9.2); a step here only expires a stale approval. */
+    /**
+     * Approve and reject are decided by ApprovalService (9.2); a step here only expires a stale approval. The intent is
+     * written first (fenced by version and lease, like {@code decide}) and the approval second, so a crash between the
+     * two leaves a terminal intent with a PENDING approval, never an AWAITING_APPROVAL intent that no worker would pick
+     * up again (I5, 7.6). An approval already EXPIRED with the intent still AWAITING_APPROVAL, which only an earlier
+     * write order could leave behind, is finished the same way.
+     */
     private Step expireApproval(PurchaseIntent intent) {
         Instant now = clock.instant();
         Optional<ApprovalRecord> latest = approvals.findLatestForSystem(intent.id());
-        if (latest.isEmpty() || latest.get().status() != ApprovalStatus.PENDING
-                || now.isBefore(latest.get().expiresAt())) {
+        if (latest.isEmpty()) {
             return idle(intent);
         }
-        if (!approvals.transition(latest.get().id(), ApprovalStatus.PENDING, ApprovalStatus.EXPIRED, now,
-                Optional.empty())) {
+        ApprovalStatus status = latest.get().status();
+        boolean due = status == ApprovalStatus.EXPIRED
+                || (status == ApprovalStatus.PENDING && !now.isBefore(latest.get().expiresAt()));
+        if (!due) {
             return idle(intent);
         }
         Move m = move(intent, TransitionEvent.EXPIRED);
         PurchaseIntent next = m.next().withFailureReason(APPROVAL_EXPIRED);
         intents.update(next, intent.version(), workerId);
+        approvals.transition(latest.get().id(), ApprovalStatus.PENDING, ApprovalStatus.EXPIRED, now, Optional.empty());
         transitionEvent(intent.id(), m.transition());
         return moved(intent, next);
     }
