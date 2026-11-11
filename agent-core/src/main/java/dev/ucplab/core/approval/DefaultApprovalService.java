@@ -151,7 +151,7 @@ public final class DefaultApprovalService implements ApprovalService {
         Transition t = approve
                 ? TransitionTable.resolve(intent.state(), TransitionEvent.APPROVED, Set.of(TransitionGuard.APPROVAL_VALID))
                 : TransitionTable.resolve(intent.state(), TransitionEvent.REJECTED, Set.of());
-        PurchaseIntent next = intent.withState(t.to(), now);
+        PurchaseIntent next = intent.moved(t, now);
         next = approve
                 ? next.withApprovedSnapshotHash(Optional.of(approval.snapshotHash()))
                 : next.withFailureReason(APPROVAL_REJECTED);

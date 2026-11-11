@@ -314,6 +314,6 @@ public final class InMemoryIntentRepository implements IntentRepository {
                 stored.id(), stored.owner(), stored.merchantId(), stored.dedupeKey(), stored.lines(),
                 stored.buyerEmail(), update.state(), newVersion, update.sessionId(), update.approvedSnapshotHash(),
                 update.requoteCount(), update.orderId(), update.failureReason(), update.uncertainSince(),
-                stored.leaseOwner(), stored.leaseUntil(), stored.createdAt(), update.updatedAt());
+                update.cancelPending(), stored.leaseOwner(), stored.leaseUntil(), stored.createdAt(), update.updatedAt());
     }
 }

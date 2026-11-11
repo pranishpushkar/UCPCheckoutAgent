@@ -207,7 +207,7 @@ public abstract class IntentRepositoryContract {
         PurchaseIntent forged = new PurchaseIntent(
                 claimed.id(), BOB, new MerchantId("other"), "forged", List.of(new ProposedLine("other", 5)),
                 "forged@example.com", IntentState.COMPLETING, 99,
-                Optional.empty(), Optional.empty(), 0, Optional.empty(), Optional.empty(), Optional.empty(),
+                Optional.empty(), Optional.empty(), 0, Optional.empty(), Optional.empty(), Optional.empty(), false,
                 Optional.of(W2), Optional.of(T0.plusSeconds(9999)), T0.minusSeconds(5), clock.instant());
 
         repo.update(forged, 0, W1);
@@ -223,6 +223,19 @@ public abstract class IntentRepositoryContract {
         assertThat(stored.leaseUntil()).isEqualTo(claimed.leaseUntil());
         assertThat(stored.version()).isEqualTo(1);
         assertThat(repo.find(BOB, claimed.id())).isEmpty();
+    }
+
+    // Covers: 7.6 (cancel_pending is a stored field: written and cleared by update like any other mutable column)
+    @Test
+    void update_persistsCancelPending_whenSetAndCleared() {
+        PurchaseIntent claimed = insertAndClaim("i1", ALICE, "d1", W1);
+        assertThat(claimed.cancelPending()).isFalse();
+
+        repo.update(claimed.withState(IntentState.REJECTED, clock.instant()).withCancelPending(true), 0, W1);
+        assertThat(repo.findForSystem(claimed.id()).orElseThrow().cancelPending()).isTrue();
+
+        repo.update(repo.findForSystem(claimed.id()).orElseThrow().withCancelPending(false), 1, W1);
+        assertThat(repo.findForSystem(claimed.id()).orElseThrow().cancelPending()).isFalse();
     }
 
     // Covers: 7.8 (an update for an unknown intent is a programming error, not a stale write)

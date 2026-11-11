@@ -118,10 +118,13 @@ public final class DefaultOrchestrator implements Orchestrator {
     static final String MERCHANT_ERROR_PREFIX = "merchant_error_";
     static final String COMPLETE_ERROR_PREFIX = "complete_error:";
 
-    /** failure_reason values whose table 7.2 row includes a session cancel. */
+    /** failure_reason values that name a table 7.2 cancel row; used to give a COMPLETING error code its reason. */
     private static final Set<String> CANCEL_OWED = Set.of(OUT_OF_STOCK, ITEM_UNAVAILABLE, QUANTITY_ADJUSTED,
             QUOTE_LINES_DIFFER, PAYMENT_DECLINED,
             RequotePolicy.PRICE_UNSTABLE, DefaultApprovalService.APPROVAL_REJECTED, APPROVAL_EXPIRED);
+
+    /** Cancel attempts for one intent before the worker gives up (7.6). */
+    static final int MAX_CANCEL_ATTEMPTS = 3;
 
     private static final int MAX_RATIONALE = 300;
 
@@ -809,18 +812,34 @@ public final class DefaultOrchestrator implements Orchestrator {
 
     // ---------------------------------------------------------------- owed cancel
 
+    /**
+     * The owed cancel (7.6): sent under the key cancel/0 while {@code cancel_pending} is set. A definitive answer clears
+     * the flag; so does the third unanswered attempt, which gives up. The intent's state never changes. An attempt a
+     * crash left SENT counts as one of the three.
+     */
     private Step cancelIfOwed(PurchaseIntent intent, List<MerchantAttempt> attempts) {
-        String reason = intent.failureReason().orElse("");
-        boolean owed = CANCEL_OWED.contains(reason) || reason.startsWith(POLICY_PREFIX)
-                || reason.startsWith(COMPLETE_ERROR_PREFIX);
-        if (!owed || intent.sessionId().isEmpty() || attempts.stream().anyMatch(a -> a.op() == AttemptOp.CANCEL)) {
+        if (!intent.cancelPending() || intent.sessionId().isEmpty()) {
             return idle(intent);
+        }
+        long tried = attempts.stream().filter(a -> a.op() == AttemptOp.CANCEL).count();
+        if (tried >= MAX_CANCEL_ATTEMPTS) {
+            PurchaseIntent next = intent.withCancelPending(false).withState(intent.state(), clock.instant());
+            intents.update(next, intent.version(), workerId);
+            event(intent.id(), "cancel_gave_up", Map.of("attempts", tried));
+            return moved(intent, next);
         }
         IdempotencyKey key = IdempotencyKey.derive(intent.id(), MutatingOp.CANCEL, 0);
         MerchantAttempt attempt = newAttempt(intent.id(), AttemptOp.CANCEL, 0, key, Optional.empty());
         PurchaseIntent written = writeAhead(intent, attempt, intent.withState(intent.state(), clock.instant()));
         CallOutcome<CheckoutView> outcome = merchant.cancel(requireSession(intent), key);
-        boolean answered = outcome instanceof CallOutcome.Ok<CheckoutView>;
+        boolean definitive = switch (outcome) {
+            case CallOutcome.Ok<CheckoutView> ok -> true;
+            case CallOutcome.Rejected<CheckoutView> r -> true;
+            case CallOutcome.ProtocolError<CheckoutView> e -> !isRetryable(e);
+            case CallOutcome.NotSent<CheckoutView> n -> false;
+            case CallOutcome.Uncertain<CheckoutView> u -> false;
+        };
+        boolean givingUp = !definitive && tried + 1 >= MAX_CANCEL_ATTEMPTS;
         Optional<Integer> http = switch (outcome) {
             case CallOutcome.Ok<CheckoutView> ok -> Optional.of(ok.httpStatus());
             case CallOutcome.ProtocolError<CheckoutView> e -> Optional.of(e.httpStatus());
@@ -829,9 +848,15 @@ public final class DefaultOrchestrator implements Orchestrator {
         Optional<String> response = outcome instanceof CallOutcome.Ok<CheckoutView> ok
                 ? Optional.of(CheckoutWire.responseSummary(ok.value()))
                 : Optional.of(describe(outcome));
-        resolve(attempt, answered ? AttemptStatus.RESPONDED : AttemptStatus.UNCERTAIN, http, response,
-                written.withState(written.state(), clock.instant()), written.version());
-        event(intent.id(), "cancel_sent", Map.of("outcome", answered ? "ok" : kind(outcome)));
+        PurchaseIntent next = written.withCancelPending(!(definitive || givingUp))
+                .withState(written.state(), clock.instant());
+        resolve(attempt, definitive ? AttemptStatus.RESPONDED : AttemptStatus.UNCERTAIN, http, response, next,
+                written.version());
+        event(intent.id(), "cancel_sent", Map.of("outcome", kind(outcome),
+                "attempt", tried + 1));
+        if (givingUp) {
+            event(intent.id(), "cancel_gave_up", Map.of("attempts", tried + 1));
+        }
         return new Step(intent.state(), intent.state(), false, Optional.empty());
     }
 
@@ -845,7 +870,7 @@ public final class DefaultOrchestrator implements Orchestrator {
 
     private Move move(PurchaseIntent intent, TransitionEvent event, TransitionGuard... guards) {
         Transition t = TransitionTable.resolve(intent.state(), event, Set.of(guards));
-        return new Move(intent.withState(t.to(), clock.instant()), t);
+        return new Move(intent.moved(t, clock.instant()), t);
     }
 
     private MerchantAttempt newAttempt(
