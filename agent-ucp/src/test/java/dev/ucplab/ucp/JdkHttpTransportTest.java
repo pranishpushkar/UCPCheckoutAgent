@@ -160,6 +160,71 @@ class JdkHttpTransportTest {
         assertThatThrownBy(() -> small.send(call)).isInstanceOf(IOException.class).hasMessageContaining("larger than");
     }
 
+    // Covers: 8.4 (HTTP/1.1 only: the request line says HTTP/1.1 and no h2c upgrade is attempted)
+    @Test
+    void send_usesHttp11Only_withoutAnUpgradeAttempt() throws Exception {
+        try (java.net.ServerSocket raw = new java.net.ServerSocket(0, 5, java.net.InetAddress.getLoopbackAddress())) {
+            java.util.concurrent.CompletableFuture<String> head = new java.util.concurrent.CompletableFuture<>();
+            Thread.ofVirtual().start(() -> {
+                try (java.net.Socket s = raw.accept()) {
+                    byte[] buf = new byte[4096];
+                    int n = s.getInputStream().read(buf);
+                    head.complete(new String(buf, 0, n, StandardCharsets.US_ASCII));
+                    s.getOutputStream().write("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"
+                            .getBytes(StandardCharsets.US_ASCII));
+                } catch (IOException e) {
+                    head.completeExceptionally(e);
+                }
+            });
+
+            transport.send(new HttpCall("POST", URI.create("http://127.0.0.1:" + raw.getLocalPort() + "/x"), Map.of(),
+                    Optional.of(new FrozenBody("{}")), Duration.ofSeconds(3)));
+
+            String request = head.get(3, java.util.concurrent.TimeUnit.SECONDS).toLowerCase();
+            assertThat(request).startsWith("post /x http/1.1").doesNotContain("upgrade:").doesNotContain("http2-settings");
+        }
+    }
+
+    // Covers: 8.2, 8.4 (the transport refuses to start when the JDK would re-send any method on its own, which would
+    // put a second complete on the wire outside the retry matrix)
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"true", "TRUE", "True", ""})
+    void constructor_refuses_whenAllMethodRetryIsEnabled(String value) {
+        String key = "jdk.httpclient.enableAllMethodRetry";
+        String before = System.getProperty(key);
+        System.setProperty(key, value);
+        try {
+            assertThatThrownBy(() -> new JdkHttpTransport(UcpConfig.defaults("profile=\"https://a.example/.well-known/ucp\"")))
+                    .isInstanceOf(IllegalStateException.class).hasMessageContaining(key);
+        } finally {
+            restore(key, before);
+        }
+    }
+
+    // Covers: 8.2, 8.4 (the property unset or false is fine)
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"false", "FALSE", "no", "0"})
+    void constructor_accepts_whenAllMethodRetryIsOffOrUnset(String value) {
+        String key = "jdk.httpclient.enableAllMethodRetry";
+        String before = System.getProperty(key);
+        System.setProperty(key, value);
+        try {
+            assertThat(new JdkHttpTransport(UcpConfig.defaults("profile=\"https://a.example/.well-known/ucp\""))).isNotNull();
+            System.clearProperty(key);
+            assertThat(new JdkHttpTransport(UcpConfig.defaults("profile=\"https://a.example/.well-known/ucp\""))).isNotNull();
+        } finally {
+            restore(key, before);
+        }
+    }
+
+    private static void restore(String key, String before) {
+        if (before == null) {
+            System.clearProperty(key);
+        } else {
+            System.setProperty(key, before);
+        }
+    }
+
     // Covers: I8 (a call's toString never shows credentials in headers or the payment token in the body)
     @Test
     void httpCall_toString_hidesHeadersAndBody() {
