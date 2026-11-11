@@ -154,7 +154,8 @@ class UcpHttpGatewayTest {
         assertThat(p.merchant()).isEqualTo(SHOP);
         assertThat(p.ucpVersion()).isEqualTo("2026-08-25");
         assertThat(p.checkoutEndpoint()).isEqualTo(URI.create("http://127.0.0.1:8081/ucp/v1"));
-        assertThat(p.capabilities()).containsExactly("dev.ucp.shopping.checkout");
+        assertThat(p.capabilities()).containsExactlyInAnyOrder("dev.ucp.shopping.checkout",
+                "dev.ucp.shopping.catalog.search", "dev.ucp.shopping.catalog.lookup");
         assertThat(p.paymentHandlers()).containsExactly("mock_pay_1");
         HttpCall call = transport.calls.get(0);
         assertThat(call.method()).isEqualTo("GET");

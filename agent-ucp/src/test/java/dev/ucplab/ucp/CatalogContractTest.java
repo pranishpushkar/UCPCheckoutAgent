@@ -111,6 +111,12 @@ class CatalogContractTest extends ContractTestBase {
     @Test
     void capabilityMissing_isProtocolError_andSendsNothing() throws Exception {
         try (StubMerchant stub = new StubMerchant()) {
+            // A profile with the checkout capability only: the captured fixture now lists the catalog too.
+            String port = String.valueOf(stub.baseUrl().getPort());
+            stub.on("GET /.well-known/ucp", StubMerchant.reply(200, "{\"ucp\":{\"version\":\"2026-08-25\","
+                    + "\"capabilities\":{\"dev.ucp.shopping.checkout\":[{\"version\":\"2026-08-25\"}]},"
+                    + "\"services\":{\"dev.ucp.shopping\":[{\"transport\":\"rest\",\"version\":\"2026-08-25\","
+                    + "\"endpoint\":\"http://127.0.0.1:" + port + "/ucp/v1\"}]}}}"));
             UcpHttpGateway gateway = new UcpHttpGateway(new MerchantEntry(SHOP, stub.baseUrl(), "Shop",
                     dev.ucplab.core.merchant.MerchantStatus.ACTIVE), CONFIG, new JdkHttpTransport(CONFIG),
                     new CircuitBreakers(CONFIG, Clock.systemUTC()), Clock.systemUTC(), d -> { }, new SplittableRandom(3),
