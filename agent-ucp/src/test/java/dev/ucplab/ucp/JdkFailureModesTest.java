@@ -2,6 +2,8 @@ package dev.ucplab.ucp;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import dev.ucplab.core.intent.AttemptOp;
+import dev.ucplab.core.merchant.CallOutcome;
 import dev.ucplab.core.merchant.FrozenBody;
 import java.io.ByteArrayOutputStream;
 import java.io.EOFException;
@@ -16,22 +18,24 @@ import java.net.SocketException;
 import java.net.URI;
 import java.nio.channels.UnresolvedAddressException;
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
-import javax.net.ssl.SSLHandshakeException;
+import javax.net.ssl.SSLException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
 /**
- * What {@code java.net.http} actually raises when a raw socket server drops a connection in each way (decision A).
- * {@link FailureClassifier} treats {@code ConnectException} as {@code NotSent}, which is only safe if the JDK never
- * raises it once a connection exists. These tests pin that for the JDK this build runs on: if a future JDK raises it
- * after the request was written, a test here fails and the classifier must go back to {@code Uncertain}.
+ * What {@code java.net.http} actually raises when a raw socket server drops a connection in each way (8.1). The
+ * exception types differ between platforms: on Linux a connection reset during connect is a {@code ConnectException},
+ * and a peer that does not speak TLS gives a plain {@code SSLException}. So the tests that depend on the platform assert
+ * what {@link FailureClassifier} makes of whatever is raised, never the type. The reused-connection tests pin a JDK
+ * behaviour that held on both platforms: a pooled connection dropped after the request is a plain {@code IOException}.
  */
 class JdkFailureModesTest {
 
@@ -40,6 +44,8 @@ class JdkFailureModesTest {
     /** The outcome of the second request of a pair, sent after the first left a keep-alive connection pooled. */
     private record Observed(Optional<IOException> thrown, int replyStatus, int connections, int requestsTotal,
             int requestsOnFirstConnection) {}
+
+    private static final FailureClassifier CLASSIFIER = new FailureClassifier(Clock.systemUTC());
 
     private static final UcpConfig CONFIG = UcpConfig.defaults("profile=\"https://a.example/.well-known/ucp\"");
 
@@ -213,22 +219,32 @@ class JdkFailureModesTest {
         }
     }
 
-    // Covers: 8.1, decision A (a connection accepted and then closed or reset before any reply, with a small or a 4 MB
-    // body, is a plain IOException and not a ConnectException)
-    @Test
-    void freshConnectionDropped_isNeverAConnectException() throws Exception {
-        for (String method : List.of("POST", "GET")) {
-            for (boolean rst : new boolean[] {false, true}) {
-                IOException e = freshDrop(method, rst, 10);
-                assertThat(e).isNotInstanceOf(ConnectException.class).hasMessageContaining("no bytes");
-                assertNoConnectException(e);
+    /** Whatever the platform raised, a mutating call that failed this way is Uncertain: it may have been written. */
+    private static void assertUncertainForMutatingOps(Throwable failure) {
+        for (AttemptOp op : AttemptOp.values()) {
+            if (op != AttemptOp.GET) {
+                assertThat(CLASSIFIER.classify(op, failure)).as("%s after %s", op, failure)
+                        .isInstanceOf(CallOutcome.Uncertain.class);
             }
         }
-        assertNoConnectException(freshDrop("POST", true, 4_000_000));
-        assertNoConnectException(freshDrop("POST", false, 4_000_000));
     }
 
-    // Covers: 8.1 (connection refused is a ConnectException, raised before anything is written: NotSent)
+    // Covers: 8.1 (a connection accepted and then closed or reset before any reply, with a small or a 4 MB body, is
+    // Uncertain for every mutating call, whichever exception type the platform raises: the JDK reports a plain
+    // IOException on macOS and a ConnectException "Connection reset by peer (connect failed)" on Linux)
+    @Test
+    void freshConnectionDropped_isUncertain_forEveryMutatingOp() throws Exception {
+        for (String method : List.of("POST", "GET")) {
+            for (boolean rst : new boolean[] {false, true}) {
+                assertUncertainForMutatingOps(freshDrop(method, rst, 10));
+            }
+        }
+        assertUncertainForMutatingOps(freshDrop("POST", true, 4_000_000));
+        assertUncertainForMutatingOps(freshDrop("POST", false, 4_000_000));
+    }
+
+    // Covers: 8.1 (connection refused is a ConnectException; the classifier still treats it as Uncertain, because the
+    // type alone does not prove that nothing was written)
     @Test
     void connectionRefused_isAConnectException() throws Exception {
         int closed;
@@ -245,7 +261,8 @@ class JdkFailureModesTest {
         }
     }
 
-    // Covers: 8.1 (a name that does not resolve is a ConnectException caused by UnresolvedAddressException: NotSent)
+    // Covers: 8.1 (a name that does not resolve is a ConnectException caused by UnresolvedAddressException: the one
+    // ConnectException that is NotSent)
     @Test
     void unresolvableHost_isAConnectException_causedByUnresolvedAddress() throws Exception {
         try {
@@ -254,14 +271,18 @@ class JdkFailureModesTest {
             throw new AssertionError("expected a ConnectException");
         } catch (ConnectException e) {
             assertThat(chain(e)).anyMatch(c -> c instanceof UnresolvedAddressException);
+            for (AttemptOp op : AttemptOp.values()) {
+                assertThat(CLASSIFIER.classify(op, e)).as(op.name()).isInstanceOf(CallOutcome.NotSent.class);
+            }
         }
     }
 
-    // Covers: 8.1 (a TLS handshake that the peer ends, or a peer that does not speak TLS, is an SSLHandshakeException,
-    // raised before any request byte is written: NotSent)
+    // Covers: 8.1 (a TLS handshake that the peer ends, or a peer that does not speak TLS, is an SSLHandshakeException
+    // or, on Linux for a plaintext reply, a plain SSLException "Unrecognized SSL message"; either way a mutating call
+    // is Uncertain)
     @ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(strings = {"close", "garbage", "http-reply"})
-    void tlsHandshakeFailure_isAnSSLHandshakeException(String mode) throws Exception {
+    void tlsHandshakeFailure_isAnSSLException_andUncertainForMutatingOps(String mode) throws Exception {
         try (ServerSocket server = new ServerSocket(0, 50, InetAddress.getLoopbackAddress())) {
             Thread acceptor = Thread.ofVirtual().start(() -> {
                 try {
@@ -285,9 +306,9 @@ class JdkFailureModesTest {
                 new JdkHttpTransport(CONFIG).send(new HttpCall("POST",
                         URI.create("https://127.0.0.1:" + server.getLocalPort() + "/x"), Map.of(),
                         Optional.of(new FrozenBody("{}")), Duration.ofSeconds(3)));
-                throw new AssertionError("expected an SSLHandshakeException");
-            } catch (SSLHandshakeException expected) {
-                assertThat(expected).isNotNull();
+                throw new AssertionError("expected an SSLException");
+            } catch (SSLException expected) {
+                assertUncertainForMutatingOps(expected);
             } finally {
                 acceptor.interrupt();
             }

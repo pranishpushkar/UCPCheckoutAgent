@@ -403,8 +403,8 @@ The port is in Appendix B. The key idea is that every call returns one of four o
 
 | Observation | Outcome |
 | --- | --- |
-| `HttpConnectTimeoutException`, DNS failure, or TLS handshake failure, all before any request bytes were written; or the circuit breaker (8.3) rejecting the call | `NotSent` |
-| `ConnectException` | `Uncertain`, for every operation, until a raw-socket test proves the JDK never raises it for a reset on a reused keep-alive connection. Only then may it move to `NotSent` |
+| `HttpConnectTimeoutException`; a `ConnectException` whose cause chain contains `UnresolvedAddressException` (DNS failure: no connection existed); or the circuit breaker (8.3) rejecting the call | `NotSent` |
+| Any other `ConnectException` (for example refused or reset), and any `SSLException`, `SSLHandshakeException` included | `Uncertain` for create, update, complete and cancel, and for `get`, which is retried either way (8.2). On Linux a reset during connect is reported as `ConnectException`, and a peer that does not speak TLS gives a plain `SSLException`; the raw-socket evidence did not hold across platforms, so the conservative rule applies |
 | Request written, then request timeout (`HttpTimeoutException`), connection reset, EOF, or any other `IOException` | `Uncertain` |
 | HTTP 200 or 201 with a valid body (business outcomes are inside `messages`) | `Ok` |
 | HTTP 200 on a create where every item is unavailable (`ucp.status` is `error`, no session id) | `Rejected`, valid for create only (Appendix B). On any other operation it is a body with a missing required field (last row) |

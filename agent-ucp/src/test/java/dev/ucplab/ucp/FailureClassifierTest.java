@@ -86,25 +86,45 @@ class FailureClassifierTest {
         }
     }
 
-    // Covers: 8.1 (connection refused and DNS failure are ConnectExceptions raised before anything is written),
-    // decision A (JdkFailureModesTest pins that the JDK raises ConnectException only before a connection exists)
+    // Covers: 8.1 (a DNS failure is a ConnectException caused by UnresolvedAddressException: no connection existed, so
+    // nothing was written: NotSent)
     @Test
-    void classifyFailure_isNotSent_forConnectException_refusedOrUnresolved() {
+    void classifyFailure_isNotSent_forUnresolvedAddress_onEveryOp() {
         ConnectException unresolved = new ConnectException();
         unresolved.initCause(new UnresolvedAddressException());
+        ConnectException wrapped = new ConnectException("connect failed");
+        wrapped.initCause(new IOException("lookup", new UnresolvedAddressException()));
         for (AttemptOp op : ALL_OPS) {
-            assertThat(CLASSIFIER.classify(op, new ConnectException("Connection refused")))
-                    .as(op.name()).isInstanceOf(CallOutcome.NotSent.class);
             assertThat(CLASSIFIER.classify(op, unresolved)).as(op.name()).isInstanceOf(CallOutcome.NotSent.class);
+            assertThat(CLASSIFIER.classify(op, wrapped)).as(op.name()).isInstanceOf(CallOutcome.NotSent.class);
         }
     }
 
-    // Covers: 8.1 (a TLS handshake failure happens before any request byte is written)
+    // Covers: 8.1 (any other ConnectException is Uncertain: on Linux a reset during connect is reported as
+    // "Connection reset by peer (connect failed)", so the type does not prove that nothing was written)
     @Test
-    void classifyFailure_isNotSent_forTlsHandshakeFailure() {
+    void classifyFailure_isUncertain_forOtherConnectExceptions_onEveryOp() {
+        List<ConnectException> failures = List.of(new ConnectException("Connection refused"),
+                new ConnectException("Connection reset by peer (connect failed)"), new ConnectException());
         for (AttemptOp op : ALL_OPS) {
-            assertThat(CLASSIFIER.classify(op, new SSLHandshakeException("Remote host terminated the handshake")))
-                    .as(op.name()).isInstanceOf(CallOutcome.NotSent.class);
+            for (ConnectException failure : failures) {
+                assertThat(CLASSIFIER.classify(op, failure)).as(op + " " + failure.getMessage())
+                        .isInstanceOf(CallOutcome.Uncertain.class);
+            }
+        }
+    }
+
+    // Covers: 8.1 (an SSLException of any kind, handshake or not, is Uncertain: on Linux a peer that does not speak
+    // TLS gives "Unrecognized SSL message, plaintext connection?" as a plain SSLException)
+    @Test
+    void classifyFailure_isUncertain_forEverySslException_onEveryOp() {
+        List<Throwable> failures = List.of(new SSLHandshakeException("Remote host terminated the handshake"),
+                new SSLException("Unrecognized SSL message, plaintext connection?"));
+        for (AttemptOp op : ALL_OPS) {
+            for (Throwable failure : failures) {
+                assertThat(CLASSIFIER.classify(op, failure)).as(op + " " + failure.getMessage())
+                        .isInstanceOf(CallOutcome.Uncertain.class);
+            }
         }
     }
 
@@ -149,16 +169,16 @@ class FailureClassifierTest {
                         .hasSizeLessThan(260));
     }
 
-    // Covers: 8.1 (real exceptions from the real transport: a closed port is NotSent)
+    // Covers: 8.1 (real exceptions from the real transport: a closed port is a ConnectException, which is Uncertain)
     @Test
-    void classifyFailure_realClosedPort_isNotSent() throws Exception {
+    void classifyFailure_realClosedPort_isUncertain() throws Exception {
         int closed;
         try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
             closed = s.getLocalPort();
         }
         IOException failure = failureOf(URI.create("http://127.0.0.1:" + closed + "/x"), false);
 
-        assertThat(CLASSIFIER.classify(AttemptOp.CREATE, failure)).isInstanceOf(CallOutcome.NotSent.class);
+        assertThat(CLASSIFIER.classify(AttemptOp.CREATE, failure)).isInstanceOf(CallOutcome.Uncertain.class);
     }
 
     // Covers: 8.1 (real exceptions from the real transport: a connection reset after the request is Uncertain)

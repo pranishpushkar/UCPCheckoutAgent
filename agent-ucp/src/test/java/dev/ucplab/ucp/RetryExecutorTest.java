@@ -81,7 +81,8 @@ class RetryExecutorTest {
         return new HttpReply(status, h, fixture("error_not_found"));
     }
 
-    private static final IOException NOT_SENT = new ConnectException("refused");
+    /** A DNS failure: the one ConnectException that is NotSent (8.1). A refused connection is Uncertain. */
+    private static final IOException NOT_SENT = unresolved();
     private static final IOException UNCERTAIN = new HttpTimeoutException("timed out");
 
     private final List<Duration> sleeps = new ArrayList<>();
@@ -527,5 +528,11 @@ class RetryExecutorTest {
         assertThat(executor(CONFIG, gate).execute(bypass)).isInstanceOf(CallOutcome.Ok.class);
         assertThat(gate.acquired).isEqualTo(2);
         assertThat(gate.recorded).hasSize(2);
+    }
+
+    private static ConnectException unresolved() {
+        ConnectException e = new ConnectException("unresolved");
+        e.initCause(new java.nio.channels.UnresolvedAddressException());
+        return e;
     }
 }

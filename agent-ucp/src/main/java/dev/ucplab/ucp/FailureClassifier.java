@@ -5,6 +5,7 @@ import dev.ucplab.core.merchant.CallOutcome;
 import dev.ucplab.core.merchant.CheckoutView;
 import java.net.ConnectException;
 import java.net.http.HttpConnectTimeoutException;
+import java.nio.channels.UnresolvedAddressException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.ZonedDateTime;
@@ -12,19 +13,23 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.Objects;
 import java.util.Optional;
-import javax.net.ssl.SSLHandshakeException;
+import javax.net.ssl.SSLException;
 
 /**
  * Turns what a transport observed into a {@link CallOutcome} (8.1). It decides nothing about retries; that is
  * {@code RetryExecutor} (8.2).
  *
- * <p><b>NotSent is a whitelist.</b> It is returned only for failures raised before any request byte was written:
- * {@link HttpConnectTimeoutException}, {@link ConnectException} (refused, or DNS failure with an
- * {@code UnresolvedAddressException} cause) and {@link SSLHandshakeException}; and, from {@link #circuitOpen}, a call the
- * breaker rejected. {@code ConnectException} is safe here only because the JDK raises it only while connecting:
- * {@code JdkFailureModesTest} drops a pooled or fresh connection in every way and shows a plain {@code IOException}
- * instead. If that test ever fails on a new JDK, this class must return {@code Uncertain} for it again. Everything else,
- * including a timeout, a reset, an EOF and any unexpected exception, is {@code Uncertain}: when in doubt, Uncertain.
+ * <p><b>NotSent is a whitelist.</b> It is returned only for: {@link HttpConnectTimeoutException}; a
+ * {@link ConnectException} whose cause chain contains an {@link UnresolvedAddressException} (the name did not resolve, so
+ * no connection existed); and, from {@link #circuitOpen}, a call the breaker rejected. Everything else is
+ * {@code Uncertain}, including every other {@code ConnectException} and every {@link SSLException}, handshake failures
+ * included. Why: the JDK raises the same types for different things on different platforms. On Linux a connection
+ * reset during connect is reported as {@code ConnectException: Connection reset by peer (connect failed)}, and a peer
+ * that does not speak TLS gives a plain {@code SSLException: Unrecognized SSL message}, not an
+ * {@code SSLHandshakeException}. The earlier decision A (a {@code ConnectException} is always {@code NotSent}) rested on
+ * a raw-socket test that held on macOS only, so the conservative rule applies: when in doubt, Uncertain. A timeout,
+ * a reset, an EOF and any unexpected exception are {@code Uncertain} as well. The rule is the same for {@code get},
+ * which is retried either way (8.2).
  *
  * <p><b>Replies.</b> Status handling follows 8.1 and decisions B, C and D: a mutating call (create, update, complete,
  * cancel) that gets an answer it cannot trust is {@code Uncertain}, because the merchant may have acted; {@code get}
@@ -56,10 +61,22 @@ public final class FailureClassifier {
         String cause = failure.getClass().getSimpleName()
                 + (failure.getMessage() == null ? "" : ": " + clean(failure.getMessage(), MAX_CAUSE));
         // HttpConnectTimeoutException is an HttpTimeoutException, which is Uncertain: it is tested first, by itself.
-        boolean neverWritten = failure instanceof HttpConnectTimeoutException
-                || failure instanceof ConnectException
-                || failure instanceof SSLHandshakeException;
+        boolean neverWritten = failure instanceof HttpConnectTimeoutException || isUnresolvedAddress(failure);
         return neverWritten ? new CallOutcome.NotSent<>(cause) : new CallOutcome.Uncertain<>(cause);
+    }
+
+    /** A ConnectException with an UnresolvedAddressException anywhere in its cause chain: DNS failed, no socket existed. */
+    private static boolean isUnresolvedAddress(Throwable failure) {
+        if (!(failure instanceof ConnectException)) {
+            return false;
+        }
+        int depth = 0;
+        for (Throwable t = failure; t != null && depth < 16; t = t.getCause(), depth++) {
+            if (t instanceof UnresolvedAddressException) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Classifies a reply to {@code op} by its status and body (8.1, 8.2, decisions B, C, D). */

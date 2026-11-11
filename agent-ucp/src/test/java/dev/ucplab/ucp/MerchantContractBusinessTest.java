@@ -204,7 +204,8 @@ class MerchantContractBusinessTest extends ContractTestBase {
 
     // ---------------------------------------------------------------- network and concurrency
 
-    // Covers: 8.1, decision A (a connection that is refused is NotSent, for every call; no order, no state)
+    // Covers: 8.1, 8.5 (a merchant that cannot be reached for discovery gets no call at all: NotSent for every call; no
+    // order, no state. Classification of a refused connection itself is in FailureClassifierTest)
     @Test
     void connectionRefused_isNotSent() throws Exception {
         int closed;
