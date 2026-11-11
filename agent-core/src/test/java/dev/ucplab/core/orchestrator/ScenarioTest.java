@@ -193,9 +193,9 @@ class ScenarioTest {
 
         assertThat(lab.merchant.orders()).isEmpty();
         assertThat(lab.merchant.stock("item_123")).isEqualTo(1);
-        // The merchant answers the re-quote with the quantity cut to the stock (quantity_adjusted), as the reference
-        // merchant does; the quote is not the basket the user approved, so it is refused (I2, Q2).
-        assertThat(lab.intent(id).failureReason()).contains("quantity_adjusted");
+        // The reference merchant answers complete with status ready_for_complete and an out_of_stock error; the
+        // intent is FAILED_NOT_CHARGED with that code, and the session is cancelled.
+        assertThat(lab.intent(id).failureReason()).contains("out_of_stock");
         assertThat(lab.merchant.session(lab.intent(id).sessionId().orElseThrow()).orElseThrow().status())
                 .isEqualTo(CheckoutStatus.CANCELED);
     }

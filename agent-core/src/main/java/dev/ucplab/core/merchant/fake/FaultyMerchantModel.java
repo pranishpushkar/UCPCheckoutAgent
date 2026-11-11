@@ -7,6 +7,7 @@ import dev.ucplab.core.merchant.Buyer;
 import dev.ucplab.core.merchant.CallOutcome;
 import dev.ucplab.core.merchant.CheckoutStatus;
 import dev.ucplab.core.merchant.CheckoutView;
+import dev.ucplab.core.json.CanonicalJson;
 import dev.ucplab.core.merchant.CheckoutWire;
 import dev.ucplab.core.merchant.CreateCheckout;
 import dev.ucplab.core.merchant.FrozenBody;
@@ -398,10 +399,12 @@ public final class FaultyMerchantModel implements MerchantGateway {
         }
         switch (s.status) {
             case COMPLETE_IN_PROGRESS -> {
-                return ok(200, s, List.of(message("warning", "checkout_busy", "a charge is in progress")));
+                return ok(200, s, List.of(error("checkout_busy", Optional.empty(),
+                        "Checkout is being completed, so the update was not applied", "recoverable")));
             }
             case COMPLETED, CANCELED -> {
-                return ok(200, s, List.of(message("error", "checkout_not_modifiable", "checkout is " + s.status.wire())));
+                return ok(200, s, List.of(error("checkout_not_modifiable", Optional.empty(),
+                        "Checkout is " + s.status.wire() + " and cannot be changed", "unrecoverable")));
             }
             default -> {
                 Priced priced = price(request.lines().stream()
@@ -434,12 +437,18 @@ public final class FaultyMerchantModel implements MerchantGateway {
                 }
             }
             case CANCELED -> {
-                return Optional.of(ok(200, s, List.of(message("error", "checkout_not_modifiable", "checkout is canceled"))));
+                return Optional.of(ok(200, s, List.of(error("checkout_canceled", Optional.empty(),
+                        "Checkout was canceled", "unrecoverable"))));
             }
             case COMPLETE_IN_PROGRESS -> {
                 if (mode == Mode.LAB) {
-                    return Optional.of(ok(200, s, List.of(message("warning", "checkout_busy", "a charge is in progress"))));
+                    return Optional.of(ok(200, s, List.of(error("complete_in_progress", Optional.empty(),
+                            "Checkout is already being completed", "recoverable"))));
                 }
+            }
+            case INCOMPLETE -> {
+                return Optional.of(ok(200, s, List.of(error("not_ready", Optional.empty(),
+                        "Checkout is missing required information", "recoverable"))));
             }
             default -> {
                 // Fall through to the re-checks below.
@@ -447,26 +456,31 @@ public final class FaultyMerchantModel implements MerchantGateway {
         }
         // STRICT: a completed or charging session reaches the re-checks and is charged again.
 
-        List<MerchantMessage> problems = new ArrayList<>();
+        if (!hasInstrumentForHandler(body)) {
+            return Optional.of(ok(200, s, List.of(error("missing", Optional.of("$.payment.instruments"),
+                    "A payment instrument for handler " + HANDLER_ID + " is required", "recoverable"))));
+        }
+        // As MerchantCore.complete: stock first, line by line, and the first short line answers; only then is a price
+        // change reported, with the lines and totals refreshed to the new prices.
+        boolean priceChanged = false;
+        List<LineView> fresh = new ArrayList<>();
         for (int i = 0; i < s.lines.size(); i++) {
             LineView line = s.lines.get(i);
             Item item = catalog.get(line.itemId());
-            String path = "$.line_items[" + i + "]";
-            if (item == null) {
-                problems.add(message("error", "item_unavailable", path, line.itemId() + " is not sold"));
-            } else if (item.price != line.unitPriceMinor()) {
-                problems.add(message("warning", "price_changed", path,
-                        line.itemId() + " now costs " + item.price + " (was " + line.unitPriceMinor() + ")"));
-            } else if (item.stock < line.quantity()) {
-                problems.add(message("error", "out_of_stock", path, line.itemId() + " has " + item.stock + " left"));
+            if (item == null || item.stock < line.quantity()) {
+                return Optional.of(ok(200, s, List.of(error("out_of_stock", Optional.of("$.line_items[" + i + "]"),
+                        "Item " + line.itemId() + " is no longer available in the requested quantity", "recoverable"))));
             }
+            if (item.price != line.unitPriceMinor()) {
+                priceChanged = true;
+            }
+            fresh.add(new LineView(line.itemId(), line.quantity(), item.price, line.lineId()));
         }
-        if (problems.isEmpty() && s.buyer.email().isEmpty()) {
-            problems.add(message("error", "checkout_incomplete", "$.buyer", "a buyer email is required"));
-        }
-        if (!problems.isEmpty()) {
+        if (priceChanged) {
+            s.lines = List.copyOf(fresh);
             s.status = CheckoutStatus.INCOMPLETE;
-            return Optional.of(ok(200, s, problems));
+            return Optional.of(ok(200, s, List.of(message("warning", "price_changed", "$.totals",
+                    "Prices changed since the last quote; review the new total and update the checkout"))));
         }
 
         s.lines.forEach(l -> catalog.get(l.itemId()).stock -= l.quantity());
@@ -491,9 +505,9 @@ public final class FaultyMerchantModel implements MerchantGateway {
         s.lines.forEach(l -> catalog.get(l.itemId()).stock += l.quantity());
         s.status = CheckoutStatus.READY_FOR_COMPLETE;
         boolean declined = token.filter(TOKEN_DECLINE::equals).isPresent();
-        return ok(200, s, List.of(declined
-                ? message("error", "payment_declined", "$.payment", "the card was declined")
-                : message("error", "payment_invalid", "$.payment", "the payment credential is not valid")));
+        // The merchant answers payment_declined for an invalid token too; only the content differs.
+        return ok(200, s, List.of(error("payment_declined", Optional.of("$.payment"),
+                "Payment was declined: " + (declined ? "card_declined" : "invalid_token"), "recoverable")));
     }
 
     private CallOutcome<CheckoutView> doCancel(SessionId id) {
@@ -502,14 +516,16 @@ public final class FaultyMerchantModel implements MerchantGateway {
             return notFound(id);
         }
         switch (s.status) {
-            case INCOMPLETE, READY_FOR_COMPLETE -> {
-                s.status = CheckoutStatus.CANCELED;
-                return ok(200, s, List.of());
+            case COMPLETED -> {
+                return ok(200, s, List.of(error("already_completed", Optional.empty(),
+                        "Checkout is completed and cannot be canceled", "unrecoverable")));
             }
-            case COMPLETE_IN_PROGRESS, COMPLETED -> {
-                return ok(200, s, List.of(message("error", "checkout_not_cancelable", "checkout is " + s.status.wire())));
+            case COMPLETE_IN_PROGRESS -> {
+                return ok(200, s, List.of(error("complete_in_progress", Optional.empty(),
+                        "Checkout is being completed and cannot be canceled yet", "recoverable")));
             }
             default -> {
+                s.status = CheckoutStatus.CANCELED;
                 return ok(200, s, List.of());
             }
         }
@@ -586,6 +602,23 @@ public final class FaultyMerchantModel implements MerchantGateway {
     private static long total(Session s) {
         long subtotal = subtotal(s);
         return subtotal + tax(subtotal);
+    }
+
+    private static MerchantMessage error(String code, Optional<String> path, String content, String severity) {
+        return new MerchantMessage("error", code, path, content, Optional.of(severity));
+    }
+
+    /** Whether the complete body has a first instrument for the merchant's handler, as MerchantCore requires. */
+    private static boolean hasInstrumentForHandler(FrozenBody body) {
+        try {
+            return CanonicalJson.readObject(body.json()).get("payment") instanceof Map<?, ?> payment
+                    && payment.get("instruments") instanceof List<?> instruments
+                    && !instruments.isEmpty()
+                    && instruments.get(0) instanceof Map<?, ?> first
+                    && HANDLER_ID.equals(first.get("handler_id"));
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
     }
 
     private static MerchantMessage message(String type, String code, String content) {

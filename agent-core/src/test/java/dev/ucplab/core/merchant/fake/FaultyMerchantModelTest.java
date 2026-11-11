@@ -278,7 +278,7 @@ class FaultyMerchantModelTest {
         assertThat(merchant.orders()).singleElement().satisfies(o -> assertThat(o.totalMinor()).isEqualTo(5616));
     }
 
-    // Covers: A.1, S6 (stock re-checked at complete: incomplete with out_of_stock, no order)
+    // Covers: A.1, S6 (stock re-checked at complete: out_of_stock, status unchanged as in the merchant, no order)
     @Test
     void complete_returnsOutOfStock_whenStockRanOutAfterQuote() {
         SessionId id = createSession();
@@ -286,7 +286,7 @@ class FaultyMerchantModelTest {
 
         CheckoutView view = ok(merchant.complete(id, PAY_OK, COMPLETE_KEY));
 
-        assertThat(view.status()).isEqualTo(CheckoutStatus.INCOMPLETE);
+        assertThat(view.status()).isEqualTo(CheckoutStatus.READY_FOR_COMPLETE);
         assertThat(codes(view)).containsExactly("out_of_stock");
         assertThat(merchant.orders()).isEmpty();
     }
@@ -317,7 +317,185 @@ class FaultyMerchantModelTest {
 
         assertThat(canceled.status()).isEqualTo(CheckoutStatus.CANCELED);
         assertThat(refused.status()).isEqualTo(CheckoutStatus.COMPLETED);
-        assertThat(codes(refused)).containsExactly("checkout_not_cancelable");
+        assertThat(codes(refused)).containsExactly("already_completed");
+    }
+
+    private static MerchantMessage only(CheckoutView v) {
+        assertThat(v.messages()).hasSize(1);
+        return v.messages().get(0);
+    }
+
+    // Covers: A.1, S6 (mirrors MerchantCore.complete: too little stock leaves the status as it was, ready_for_complete,
+    // and answers an out_of_stock error on that line; no charge, no stock taken, no order)
+    @Test
+    void complete_onInsufficientStock_keepsStatus_andAnswersOutOfStockError() {
+        SessionId id = createSession();
+        merchant.setStock("item_123", 1);
+
+        CheckoutView view = ok(merchant.complete(id, PAY_OK, COMPLETE_KEY));
+
+        assertThat(view.status()).isEqualTo(CheckoutStatus.READY_FOR_COMPLETE);
+        assertThat(only(view)).satisfies(m -> {
+            assertThat(m.type()).isEqualTo("error");
+            assertThat(m.code()).isEqualTo("out_of_stock");
+            assertThat(m.path()).contains("$.line_items[0]");
+            assertThat(m.severity()).contains("recoverable");
+        });
+        assertThat(merchant.orders()).isEmpty();
+        assertThat(merchant.stock("item_123")).isEqualTo(1);
+    }
+
+    // Covers: A.1, S5 (a changed price: the merchant refreshes the lines and totals to the new price, sets incomplete
+    // and warns price_changed on $.totals; it charges nothing)
+    @Test
+    void complete_onPriceChange_refreshesLinesAndTotals_andWarns() {
+        SessionId id = createSession();
+        merchant.setPrice("item_123", 2600);
+
+        CheckoutView view = ok(merchant.complete(id, PAY_OK, COMPLETE_KEY));
+
+        assertThat(view.status()).isEqualTo(CheckoutStatus.INCOMPLETE);
+        assertThat(view.lines()).singleElement().satisfies(l -> assertThat(l.unitPriceMinor()).isEqualTo(2600));
+        assertThat(view.totalMinor()).isEqualTo(5616);
+        assertThat(only(view)).satisfies(m -> {
+            assertThat(m.type()).isEqualTo("warning");
+            assertThat(m.code()).isEqualTo("price_changed");
+            assertThat(m.path()).contains("$.totals");
+        });
+        assertThat(ok(merchant.get(id)).totalMinor()).isEqualTo(5616);
+    }
+
+    // Covers: A.1 (the merchant checks stock before it reports a price change: on one session with both, only the
+    // out_of_stock answer comes back and the prices are not refreshed)
+    @Test
+    void complete_withPriceChangeAndLowStock_answersOutOfStockOnly() {
+        SessionId id = createSession();
+        merchant.setPrice("item_123", 2600);
+        merchant.setStock("item_123", 1);
+
+        CheckoutView view = ok(merchant.complete(id, PAY_OK, COMPLETE_KEY));
+
+        assertThat(view.status()).isEqualTo(CheckoutStatus.READY_FOR_COMPLETE);
+        assertThat(codes(view)).containsExactly("out_of_stock");
+        assertThat(view.lines()).singleElement().satisfies(l -> assertThat(l.unitPriceMinor()).isEqualTo(2500));
+    }
+
+    // Covers: A.1, A.2 (a declined card and an invalid token both answer payment_declined on $.payment, status
+    // ready_for_complete; the content says why)
+    @Test
+    void complete_onDeclinedOrInvalidToken_answersPaymentDeclined() {
+        SessionId id = createSession();
+        FrozenBody invalid = CheckoutWire.completeBody(PaymentInstrument.mockCard("pi_1", "tok_wat"));
+
+        CheckoutView declined = ok(merchant.complete(id, PAY_DECLINE, COMPLETE_KEY));
+        CheckoutView bad = ok(merchant.complete(id, invalid, COMPLETE_KEY_1));
+
+        for (CheckoutView v : List.of(declined, bad)) {
+            assertThat(v.status()).isEqualTo(CheckoutStatus.READY_FOR_COMPLETE);
+            assertThat(only(v)).satisfies(m -> {
+                assertThat(m.code()).isEqualTo("payment_declined");
+                assertThat(m.path()).contains("$.payment");
+                assertThat(m.severity()).contains("recoverable");
+            });
+        }
+        assertThat(only(declined).content()).contains("card_declined");
+        assertThat(only(bad).content()).contains("invalid_token");
+    }
+
+    // Covers: A.1 (a complete with no instrument for the merchant's handler answers a recoverable "missing" error on
+    // $.payment.instruments, status unchanged)
+    @Test
+    void complete_withoutInstrumentForTheHandler_answersMissing() {
+        SessionId id = createSession();
+
+        CheckoutView view = ok(merchant.complete(id, new FrozenBody("{}"), COMPLETE_KEY));
+
+        assertThat(view.status()).isEqualTo(CheckoutStatus.READY_FOR_COMPLETE);
+        assertThat(only(view)).satisfies(m -> {
+            assertThat(m.code()).isEqualTo("missing");
+            assertThat(m.path()).contains("$.payment.instruments");
+        });
+        assertThat(merchant.orders()).isEmpty();
+    }
+
+    // Covers: A.1 (complete on a canceled checkout: checkout_canceled, an unrecoverable error)
+    @Test
+    void complete_onCanceledCheckout_answersCheckoutCanceled() {
+        SessionId id = createSession();
+        ok(merchant.cancel(id, IdempotencyKey.derive(INTENT, MutatingOp.CANCEL, 0)));
+
+        CheckoutView view = ok(merchant.complete(id, PAY_OK, COMPLETE_KEY));
+
+        assertThat(view.status()).isEqualTo(CheckoutStatus.CANCELED);
+        assertThat(only(view)).satisfies(m -> {
+            assertThat(m.type()).isEqualTo("error");
+            assertThat(m.code()).isEqualTo("checkout_canceled");
+            assertThat(m.severity()).contains("unrecoverable");
+        });
+    }
+
+    // Covers: A.1 (complete on a checkout that is not ready, no buyer email: not_ready, a recoverable error)
+    @Test
+    void complete_onIncompleteCheckout_answersNotReady() {
+        SessionId id = ok(merchant.create(
+                new CreateCheckout(List.of(new ProposedLine("item_123", 1)), Optional.empty()), CREATE_KEY)).id();
+
+        CheckoutView view = ok(merchant.complete(id, PAY_OK, COMPLETE_KEY));
+
+        assertThat(view.status()).isEqualTo(CheckoutStatus.INCOMPLETE);
+        assertThat(only(view)).satisfies(m -> {
+            assertThat(m.code()).isEqualTo("not_ready");
+            assertThat(m.severity()).contains("recoverable");
+        });
+    }
+
+    // Covers: A.1, A.3 (while a charge runs: complete answers complete_in_progress, update answers checkout_busy,
+    // cancel answers complete_in_progress; all recoverable errors; after the charge, cancel answers already_completed)
+    @Test
+    void whileACompleteIsInProgress_thenAfter_theMerchantsCodesAreUsed() {
+        SessionId id = createSession();
+        merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 1, new Fault.HoldInProgress(Duration.ofSeconds(3))));
+        merchant.complete(id, PAY_OK, COMPLETE_KEY);
+
+        CheckoutView again = ok(merchant.complete(id, PAY_OK, COMPLETE_KEY_1));
+        CheckoutView update = ok(merchant.update(id,
+                UpdateCheckout.of(List.of(new ProposedLine("item_123", 1)), Optional.of("a@example.com")),
+                IdempotencyKey.derive(INTENT, MutatingOp.UPDATE, 0)));
+        CheckoutView cancel = ok(merchant.cancel(id, IdempotencyKey.derive(INTENT, MutatingOp.CANCEL, 0)));
+
+        assertThat(only(again)).satisfies(m -> {
+            assertThat(m.code()).isEqualTo("complete_in_progress");
+            assertThat(m.type()).isEqualTo("error");
+            assertThat(m.severity()).contains("recoverable");
+        });
+        assertThat(only(update)).satisfies(m -> {
+            assertThat(m.code()).isEqualTo("checkout_busy");
+            assertThat(m.type()).isEqualTo("error");
+            assertThat(m.severity()).contains("recoverable");
+        });
+        assertThat(only(cancel).code()).isEqualTo("complete_in_progress");
+        assertThat(cancel.status()).isEqualTo(CheckoutStatus.COMPLETE_IN_PROGRESS);
+
+        clock.advance(Duration.ofSeconds(3));
+        CheckoutView late = ok(merchant.cancel(id, IdempotencyKey.derive(new IntentId("i9"), MutatingOp.CANCEL, 0)));
+
+        assertThat(only(late)).satisfies(m -> {
+            assertThat(m.code()).isEqualTo("already_completed");
+            assertThat(m.severity()).contains("unrecoverable");
+        });
+        assertThat(late.status()).isEqualTo(CheckoutStatus.COMPLETED);
+    }
+
+    // Covers: A.1 (cancel of an already canceled checkout is a no-op that answers canceled, no message)
+    @Test
+    void cancel_ofACanceledCheckout_answersCanceledWithoutMessage() {
+        SessionId id = createSession();
+        ok(merchant.cancel(id, IdempotencyKey.derive(INTENT, MutatingOp.CANCEL, 0)));
+
+        CheckoutView again = ok(merchant.cancel(id, IdempotencyKey.derive(new IntentId("i9"), MutatingOp.CANCEL, 0)));
+
+        assertThat(again.status()).isEqualTo(CheckoutStatus.CANCELED);
+        assertThat(again.messages()).isEmpty();
     }
 
     // Covers: A.1 (GET of an unknown session is 404)

@@ -30,6 +30,7 @@ import dev.ucplab.core.merchant.IdempotencyKey;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MutatingOp;
 import dev.ucplab.core.merchant.SessionId;
+import dev.ucplab.core.merchant.UpdateCheckout;
 import dev.ucplab.core.merchant.fake.CallRecord;
 import dev.ucplab.core.merchant.fake.Fault;
 import dev.ucplab.core.merchant.fake.FaultRule;
@@ -424,10 +425,14 @@ class DefaultOrchestratorTest {
         lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 1, new Fault.PriceChange("item_123", 2600)));
         assertThat(w.orchestrator().advance(id).after()).isEqualTo(IntentState.QUOTING);
         assertThat(lab.intent(id).requoteCount()).isEqualTo(1);
-        // A late complete lands on the session after the re-quote began (here sent outside the orchestrator).
-        lab.merchant.setPrice("item_123", 2500);
+        // A late complete lands on the session after the re-quote began (here sent outside the orchestrator). The merchant
+        // refreshed the session to the new price when it reported price_changed, so the catalog stays at that price.
+        // The merchant leaves a session incomplete after price_changed, so a competing worker's update makes it ready
+        // again first; only then can a late complete land.
         MerchantAttempt first = attempts(id, AttemptOp.COMPLETE).get(0);
         SessionId session = lab.intent(id).sessionId().orElseThrow();
+        lab.merchant.update(session, UpdateCheckout.of(TWO_SHIRTS, Optional.of("alice@example.com")),
+                IdempotencyKey.derive(id, MutatingOp.UPDATE, 5));
         assertThat(lab.merchant.complete(session, first.requestBody().orElseThrow(),
                 IdempotencyKey.derive(id, MutatingOp.COMPLETE, 5))).isInstanceOf(CallOutcome.Ok.class);
         assertThat(lab.merchant.orders()).hasSize(1);
@@ -458,10 +463,13 @@ class DefaultOrchestratorTest {
         lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 2, new Fault.HoldInProgress(Duration.ofSeconds(15))));
         assertThat(w.orchestrator().advance(id).after()).isEqualTo(IntentState.QUOTING);
         // A late complete reaches the session after the re-quote began and is still charging (sent outside the
-        // orchestrator).
-        lab.merchant.setPrice("item_123", 2500);
+        // orchestrator). The catalog stays at the new price the session was refreshed to.
+        // The merchant leaves a session incomplete after price_changed, so a competing worker's update makes it ready
+        // again first; only then can a late complete land.
         MerchantAttempt first = attempts(id, AttemptOp.COMPLETE).get(0);
         SessionId session = lab.intent(id).sessionId().orElseThrow();
+        lab.merchant.update(session, UpdateCheckout.of(TWO_SHIRTS, Optional.of("alice@example.com")),
+                IdempotencyKey.derive(id, MutatingOp.UPDATE, 5));
         assertThat(lab.merchant.complete(session, first.requestBody().orElseThrow(),
                 IdempotencyKey.derive(id, MutatingOp.COMPLETE, 5))).isInstanceOf(CallOutcome.Uncertain.class);
         assertThat(lab.merchant.session(session).orElseThrow().status()).isEqualTo(CheckoutStatus.COMPLETE_IN_PROGRESS);
