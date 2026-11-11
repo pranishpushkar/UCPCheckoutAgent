@@ -295,6 +295,8 @@ Any event that is not in this table for the current state is a programming error
 | QUOTING | create_rejected | none | FAILED\_NOT\_CHARGED | no side effect: the merchant answered a create with every item unavailable (200, `ucp.status` error, no session id), so no session exists and nothing is cancelled. The gateway reports it as `CallOutcome.Rejected` (Appendix B, 8.1) |
 | COMPLETING | protocol\_error | none | RECONCILING | a `ProtocolError` on `complete` never settles the outcome, so it is never FAILED\_NOT\_CHARGED. Reconciliation reads the session and decides |
 
+**A definitive failure answer to `complete` \[CONTRACT\].** When `complete` is answered with `Ok`, the status is neither `completed` nor `complete_in_progress`, and at least one message has type `error`, the merchant has said it did not charge: the intent goes to FAILED\_NOT\_CHARGED through the existing COMPLETING `payment_declined` row (cancel the session), with the first error code as `failure_reason`. The earlier branches still come first: `completed` with an order is COMPLETED, and `incomplete` (a price change or an incomplete checkout) is a re-quote. An `Ok` with no error message and no terminal status still goes to RECONCILING. A response with status `complete_in_progress` always reconciles, whatever its messages.
+
 **Retries live in one layer \[CONTRACT\].** All retries of a create or update happen inside the gateway (8.2: up to 3, so 4 attempts, same key). The orchestrator does not retry QUOTING calls: it makes one call per step, and a final `NotSent`, `Uncertain` or retryable `ProtocolError` from the gateway goes straight to the exhausted row above (QUOTING, retries exhausted, FAILED\_NOT\_CHARGED, reason `quote_retries_exhausted`). The `RETRIES_LEFT` rows for `not_sent` and `uncertain` stay in the table, but the orchestrator's retry budget for QUOTING is 0, so their guard never holds. `propose` makes one create call and does not loop. The I5 bound for QUOTING (7.6, about 26 s: 4 attempts of 5 s plus backoff) stays, because it is the gateway's worst case. `advance` never sleeps.
 
 ### 7.3 Step function and write-ahead protocol \[CONTRACT\]
@@ -371,6 +373,8 @@ A `RecoveryWorker` runs every 5 s and once at startup. It selects intents in `QU
 
 Each crash adds at most one lease period plus one worker period (30 s + 5 s = 35 s) before another worker takes over.
 
+**M3 note, a crash in QUOTING.** The orchestrator does not resend a QUOTING call after a crash (7.2): an intent whose create attempt was left `SENT` ends FAILED\_NOT\_CHARGED, and the merchant may hold a session for it that no order will ever use. `RecoveryWorker` handles this: it re-sends the create under the same idempotency key and the same frozen body only to learn the session id (the merchant returns the stored result), and then cancels that session. It never completes it.
+
 Lease rules \[CONTRACT\]:
 
 - **Bounded steps.** One `advance` makes at most one merchant request, so it lasts at most the longest request timeout (10 s, section 8.3) plus persistence. Configuration validation fails at startup unless `lease` is at least 2 × the longest request timeout + 5 s (defaults: 30 s against 25 s).
@@ -427,7 +431,7 @@ The raw 2026-08-25 schema has a sixth checkout status, `requires_escalation`, wh
 
 Backoff: exponential from 200 ms, factor 2, cap 2 s, full jitter.
 
-**Retry-After.** The value is seconds or an HTTP-date; a date is parsed against the injected `Clock`. If the wait is at most 2 s (the backoff cap), the gateway sleeps and retries. If it is longer, the gateway stops and returns `ProtocolError` with `retryAfter`; the orchestrator does not wait and retry a QUOTING call (7.2, "Retries live in one layer"); reconciliation reads use it for `nextAttemptAt` (7.5).
+**Retry-After.** The value is seconds or an HTTP-date; a date is parsed against the injected `Clock`. If the wait is at most 2 s (the backoff cap), the gateway sleeps and retries. If it is longer, the gateway stops and returns `ProtocolError` with `retryAfter`; the orchestrator does not wait and retry a QUOTING call (7.2, "Retries live in one layer"); it never delays QUOTING, which has no orchestrator retries (7.2). It delays only a reconciliation poll or a cancel: the next attempt is at the later of the normal next poll time and `retryAfter`, and never later than that state's deadline (7.5, 7.6).
 
 **Retries live in one layer.** The gateway does every in-call retry. The orchestrator does not retry QUOTING calls (7.2).
 
@@ -452,7 +456,7 @@ One circuit breaker per `host:port`, held in memory and driven by the injected `
 - An update (full replacement) sends the line item ids from the last `CheckoutView` the intent saw (taken from its last stored response, never fetched) and resends every buyer field of that view (`email`, `first_name`, `last_name`, `phone_number`), because an update replaces the whole session.
 - Ignore unknown JSON fields. Amounts are integers in minor units.
 - Responses are parsed with a lenient reader in core (`LenientJson`): `null`, decimals and unknown fields are allowed and ignored wherever we do not use them. A field we do use (an amount, a quantity) must still be an integer of the right type, or the body is invalid (8.1). The canonical writer and the hashes (7.4, 9.2) stay strict: `CanonicalJson` refuses `null` and floating point.
-- HTTP uses `java.net.http`. No Jackson in `agent-ucp`; it arrives with `agent-service`.
+- HTTP uses `java.net.http`, HTTP/1.1 only (no h2c upgrade). The transport refuses to start if the system property `jdk.httpclient.enableAllMethodRetry` is set to true, because the JDK would then re-send a POST on its own, outside the retry matrix of 8.2 and the one-call rule for `complete`. (Without it the JDK may still re-send an idempotent GET by itself, which is harmless for a read.) No Jackson in `agent-ucp`; it arrives with `agent-service`.
 
 ### 8.5 Gateway binding and discovery \[CONTRACT\]
 
