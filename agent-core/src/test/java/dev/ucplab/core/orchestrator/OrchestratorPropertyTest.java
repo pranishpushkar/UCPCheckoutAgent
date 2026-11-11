@@ -89,10 +89,10 @@ class OrchestratorPropertyTest {
     void invariants_i5Bounds_matchLivenessTable() {
         OrchestratorConfig c = OrchestratorConfig.defaults();
         Duration quoting = Invariants.WORKER_PASS
-                .plus(Invariants.REQUEST_TIMEOUT.multipliedBy(c.maxQuoteRetries() + 1L))
-                .plus(Invariants.worstBackoff(c.maxQuoteRetries()));
+                .plus(Invariants.REQUEST_TIMEOUT.multipliedBy(Invariants.GATEWAY_RETRIES + 1L))
+                .plus(Invariants.worstBackoff(Invariants.GATEWAY_RETRIES));
 
-        assertThat(Invariants.worstBackoff(c.maxQuoteRetries())).isEqualTo(Duration.ofMillis(1400));
+        assertThat(Invariants.worstBackoff(Invariants.GATEWAY_RETRIES)).isEqualTo(Duration.ofMillis(1400));
         assertThat(quoting).isEqualTo(Duration.ofMillis(26_400));
         assertThat(Invariants.worstBackoff(6)).isEqualTo(Duration.ofMillis(200 + 400 + 800 + 1600 + 2000 + 2000));
         assertThat(c.lease().plus(Invariants.WORKER_PASS)).isEqualTo(Duration.ofSeconds(35));

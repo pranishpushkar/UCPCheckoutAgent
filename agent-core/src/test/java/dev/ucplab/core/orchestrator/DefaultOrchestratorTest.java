@@ -30,6 +30,7 @@ import dev.ucplab.core.merchant.IdempotencyKey;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MutatingOp;
 import dev.ucplab.core.merchant.SessionId;
+import dev.ucplab.core.merchant.UpdateCheckout;
 import dev.ucplab.core.merchant.fake.CallRecord;
 import dev.ucplab.core.merchant.fake.Fault;
 import dev.ucplab.core.merchant.fake.FaultRule;
@@ -39,6 +40,8 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class DefaultOrchestratorTest {
 
@@ -91,33 +94,37 @@ class DefaultOrchestratorTest {
         assertThat(lab.merchant.sessionsCreated()).isEqualTo(1);
     }
 
-    // Covers: 7.2 (QUOTING not_sent, retries left), 8.2, S1, I4 (create is retried under the same key; one session)
+    // Covers: 7.2 (QUOTING retries exhausted), 8.2 "Retries live in one layer" (the gateway retries; the orchestrator
+    // makes one create call and a final NotSent goes straight to FAILED_NOT_CHARGED), I4
     @Test
-    void propose_retriesCreateUnderSameKey_afterNotSent() {
+    void propose_failsNotCharged_afterOneNotSent_becauseOnlyTheGatewayRetries() {
         lab.merchant.addRule(FaultRule.nth(MerchantCall.CREATE, 1, new Fault.NotSent()));
-        lab.merchant.addRule(FaultRule.nth(MerchantCall.CREATE, 2, new Fault.NotSent()));
 
         ProposalResult r = lab.propose(w, TWO_SHIRTS);
 
-        assertThat(r.state()).isEqualTo(AWAITING_APPROVAL);
-        assertThat(lab.merchant.sessionsCreated()).isEqualTo(1);
-        assertThat(attempts(r.intentId(), AttemptOp.CREATE)).hasSize(3)
-                .extracting(a -> a.idempotencyKey().orElseThrow())
-                .containsOnly(IdempotencyKey.derive(r.intentId(), MutatingOp.CREATE, 0));
+        assertThat(r.state()).isEqualTo(FAILED_NOT_CHARGED);
+        assertThat(lab.intent(r.intentId()).failureReason()).contains(DefaultOrchestrator.QUOTE_RETRIES_EXHAUSTED);
+        assertThat(lab.merchant.sessionsCreated()).isZero();
+        assertThat(attempts(r.intentId(), AttemptOp.CREATE)).singleElement()
+                .satisfies(a -> assertThat(a.idempotencyKey()).contains(
+                        IdempotencyKey.derive(r.intentId(), MutatingOp.CREATE, 0)));
+        assertThat(lab.merchant.delivered(MerchantCall.CREATE)).isZero();
     }
 
-    // Covers: 7.2 (QUOTING retries exhausted), I4 (every resend reuses the key, so the merchant made one session)
+    // Covers: 7.2 (QUOTING retries exhausted), 8.2 (one call: an Uncertain create is not re-sent by the orchestrator),
+    // I4 (the one session the merchant made is never completed)
     @Test
-    void propose_failsNotCharged_whenCreateStaysUncertain() {
+    void propose_failsNotCharged_afterOneUncertain_withoutResending() {
         lab.merchant.addRule(FaultRule.every(MerchantCall.CREATE, new Fault.CommitThenDrop()));
 
         ProposalResult r = lab.propose(w, TWO_SHIRTS);
 
         assertThat(r.state()).isEqualTo(FAILED_NOT_CHARGED);
         assertThat(lab.intent(r.intentId()).failureReason()).contains(DefaultOrchestrator.QUOTE_RETRIES_EXHAUSTED);
-        assertThat(attempts(r.intentId(), AttemptOp.CREATE)).hasSize(1 + lab.config.maxQuoteRetries());
+        assertThat(attempts(r.intentId(), AttemptOp.CREATE)).hasSize(1);
         assertThat(lab.merchant.sessionsCreated()).isEqualTo(1);
         assertThat(lab.merchant.orders()).isEmpty();
+        assertThat(lab.merchant.delivered(MerchantCall.CREATE)).isEqualTo(1);
     }
 
     // Covers: P2 (a quote above the per-purchase cap ends the intent without an approval and cancels the session)
@@ -131,6 +138,70 @@ class DefaultOrchestratorTest {
         assertThat(lab.drive(w, r.intentId())).isEqualTo(FAILED_NOT_CHARGED);
         assertThat(lab.merchant.session(lab.intent(r.intentId()).sessionId().orElseThrow()).orElseThrow().status())
                 .isEqualTo(CheckoutStatus.CANCELED);
+    }
+
+    // Covers: 7.2 (QUOTING create_rejected -> FAILED_NOT_CHARGED), 8.1, I1 (every item unavailable: no session exists,
+    // so nothing is retried or cancelled and no order can follow)
+    @Test
+    void propose_failsNotCharged_whenCreateIsRejectedBecauseEveryItemIsUnavailable() {
+        lab.merchant.setStock("item_789", 0);
+
+        ProposalResult r = lab.propose(w, List.of(new ProposedLine("item_789", 1)));
+
+        assertThat(r.state()).isEqualTo(FAILED_NOT_CHARGED);
+        assertThat(lab.intent(r.intentId()).failureReason()).contains(DefaultOrchestrator.OUT_OF_STOCK);
+        assertThat(lab.intent(r.intentId()).sessionId()).isEmpty();
+        assertThat(attempts(r.intentId(), AttemptOp.CREATE)).hasSize(1);
+        assertThat(lab.drive(w, r.intentId())).isEqualTo(FAILED_NOT_CHARGED);
+        assertThat(attempts(r.intentId(), AttemptOp.CANCEL)).isEmpty();
+        assertThat(lab.merchant.sessionsCreated()).isZero();
+        assertThat(lab.merchant.orders()).isEmpty();
+    }
+
+    // Covers: I2, Q2 (no partial approval: a quote whose quantity the merchant cut, with its quantity_adjusted
+    // warning, ends FAILED_NOT_CHARGED with the session cancelled; no approval is opened and nothing is bought)
+    @Test
+    void propose_failsNotChargedAndCancels_whenMerchantAdjustsTheQuantity() {
+        Lab.Worker adjusting = lab.worker("worker-adj", new QuantityAdjustingGateway(lab.merchant, 1, true, false));
+
+        ProposalResult r = adjusting.orchestrator().propose(lab.alice(), Lab.SHOP, TWO_SHIRTS, "buy");
+
+        assertThat(r.state()).isEqualTo(FAILED_NOT_CHARGED);
+        assertThat(lab.intent(r.intentId()).failureReason()).contains("quantity_adjusted");
+        assertThat(lab.approvals.listForSystem(r.intentId())).isEmpty();
+        assertThat(lab.drive(adjusting, r.intentId())).isEqualTo(FAILED_NOT_CHARGED);
+        assertThat(lab.merchant.session(lab.intent(r.intentId()).sessionId().orElseThrow()).orElseThrow().status())
+                .isEqualTo(CheckoutStatus.CANCELED);
+        assertThat(lab.merchant.orders()).isEmpty();
+    }
+
+    // Covers: I2, I1, Q2 (the same on a re-quote: after a price change the update comes back with a reduced quantity;
+    // no second approval is opened and no order is created at the reduced quantity)
+    @Test
+    void requote_failsNotCharged_whenMerchantAdjustsTheQuantity() {
+        Lab.Worker adjusting = lab.worker("worker-adj", new QuantityAdjustingGateway(lab.merchant, 1, true, true));
+        IntentId id = adjusting.orchestrator().propose(lab.alice(), Lab.SHOP, TWO_SHIRTS, "buy").intentId();
+        assertThat(lab.decide(adjusting, id, true)).isInstanceOf(ApprovalDecision.Approved.class);
+        lab.merchant.setPrice("item_123", 2600);
+
+        assertThat(lab.drive(adjusting, id)).isEqualTo(FAILED_NOT_CHARGED);
+
+        assertThat(lab.intent(id).failureReason()).contains("quantity_adjusted");
+        assertThat(lab.approvals.listForSystem(id)).hasSize(1);
+        assertThat(lab.merchant.orders()).isEmpty();
+    }
+
+    // Covers: I2 (a quote whose lines differ from the proposal is refused even with no warning: the check is on the
+    // lines, not on a message)
+    @Test
+    void propose_failsNotCharged_whenQuoteLinesDifferFromTheProposal() {
+        Lab.Worker adjusting = lab.worker("worker-adj", new QuantityAdjustingGateway(lab.merchant, 1, false, false));
+
+        ProposalResult r = adjusting.orchestrator().propose(lab.alice(), Lab.SHOP, TWO_SHIRTS, "buy");
+
+        assertThat(r.state()).isEqualTo(FAILED_NOT_CHARGED);
+        assertThat(lab.intent(r.intentId()).failureReason()).contains("quote_lines_differ");
+        assertThat(lab.approvals.listForSystem(r.intentId())).isEmpty();
     }
 
     // Covers: FR3, 7.2 (AWAITING_APPROVAL expired -> REJECTED, then cancel session)
@@ -237,6 +308,115 @@ class DefaultOrchestratorTest {
         assertThat(lab.clock.instant()).isBefore(secondKeySent.plus(lab.config.reconcileDeadline()));
     }
 
+    // Covers: 7.2 (COMPLETING protocol_error -> RECONCILING), 8.1, I1 (a ProtocolError on complete never settles the
+    // outcome: never FAILED_NOT_CHARGED; reconciliation reads the session, and a resend reuses the same key)
+    @ParameterizedTest
+    @ValueSource(ints = {400, 401, 403, 404, 409, 422})
+    void complete_movesToReconciling_onProtocolError(int status) {
+        IntentId id = approved();
+        lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 1, new Fault.Reject(status, "rejected", Optional.empty())));
+
+        StepResult step = w.orchestrator().advance(id);
+
+        assertThat(step.after()).isEqualTo(RECONCILING);
+        assertThat(lab.intent(id).failureReason()).isEmpty();
+        assertThat(attempts(id, AttemptOp.COMPLETE)).singleElement().satisfies(a -> {
+            assertThat(a.status()).isEqualTo(AttemptStatus.UNCERTAIN);
+            assertThat(a.httpStatus()).contains(status);
+        });
+        assertThat(lab.intents.events(id)).filteredOn(e -> e.type().equals("transition"))
+                .extracting(e -> e.payloadJson())
+                .anySatisfy(p -> assertThat(p).contains("\"from\":\"COMPLETING\"")
+                        .contains("\"event\":\"PROTOCOL_ERROR\"").contains("\"to\":\"RECONCILING\""));
+        assertThat(lab.merchant.orders()).isEmpty();
+
+        assertThat(lab.drive(w, id)).isEqualTo(COMPLETED);
+        assertThat(lab.merchant.orders()).hasSize(1);
+        assertThat(lab.merchant.sessionsCreated()).isEqualTo(1);
+        assertThat(attempts(id, AttemptOp.COMPLETE)).extracting(a -> a.idempotencyKey().orElseThrow())
+                .containsOnly(IdempotencyKey.derive(id, MutatingOp.COMPLETE, 0));
+    }
+
+    // Covers: decision L, 8.4 (a re-quote's update carries the line id the merchant gave in its last response, and the
+    // buyer, because an update replaces the whole session; the ids come from the stored response, with no extra call)
+    @Test
+    void requote_sendsLineIdsAndBuyerFromTheLastResponse() {
+        IntentId id = approved();
+        lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 1, new Fault.PriceChange("item_123", 2600)));
+
+        assertThat(w.orchestrator().advance(id).after()).isEqualTo(IntentState.QUOTING);
+        int getsBefore = lab.merchant.delivered(MerchantCall.GET);
+        int updatesBefore = lab.merchant.delivered(MerchantCall.UPDATE);
+        assertThat(w.orchestrator().advance(id).after()).isEqualTo(AWAITING_APPROVAL);
+
+        assertThat(lab.merchant.delivered(MerchantCall.UPDATE)).isEqualTo(updatesBefore + 1);
+        assertThat(lab.merchant.delivered(MerchantCall.GET)).isEqualTo(getsBefore);
+        assertThat(attempts(id, AttemptOp.UPDATE)).singleElement().satisfies(a -> {
+            String body = a.requestBody().orElseThrow().json();
+            assertThat(body).contains("\"id\":\"li_1\"").contains("\"buyer\":{\"email\":\"alice@example.com\"");
+        });
+    }
+
+    private IntentId approvedWith(Lab.Worker worker) {
+        IntentId id = worker.orchestrator().propose(lab.alice(), Lab.SHOP, TWO_SHIRTS, "buy").intentId();
+        assertThat(lab.decide(worker, id, true)).isInstanceOf(ApprovalDecision.Approved.class);
+        return id;
+    }
+
+    // Covers: 7.2, I1 (complete answered Ok with a status that is neither completed nor complete_in_progress and an
+    // error message is the merchant saying "not charged": FAILED_NOT_CHARGED, session cancelled, failure_reason is
+    // the error code; no reconciliation, no resend)
+    @Test
+    void complete_endsFailedNotCharged_onOkWithErrorMessageAndNoTerminalStatus() {
+        Lab.Worker answering = lab.worker("worker-ans", new CompleteAnswerGateway(lab.merchant,
+                CheckoutStatus.READY_FOR_COMPLETE, List.of(CompleteAnswerGateway.error("out_of_stock"))));
+        IntentId id = approvedWith(answering);
+
+        assertThat(lab.drive(answering, id)).isEqualTo(FAILED_NOT_CHARGED);
+
+        assertThat(lab.intent(id).failureReason()).contains("out_of_stock");
+        assertThat(attempts(id, AttemptOp.COMPLETE)).singleElement()
+                .satisfies(a -> assertThat(a.status()).isEqualTo(AttemptStatus.RESPONDED));
+        assertThat(lab.merchant.session(lab.intent(id).sessionId().orElseThrow()).orElseThrow().status())
+                .isEqualTo(CheckoutStatus.CANCELED);
+        assertThat(lab.merchant.orders()).isEmpty();
+    }
+
+    // Covers: 7.2 (any error code counts; an unknown one is kept as complete_error:<code> and still cancels the session)
+    @Test
+    void complete_endsFailedNotCharged_forAnyErrorCode_andCancels() {
+        Lab.Worker answering = lab.worker("worker-ans", new CompleteAnswerGateway(lab.merchant,
+                CheckoutStatus.CANCELED, List.of(CompleteAnswerGateway.error("checkout_canceled"))));
+        IntentId id = approvedWith(answering);
+
+        assertThat(lab.drive(answering, id)).isEqualTo(FAILED_NOT_CHARGED);
+
+        assertThat(lab.intent(id).failureReason()).contains("complete_error:checkout_canceled");
+        assertThat(attempts(id, AttemptOp.CANCEL)).hasSize(1);
+    }
+
+    // Covers: 7.2 (Ok with only a warning and no terminal status does not settle anything: RECONCILING)
+    @Test
+    void complete_goesToReconciling_onOkWithoutErrorMessage() {
+        Lab.Worker answering = lab.worker("worker-ans", new CompleteAnswerGateway(lab.merchant,
+                CheckoutStatus.READY_FOR_COMPLETE, List.of(CompleteAnswerGateway.warning("quantity_adjusted"))));
+        IntentId id = approvedWith(answering);
+
+        assertThat(answering.orchestrator().advance(id).after()).isEqualTo(RECONCILING);
+        assertThat(attempts(id, AttemptOp.COMPLETE)).singleElement()
+                .satisfies(a -> assertThat(a.status()).isEqualTo(AttemptStatus.UNCERTAIN));
+    }
+
+    // Covers: 7.2 (complete_in_progress always reconciles, whatever its messages: a charge may be running)
+    @Test
+    void complete_goesToReconciling_whenStatusIsCompleteInProgress_evenWithAnErrorMessage() {
+        Lab.Worker answering = lab.worker("worker-ans", new CompleteAnswerGateway(lab.merchant,
+                CheckoutStatus.COMPLETE_IN_PROGRESS, List.of(CompleteAnswerGateway.error("complete_in_progress"))));
+        IntentId id = approvedWith(answering);
+
+        assertThat(answering.orchestrator().advance(id).after()).isEqualTo(RECONCILING);
+    }
+
     // Covers: 7.2 (defensive QUOTING row: an update shows the session completed -> RECONCILING), I1, I2 (the order is
     // recorded through reconciliation, nothing new is sent, and nothing throws)
     @Test
@@ -245,10 +425,14 @@ class DefaultOrchestratorTest {
         lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 1, new Fault.PriceChange("item_123", 2600)));
         assertThat(w.orchestrator().advance(id).after()).isEqualTo(IntentState.QUOTING);
         assertThat(lab.intent(id).requoteCount()).isEqualTo(1);
-        // A late complete lands on the session after the re-quote began (here sent outside the orchestrator).
-        lab.merchant.setPrice("item_123", 2500);
+        // A late complete lands on the session after the re-quote began (here sent outside the orchestrator). The merchant
+        // refreshed the session to the new price when it reported price_changed, so the catalog stays at that price.
+        // The merchant leaves a session incomplete after price_changed, so a competing worker's update makes it ready
+        // again first; only then can a late complete land.
         MerchantAttempt first = attempts(id, AttemptOp.COMPLETE).get(0);
         SessionId session = lab.intent(id).sessionId().orElseThrow();
+        lab.merchant.update(session, UpdateCheckout.of(TWO_SHIRTS, Optional.of("alice@example.com")),
+                IdempotencyKey.derive(id, MutatingOp.UPDATE, 5));
         assertThat(lab.merchant.complete(session, first.requestBody().orElseThrow(),
                 IdempotencyKey.derive(id, MutatingOp.COMPLETE, 5))).isInstanceOf(CallOutcome.Ok.class);
         assertThat(lab.merchant.orders()).hasSize(1);
@@ -279,10 +463,13 @@ class DefaultOrchestratorTest {
         lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 2, new Fault.HoldInProgress(Duration.ofSeconds(15))));
         assertThat(w.orchestrator().advance(id).after()).isEqualTo(IntentState.QUOTING);
         // A late complete reaches the session after the re-quote began and is still charging (sent outside the
-        // orchestrator).
-        lab.merchant.setPrice("item_123", 2500);
+        // orchestrator). The catalog stays at the new price the session was refreshed to.
+        // The merchant leaves a session incomplete after price_changed, so a competing worker's update makes it ready
+        // again first; only then can a late complete land.
         MerchantAttempt first = attempts(id, AttemptOp.COMPLETE).get(0);
         SessionId session = lab.intent(id).sessionId().orElseThrow();
+        lab.merchant.update(session, UpdateCheckout.of(TWO_SHIRTS, Optional.of("alice@example.com")),
+                IdempotencyKey.derive(id, MutatingOp.UPDATE, 5));
         assertThat(lab.merchant.complete(session, first.requestBody().orElseThrow(),
                 IdempotencyKey.derive(id, MutatingOp.COMPLETE, 5))).isInstanceOf(CallOutcome.Uncertain.class);
         assertThat(lab.merchant.session(session).orElseThrow().status()).isEqualTo(CheckoutStatus.COMPLETE_IN_PROGRESS);
@@ -336,7 +523,7 @@ class DefaultOrchestratorTest {
     void reconcile_stopsAfterMaxResends_pollsUntilLongerDeadline() {
         OrchestratorConfig d = OrchestratorConfig.defaults();
         Lab long120 = new Lab(new OrchestratorConfig(d.lease(), d.completeRequestTimeout(), d.resendQuietPeriod(),
-                Duration.ofSeconds(120), d.maxCompleteResends(), d.maxQuoteRetries(), d.pollInitial(), d.pollMax(),
+                Duration.ofSeconds(120), d.maxCompleteResends(), d.pollInitial(), d.pollMax(),
                 d.pollJitter()));
         Lab.Worker w120 = long120.worker("worker-a");
         IntentId id = long120.propose(w120, TWO_SHIRTS).intentId();
@@ -481,11 +668,11 @@ class DefaultOrchestratorTest {
         Duration poll = Duration.ofMillis(250);
         Duration pollMax = Duration.ofSeconds(2);
 
-        assertThatThrownBy(() -> new OrchestratorConfig(Duration.ofSeconds(30), ten, Duration.ofSeconds(9), minute, 3, 3,
+        assertThatThrownBy(() -> new OrchestratorConfig(Duration.ofSeconds(30), ten, Duration.ofSeconds(9), minute, 3,
                 poll, pollMax, 0.2)).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("7.5");
-        assertThatThrownBy(() -> new OrchestratorConfig(Duration.ofSeconds(24), ten, ten, minute, 3, 3,
+        assertThatThrownBy(() -> new OrchestratorConfig(Duration.ofSeconds(24), ten, ten, minute, 3,
                 poll, pollMax, 0.2)).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("7.6");
-        assertThatThrownBy(() -> new OrchestratorConfig(Duration.ofSeconds(30), ten, ten, minute, 3, 3,
+        assertThatThrownBy(() -> new OrchestratorConfig(Duration.ofSeconds(30), ten, ten, minute, 3,
                 pollMax, poll, 0.2)).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("7.5");
         assertThat(OrchestratorConfig.defaults().lease()).isEqualTo(Duration.ofSeconds(30));
         assertThat(OrchestratorConfig.defaults().resendQuietPeriod()).isEqualTo(Duration.ofSeconds(20));
@@ -497,7 +684,7 @@ class DefaultOrchestratorTest {
         OrchestratorConfig d = OrchestratorConfig.defaults();
 
         OrchestratorConfig rebuilt = new OrchestratorConfig(d.lease(), d.completeRequestTimeout(), d.resendQuietPeriod(),
-                d.reconcileDeadline(), d.maxCompleteResends(), d.maxQuoteRetries(), d.pollInitial(), d.pollMax(),
+                d.reconcileDeadline(), d.maxCompleteResends(), d.pollInitial(), d.pollMax(),
                 d.pollJitter());
 
         assertThat(rebuilt).isEqualTo(d);
@@ -511,11 +698,11 @@ class DefaultOrchestratorTest {
         OrchestratorConfig d = OrchestratorConfig.defaults();
 
         assertThatThrownBy(() -> new OrchestratorConfig(d.lease(), d.completeRequestTimeout(), d.resendQuietPeriod(),
-                d.reconcileDeadline(), 3, d.maxQuoteRetries(), d.pollInitial(), d.pollMax(), d.pollJitter()))
+                d.reconcileDeadline(), 3, d.pollInitial(), d.pollMax(), d.pollJitter()))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("7.5")
                 .hasMessageContaining("resend cap");
         assertThatThrownBy(() -> new OrchestratorConfig(d.lease(), d.completeRequestTimeout(), d.resendQuietPeriod(),
-                Duration.ofSeconds(40), 2, d.maxQuoteRetries(), d.pollInitial(), d.pollMax(), d.pollJitter()))
+                Duration.ofSeconds(40), 2, d.pollInitial(), d.pollMax(), d.pollJitter()))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("resend cap");
     }
 }

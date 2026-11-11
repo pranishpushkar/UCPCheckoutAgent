@@ -56,7 +56,7 @@ Source: https://ucp.dev/latest/specification/shopping/checkout/rest/ (version 20
 
 ### 2.2 The merchant (provided)
 
-Module `merchant/` is already built: zero dependencies, JDK 21 only, 46 self-tests passing. JDK only means java.* plus JDK-provided modules such as jdk.httpserver (com.sun.net.httpserver); no third-party dependencies. It implements the five checkout endpoints, discovery, a mock payment handler, and `/_lab/*` controls for the fault harness. Its full contract is Appendix A. It is the system under test and **must not be modified to make the agent's tests pass**.
+Module `merchant/` is already built: zero dependencies, JDK 21 only, 46 self-tests passing. JDK only means java.* plus JDK-provided modules such as jdk.httpserver (com.sun.net.httpserver); no third-party dependencies. It implements the five checkout endpoints, discovery, a mock payment handler, and `/_lab/*` controls for the fault harness. Its full contract is Appendix A. It is the system under test and **must not be modified to make the agent's tests pass**. One additive exception is approved for M2: the UCP catalog endpoints and the catalog capability in discovery (6.2, section 16). The original 46 SelfTest checks stay unchanged and passing; new checks are added beside them.
 
 Behaviours the agent must cope with: business outcomes arrive as HTTP 200; a changed price blocks completion (`price_changed`); stock is reserved before the charge; a second `complete` on a finished checkout returns it unchanged and creates no new order.
 
@@ -161,7 +161,7 @@ These are the properties the evaluation checks. Each must be enforced in code an
 | Module | Responsibility | May depend on |
 | --- | --- | --- |
 | `agent-core` | Domain model, state machine, policy, approval, ports | JDK only |
-| `agent-ucp` | `MerchantGateway` over HTTP, failure classification, retries | core |
+| `agent-ucp` | `MerchantGateway` over HTTP, failure classification, retries | core. Test scope only: `merchant`, for contract tests. `java.net.http` and core's `CanonicalJson` for HTTP and JSON; no Jackson |
 | `agent-persistence` | SQL repositories, migrations | core |
 | `agent-adk` | LLM runtime, tool definitions, prompts, `ScriptedModel` | core |
 | `agent-service` | Spring Boot wiring, REST API, CLI | all agent modules |
@@ -225,7 +225,7 @@ Exactly these five. A test asserts the tool list (I6).
 
 | Tool | Input | Output | Notes |
 | --- | --- | --- | --- |
-| `search_catalog` | `query: string`, `max_results: int (1..10)` | `items[{merchant_id, item_id, title, price_minor, currency, in_stock}]` | Backed by the merchant catalog. In M2, switch to UCP Catalog search (**VERIFY** the Catalog REST spec at https://ucp.dev/latest/specification/shopping/catalog/rest/) |
+| `search_catalog` | `query: string`, `max_results: int (1..10)` | `items[{merchant_id, item_id, title, price_minor, currency, in_stock}]` | Backed by the merchant catalog. In M2, switch to UCP Catalog search (`POST /catalog/search`, `/catalog/lookup`, `/catalog/product`; **VERIFY** the Catalog REST spec at https://ucp.dev/latest/specification/shopping/catalog/rest/). The reference merchant does not serve these yet; M2 adds them to `merchant/` as one additive commit before `CatalogClient` (2.2, section 16) |
 | `get_product` | `item_id` | one item with description | The description is untrusted text |
 | `propose_purchase` | merchant\_id, `items[{item_id, quantity 1..5}]`, `rationale (max 300 chars)` | `{intent_id, state, quote?}` | Creates the intent and obtains the quote. Returns `AWAITING_APPROVAL` or a failure state. It does not buy |
 | `get_purchase_status` | `intent_id` | `{state, order_id?, failure_reason?}` | Read only |
@@ -292,6 +292,12 @@ Any event that is not in this table for the current state is a programming error
 | COMPLETING or RECONCILING | price\_changed, checkout incomplete or observed incomplete | requote\_count has reached the P8 cap | REJECTED | failure\_reason price\_unstable, cancel session. Not ESCALATED: no money has moved and the outcome is known |
 | RECONCILING | observed ready\_for\_complete | quiet period (7.5) not yet elapsed | RECONCILING | poll again; do not resend |
 | QUOTING | an update or GET shows the session completed or complete_in_progress | none | RECONCILING | send nothing new; reconciliation records the order. Defensive: a correct orchestrator should never reach this, but it must never throw here |
+| QUOTING | create_rejected | none | FAILED\_NOT\_CHARGED | no side effect: the merchant answered a create with every item unavailable (200, `ucp.status` error, no session id), so no session exists and nothing is cancelled. The gateway reports it as `CallOutcome.Rejected` (Appendix B, 8.1) |
+| COMPLETING | protocol\_error | none | RECONCILING | a `ProtocolError` on `complete` never settles the outcome, so it is never FAILED\_NOT\_CHARGED. Reconciliation reads the session and decides |
+
+**A definitive failure answer to `complete` \[CONTRACT\].** When `complete` is answered with `Ok`, the status is neither `completed` nor `complete_in_progress`, and at least one message has type `error`, the merchant has said it did not charge: the intent goes to FAILED\_NOT\_CHARGED through the existing COMPLETING `payment_declined` row (cancel the session), with the first error code as `failure_reason`. The earlier branches still come first: `completed` with an order is COMPLETED, and `incomplete` (a price change or an incomplete checkout) is a re-quote. An `Ok` with no error message and no terminal status still goes to RECONCILING. A response with status `complete_in_progress` always reconciles, whatever its messages.
+
+**Retries live in one layer \[CONTRACT\].** All retries of a create or update happen inside the gateway (8.2: up to 3, so 4 attempts, same key). The orchestrator does not retry QUOTING calls: it makes one call per step, and a final `NotSent`, `Uncertain` or retryable `ProtocolError` from the gateway goes straight to the exhausted row above (QUOTING, retries exhausted, FAILED\_NOT\_CHARGED, reason `quote_retries_exhausted`). The `RETRIES_LEFT` rows for `not_sent` and `uncertain` stay in the table, but the orchestrator's retry budget for QUOTING is 0, so their guard never holds. `propose` makes one create call and does not loop. The I5 bound for QUOTING (7.6, about 26 s: 4 attempts of 5 s plus backoff) stays, because it is the gateway's worst case. `advance` never sleeps.
 
 ### 7.3 Step function and write-ahead protocol \[CONTRACT\]
 
@@ -315,7 +321,9 @@ Create and update are safe to resend with the same key. `complete` is never rese
 
 ### 7.4 Idempotency keys \[CONTRACT\]
 
-`key = 'ucp-' + first 26 chars of base32(sha256(intentId + '|' + op + '|' + revision))`
+`key = uuid8(sha256(intentId + '|' + op + '|' + revision))`
+
+The key is a deterministic UUID version 8 (RFC 9562): the first 16 bytes of the SHA-256 digest, with the version nibble set to 8 and the variant bits to `10`, written in the canonical 8-4-4-4-12 hexadecimal form. The inputs and the determinism are the same as before (D3); only the encoding changes. The reason: the 2026-08-25 OpenAPI declares `Idempotency-Key` as `format: uuid`, and the earlier `ucp-` plus base32 form is not a UUID. **Spec contradiction, noted not resolved:** the signatures page asks for "at least 128 bits" of entropy and gives UUID v4 as an example, but a UUID carries 122 variable bits (6 are fixed for version and variant), so a UUID can never have 128 bits. A UUIDv8 key built from a 256-bit hash has 122 bits that depend on the inputs; collisions between different intents are as unlikely as for UUID v4.
 
 - `op` is one of `create`, `update`, `complete`, `cancel`.
 - `revision` is 0 for create and cancel. For update it is the number of updates already issued for the intent. For `complete` it is the intent's `requote_count` at the time of approval: 0 for the first approval, 1 after the first re-quote and new approval, and so on. Every approval therefore gets its own `complete` key, and all resends under that approval share it.
@@ -365,6 +373,8 @@ A `RecoveryWorker` runs every 5 s and once at startup. It selects intents in `QU
 
 Each crash adds at most one lease period plus one worker period (30 s + 5 s = 35 s) before another worker takes over.
 
+**M3 note, a crash in QUOTING.** The orchestrator does not resend a QUOTING call after a crash (7.2): an intent whose create attempt was left `SENT` ends FAILED\_NOT\_CHARGED, and the merchant may hold a session for it that no order will ever use. `RecoveryWorker` handles this: it re-sends the create under the same idempotency key and the same frozen body only to learn the session id (the merchant returns the stored result), and then cancels that session. It never completes it.
+
 Lease rules \[CONTRACT\]:
 
 - **Bounded steps.** One `advance` makes at most one merchant request, so it lasts at most the longest request timeout (10 s, section 8.3) plus persistence. Configuration validation fails at startup unless `lease` is at least 2 × the longest request timeout + 5 s (defaults: 30 s against 25 s).
@@ -389,38 +399,72 @@ The port is in Appendix B. The key idea is that every call returns one of four o
 
 ### 8.1 Failure classification
 
+`NotSent` is a whitelist. Everything not listed as `NotSent` or `Ok` is `Uncertain` for the mutating calls (create, update, complete, cancel), and `ProtocolError` for `get`. Redirects are never followed (`HttpClient.Redirect.NEVER`).
+
 | Observation | Outcome |
 | --- | --- |
-| Connection refused, DNS or TLS failure before any request bytes were written | `NotSent` |
-| Request written, then timeout, connection reset, EOF or unparseable response | `Uncertain` |
+| `HttpConnectTimeoutException`, DNS failure, or TLS handshake failure, all before any request bytes were written; or the circuit breaker (8.3) rejecting the call | `NotSent` |
+| `ConnectException` | `Uncertain`, for every operation, until a raw-socket test proves the JDK never raises it for a reset on a reused keep-alive connection. Only then may it move to `NotSent` |
+| Request written, then request timeout (`HttpTimeoutException`), connection reset, EOF, or any other `IOException` | `Uncertain` |
 | HTTP 200 or 201 with a valid body (business outcomes are inside `messages`) | `Ok` |
+| HTTP 200 on a create where every item is unavailable (`ucp.status` is `error`, no session id) | `Rejected`, valid for create only (Appendix B). On any other operation it is a body with a missing required field (last row) |
 | HTTP 400, 401, 403, 404, 409, 422 | `ProtocolError`, not retryable |
-| HTTP 429 or 503 | `ProtocolError` with `retryAfter` |
-| Any other 5xx | `Uncertain` for mutating calls, retryable for GET |
-| Unknown status string or missing required field in a body | `ProtocolError` (fail closed) |
+| HTTP 429 or 503 | `ProtocolError` with `retryAfter` (8.2: for `complete` the gateway returns `Uncertain` instead) |
+| HTTP 500, 502 and any other 5xx except 501, 503 and 504 | `Uncertain` for mutating calls. For `get`: retried (8.2), `Uncertain` when the retries run out |
+| HTTP 504 | `Uncertain` for mutating calls. For `get`: retried like a timeout, `Uncertain` when the retries run out |
+| Any status not listed above (1xx, 202, 204, 3xx, other 4xx, 501) | `Uncertain` for mutating calls, `ProtocolError` for `get` |
+| Unknown status string, missing required field, or unparseable body | `Uncertain` for create, update, complete and cancel. `ProtocolError` for `get` |
 
-When in doubt, classify as `Uncertain`. Wrongly calling something `NotSent` is the dangerous mistake.
+A mutating call can have created or changed state before an invalid answer arrives, so a body the client cannot read never settles an outcome. When in doubt, classify as `Uncertain`. Wrongly calling something `NotSent` is the dangerous mistake. In particular, anything ambiguous on `complete` is `Uncertain`.
+
+The raw 2026-08-25 schema has a sixth checkout status, `requires_escalation`, which `CheckoutStatus` does not model. Under the last row it is `Uncertain` on a mutating call and `ProtocolError` on `get` until the contract adds it.
 
 ### 8.2 Retry matrix \[CONTRACT\]
 
+"Up to 3" means 3 retries, so 4 attempts in all (matching 7.6).
+
 | Operation | NotSent | Uncertain | 429 or 503 |
 | --- | --- | --- | --- |
-| GET | retry up to 3 | retry up to 3 | retry, honouring Retry-After |
-| create, update, cancel | retry up to 3, same key | retry up to 3, same key | retry, honouring Retry-After |
-| complete | retry up to 3, same key | **do not retry**, go to RECONCILING | treat as Uncertain, go to RECONCILING |
+| GET | retry up to 3 | retry up to 3 | retry, honouring Retry-After (below) |
+| create, update, cancel | retry up to 3, same key | retry up to 3, same key | retry, honouring Retry-After (below) |
+| complete | retry up to 3, same key | **do not retry**, go to RECONCILING | the gateway converts it to `Uncertain`, makes exactly one call, goes to RECONCILING |
 
 Backoff: exponential from 200 ms, factor 2, cap 2 s, full jitter.
 
+**Retry-After.** The value is seconds or an HTTP-date; a date is parsed against the injected `Clock`. If the wait is at most 2 s (the backoff cap), the gateway sleeps and retries. If it is longer, the gateway stops and returns `ProtocolError` with `retryAfter`; the orchestrator does not wait and retry a QUOTING call (7.2, "Retries live in one layer"); it never delays QUOTING, which has no orchestrator retries (7.2). It delays only a reconciliation poll or a cancel: the next attempt is at the later of the normal next poll time and `retryAfter`, and never later than that state's deadline (7.5, 7.6).
+
+**An Uncertain attempt makes the whole call Uncertain \[CONTRACT\].** Once any attempt of a call was `Uncertain`, the request may have been processed, so the call's final outcome is never `NotSent` or `ProtocolError`: it is `Uncertain`, with a cause that names the first `Uncertain` attempt and the last outcome. This covers retries running out, the breaker refusing a later attempt, a long `Retry-After` stopping the loop, and an interrupt. A real answer under the same key still stands: `Ok` and `Rejected` are returned as they are. Why: a later `NotSent` or 4xx says nothing about the earlier request, and reporting it would let the orchestrator treat a possibly created session or charge as "nothing happened".
+
+**Retries live in one layer.** The gateway does every in-call retry. The orchestrator does not retry QUOTING calls (7.2).
+
 ### 8.3 Timeouts and circuit breaker
 
-Connect timeout 2 s. Request timeout 5 s, except `complete` at 10 s. One circuit breaker per merchant host: opens after 5 consecutive failures, stays open 30 s, then allows one probe. An open breaker blocks new quoting. Reconciliation reads bypass it.
+Connect timeout 2 s. Request timeout 5 s, except `complete` at 10 s.
+
+One circuit breaker per `host:port`, held in memory and driven by the injected `Clock`. In the lab every merchant is on localhost, so the port is part of the key.
+
+- **Failures** are `NotSent`, `Uncertain` and 5xx. A 4xx, a 429, and business messages are not failures.
+- It opens after 5 consecutive failures, stays open 30 s, then allows one probe.
+- A call rejected by the open breaker is `NotSent`. An open breaker blocks new quoting.
+- `get` calls used for reconciliation bypass it.
 
 ### 8.4 Request rules
 
-- A new `Request-Id` (UUID) for every HTTP attempt. Log it with the attempt id.
+- A new `Request-Id` for every HTTP attempt: UUID-formatted text built from the injected `IdGenerator`. Log it with the attempt id.
+- `Idempotency-Key` is sent on every create, update, complete and cancel, never on get. A retry reuses the key and the body bytes.
 - `UCP-Agent` comes from configuration.
 - Mutating bodies use canonical JSON (keys sorted by UTF-16 code units, as String.compareTo does and as RFC 8785 specifies; no extra whitespace) so a replay is byte-identical.
-- Ignore unknown JSON fields. Amounts are integers.
+- `complete` carries its payment in `payment.instruments[]` (`id`, `handler_id`, `type`, `credential`), as the 2026-08-25 schema requires. It sends no line items or buyer.
+- An update (full replacement) sends the line item ids from the last `CheckoutView` the intent saw (taken from its last stored response, never fetched) and resends every buyer field of that view (`email`, `first_name`, `last_name`, `phone_number`), because an update replaces the whole session.
+- Ignore unknown JSON fields. Amounts are integers in minor units.
+- Responses are parsed with a lenient reader in core (`LenientJson`): `null`, decimals and unknown fields are allowed and ignored wherever we do not use them. A field we do use (an amount, a quantity) must still be an integer of the right type, or the body is invalid (8.1). The canonical writer and the hashes (7.4, 9.2) stay strict: `CanonicalJson` refuses `null` and floating point.
+- HTTP uses `java.net.http`, HTTP/1.1 only (no h2c upgrade). The transport refuses to start if the system property `jdk.httpclient.enableAllMethodRetry` is set to true, because the JDK would then re-send a POST on its own, outside the retry matrix of 8.2 and the one-call rule for `complete`. (Without it the JDK may still re-send an idempotent GET by itself, which is harmless for a read.) No Jackson in `agent-ucp`; it arrives with `agent-service`.
+
+### 8.5 Gateway binding and discovery \[CONTRACT\]
+
+- One `UcpHttpGateway` per merchant, bound at construction to its base URL. `discover(MerchantId)` throws `IllegalArgumentException` if the id is not the bound merchant.
+- `discover` retries like `get` (8.2) and is cached per gateway. The profile must show version 2026-08-25 and the capability `dev.ucp.shopping.checkout`. If discovery fails or the check fails, no create is sent to that merchant.
+- The M2 check that the checkout endpoint is on the same host and port as the merchant's base URL is a lab simplification (it also stops a profile from pointing the client at another server): M6a must allow a checkout endpoint on another host of the same merchant, for example one of the endpoints the profile declares.
 
 ## 9. Policy and approval
 
@@ -692,9 +736,9 @@ Per scenario: runs; terminal-state distribution; invariant violations; time to t
 | Level | What | Tooling |
 | --- | --- | --- |
 | 1. Unit | Every row of table 7.2 and every illegal transition (table-driven), policy rules, approval, idempotency key, canonical JSON, redaction | JUnit 5, AssertJ |
-| 2. Property-based (most valuable) | Random sequences of events and fault schedules against `FaultyMerchantModel`, an in-memory fake with the real merchant's semantics (idempotent keys, session states, commit-then-drop-response). Properties: I1, I3, I4, I5, I7 hold for every generated schedule | JUnit 5 with an in-house seeded schedule generator (14.1) |
+| 2. Property-based (most valuable) | Random sequences of events and fault schedules against `FaultyMerchantModel`, an in-memory fake that must match the reference merchant's behaviour exactly (availability at create, update and complete, statuses and messages), with the real merchant's semantics (idempotent keys, session states, commit-then-drop-response). Properties: I1, I3, I4, I5, I7 hold for every generated schedule | JUnit 5 with an in-house seeded schedule generator (14.1) |
 | 3. Component | Orchestrator with the SQL adapter and a fake gateway. Crash injection at each boundary in 7.3, then restart the recovery worker | JUnit 5 |
-| 4. Contract | `agent-ucp` against the real merchant module started in-process. Every row of table 8.1 exercised through the fault proxy | JUnit 5 |
+| 4. Contract | `agent-ucp` against the real merchant module started in-process on a free port (a test helper in the merchant's package gives access to its package-private classes). Every row of table 8.1 is exercised. In M2 the faults the merchant cannot produce come from a test-only stub server; from M4 they go through the fault proxy. Assertions use `/_lab/orders` as ground truth | JUnit 5 |
 | 5. Conformance | The official UCP conformance suite against the merchant. See the repositories listed at https://ucp.dev/documentation/contributing/ (**VERIFY** how its simulation hook works) | pytest (external) |
 | 6. Architecture | Rules from section 5.2 | ArchUnit |
 | 7. End to end | Scenarios S0 to S14 through the HTTP API, scripted model | JUnit 5, eval-harness |
@@ -736,7 +780,7 @@ ucp-checkout-lab/
   .env.example
 ```
 
-**Stack.** Java 21. Maven multi-module. Spring Boot 3.x in `agent-service` only. Jackson. JDBC with SQLite and Flyway. JUnit 5, AssertJ, ArchUnit (no property-testing library; see 14.1). OpenTelemetry API. A small hand-written circuit breaker is acceptable (about 80 lines); record the choice in an ADR. Use the latest stable versions at generation time and record them in the parent pom. **VERIFY** the ADK for Java version and coordinates at https://adk.dev.
+**Stack.** Java 21. Maven multi-module. Spring Boot 3.x in `agent-service` only. Jackson arrives with `agent-service`; `agent-ucp` does not use it (8.4). JDBC with SQLite and Flyway. JUnit 5, AssertJ, ArchUnit (no property-testing library; see 14.1). OpenTelemetry API. A small hand-written circuit breaker is acceptable (about 80 lines); record the choice in an ADR. Use the latest stable versions at generation time and record them in the parent pom. **VERIFY** the ADK for Java version and coordinates at https://adk.dev.
 
 **Conventions.** Package root `dev.ucplab`. Records for DTOs. Sealed interfaces for outcomes. No Lombok. No null returns (use `Optional`). `Clock` and `IdGenerator` are injected. One top-level type per file. Javadoc on every port cites the contract IDs it implements.
 
@@ -754,14 +798,14 @@ Effort figures are estimates in hours.
 | --- | --- | --- | --- |
 | M0 Foundations | Parent pom, merchant imported, CI, ArchUnit skeleton | `./mvnw verify` is green and the merchant's 46 tests run in CI | 3 |
 | M1 Core | Domain model, state machine, policy, approval, ports, in-memory repositories, `FaultyMerchantModel`, property tests | Every row of 7.2 tested. Property tests pass for at least 10,000 generated schedules. I1, I3, I4, I5, I7 hold | 12 to 15 |
-| M2 UCP client and conformance | HTTP gateway, classification, retries, breaker. Catalog search. Conformance run against the merchant | Contract tests green. Unit tests for each row of 8.1 and 8.2. Conformance gaps documented | 12 to 15 |
+| M2 UCP client and conformance | HTTP gateway, classification, retries, breaker. Catalog search, including one additive merchant commit that serves the UCP catalog endpoints (`/catalog/search`, `/catalog/lookup`, `/catalog/product`) and advertises the capability, with new SelfTest checks and the original 46 unchanged. Conformance run against the merchant | Contract tests green. Unit tests for each row of 8.1 and 8.2. Conformance gaps documented | 12 to 15 |
 | M3 Persistence and recovery | SQL adapter, migrations, `RecoveryWorker`, leases | Crash-injection tests at every boundary pass. S9 passes | 8 to 10 |
 | M4 Fault proxy and scripted evaluation | Proxy, eval harness, scenarios S0 to S9, S11, S13, S14 | Scripted report with 200 runs per fault scenario shows zero violations | 12 to 15 |
 | M5 Agent runtime | ADK adapter, tools, prompts, `ScriptedModel`, budgets, injection tests | Tool-list test passes (I6). S10 and S12 pass in live mode over 30 runs. Budget enforcement tested | 12 to 15 |
 | M6 Service and packaging | Spring Boot REST API (section 23), lab console (section 24) and CLI for runs and approvals, Docker Compose stack (section 25), README, architecture diagram, 90-second demo, results section | Quick start works from a clean clone. README links the report | 8 to 10 |
 | M6a Multiple merchants | Merchant registry, discovery check, per-merchant breaker and rate limit, fan-out search, catalog file option for the merchant, three merchants in Compose | S20, S21, S22 pass. I11 enforced in the repository | 8 to 10 |
 | M6b Sign-in and tenancy | OIDC sign-in, sessions, CSRF, AuthContext, owner-scoped repositories, recent-sign-in approvals, per-user lab sandboxes | S18, S19 pass. ArchUnit rule: no intent, approval or run repository method without a UserId, except the system methods used by RecoveryWorker | 8 to 12 |
-| M7 Stretch | OTel dashboards, A2A exposure, UCP Order capability and webhooks for reconciliation, Cloud Run demo deployment (21.2) | none required | none |
+| M7 Stretch | OTel dashboards, A2A exposure, UCP Order capability and webhooks for reconciliation, Cloud Run demo deployment (21.2). Conformance is revisited here with the order capability, webhooks and the simulation hook (docs/conformance.md, R3) | none required | none |
 
 Total about 90 to 115 hours for M0 to M6b.
 
@@ -771,9 +815,9 @@ Total about 90 to 115 hours for M0 to M6b.
 
 | ID | Risk or question | Mitigation or next step |
 | --- | --- | --- |
-| R1 | UCP is evolving | Pin 2026-08-25. Contract tests. Re-verify before M2 |
+| R1 | UCP is evolving | Pin 2026-08-25 (the pin stays for M2). Contract tests. Re-verified before M2 against the raw spec and OpenAPI schema (`docs/spec-notes.md`). The 2026-01-11 and 2026-04-08 examples seen in the spec and conformance pages are recorded there as drift |
 | R2 | ADK for Java API not verified in this document | Isolate in `agent-adk`. Fall back to the Gemini API directly |
-| R3 | The conformance suite may need a simulation hook the merchant lacks | The 2-hour spike above, before building the client |
+| R3 | The conformance suite may need a simulation hook the merchant lacks | The 2-hour spike above, before building the client. Spike done (docs/conformance.md): the suite needs the order capability, webhooks and `/testing/simulate-shipping`; the merchant has none, so conformance is revisited in M7 |
 | R4 | Live model variance and cost | Scripted mode for CI. Cap runs. Report the mode with every number |
 | R5 | `/_lab/*` endpoints must never be exposed | Merchant binds to loopback. Document it. Add a profile flag |
 | R6 | Scope creep (catalog, orders, identity, signatures) | Non-goals N1 to N5. Stretch work only in M7 |
@@ -1222,6 +1266,7 @@ Plain HTTP instead of TLS 1.3. No authentication, no message signatures, no resp
 package dev.ucplab.core.merchant;
 
 public interface MerchantGateway {
+  /** The implementation is bound to one merchant (8.5); any other id throws IllegalArgumentException. */
   MerchantProfile discover(MerchantId merchant);
   CallOutcome<CheckoutView> create(CreateCheckout request, IdempotencyKey key);
   CallOutcome<CheckoutView> update(SessionId id, UpdateCheckout request, IdempotencyKey key);
@@ -1236,6 +1281,8 @@ public sealed interface CallOutcome<T> {
   record Uncertain<T>(String cause) implements CallOutcome<T> {}
   record ProtocolError<T>(int httpStatus, String code, String content, Optional<Duration> retryAfter)
       implements CallOutcome<T> {}
+  /** Valid only for create: every line was unavailable (200, ucp.status error, no session id). 7.2 create_rejected. */
+  record Rejected<T>(int httpStatus, List<MerchantMessage> messages) implements CallOutcome<T> {}
 }
 
 public record CheckoutView(SessionId id, CheckoutStatus status, String currency,
@@ -1330,7 +1377,7 @@ Create `.github/copilot-instructions.md` with this content before generating any
   for outcomes, no Lombok, no null returns, inject Clock and IdGenerator.
 - agent-core depends on the JDK only. Only agent-adk may import ADK types.
 - Never block inside synchronized. Never hold a lock across network I/O.
-- The merchant module is the system under test. Do not edit it to make agent tests pass.
+- Don't modify merchant/src except the M2 catalog addition; never change the original 46 SelfTest checks.
 - Never log credentials, tokens, Authorization headers or approval tokens.
 - Every test cites the IDs it covers (FR, I, S) in a comment.
 - User identity comes only from AuthContext. Every repository call on intents, approvals

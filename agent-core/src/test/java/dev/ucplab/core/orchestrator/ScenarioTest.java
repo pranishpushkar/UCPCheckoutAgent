@@ -193,6 +193,8 @@ class ScenarioTest {
 
         assertThat(lab.merchant.orders()).isEmpty();
         assertThat(lab.merchant.stock("item_123")).isEqualTo(1);
+        // The reference merchant answers complete with status ready_for_complete and an out_of_stock error; the
+        // intent is FAILED_NOT_CHARGED with that code, and the session is cancelled.
         assertThat(lab.intent(id).failureReason()).contains("out_of_stock");
         assertThat(lab.merchant.session(lab.intent(id).sessionId().orElseThrow()).orElseThrow().status())
                 .isEqualTo(CheckoutStatus.CANCELED);

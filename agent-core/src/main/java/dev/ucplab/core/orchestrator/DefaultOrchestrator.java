@@ -35,6 +35,7 @@ import dev.ucplab.core.intent.TransitionEvent;
 import dev.ucplab.core.intent.TransitionGuard;
 import dev.ucplab.core.intent.TransitionTable;
 import dev.ucplab.core.json.CanonicalJson;
+import dev.ucplab.core.merchant.Buyer;
 import dev.ucplab.core.merchant.CallOutcome;
 import dev.ucplab.core.merchant.CheckoutStatus;
 import dev.ucplab.core.merchant.CheckoutView;
@@ -47,6 +48,7 @@ import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantMessage;
 import dev.ucplab.core.merchant.MutatingOp;
 import dev.ucplab.core.merchant.PaymentInstrument;
+import dev.ucplab.core.merchant.QuoteShape;
 import dev.ucplab.core.merchant.SessionId;
 import dev.ucplab.core.merchant.UpdateCheckout;
 import dev.ucplab.core.policy.PolicyDecision;
@@ -106,14 +108,19 @@ public final class DefaultOrchestrator implements Orchestrator {
     static final String PAYMENT_DECLINED = "payment_declined";
     static final String PAYMENT_INVALID = "payment_invalid";
     static final String QUOTE_RETRIES_EXHAUSTED = "quote_retries_exhausted";
+    static final String CREATE_REJECTED_REASON = "create_rejected";
+    static final String QUANTITY_ADJUSTED = "quantity_adjusted";
+    static final String QUOTE_LINES_DIFFER = "quote_lines_differ";
     static final String APPROVAL_EXPIRED = "approval_expired";
     static final String CANCELED_BY_MERCHANT = "canceled_by_merchant";
     static final String OUTCOME_UNKNOWN = "outcome_unknown";
     static final String POLICY_PREFIX = "policy_";
     static final String MERCHANT_ERROR_PREFIX = "merchant_error_";
+    static final String COMPLETE_ERROR_PREFIX = "complete_error:";
 
     /** failure_reason values whose table 7.2 row includes a session cancel. */
-    private static final Set<String> CANCEL_OWED = Set.of(OUT_OF_STOCK, ITEM_UNAVAILABLE, PAYMENT_DECLINED,
+    private static final Set<String> CANCEL_OWED = Set.of(OUT_OF_STOCK, ITEM_UNAVAILABLE, QUANTITY_ADJUSTED,
+            QUOTE_LINES_DIFFER, PAYMENT_DECLINED,
             RequotePolicy.PRICE_UNSTABLE, DefaultApprovalService.APPROVAL_REJECTED, APPROVAL_EXPIRED);
 
     private static final int MAX_RATIONALE = 300;
@@ -205,11 +212,8 @@ public final class DefaultOrchestrator implements Orchestrator {
             return new ProposalResult(intent.id(), intent.state(), Optional.empty());
         }
 
-        // Quote now: a create plus its retries, each one step (7.2 QUOTING rows).
+        // Quote now: one create call. Retries live in the gateway (7.2, 8.2); this never loops.
         Step last = step(intent.id());
-        for (int i = 0; last.after() == QUOTING && !last.idle() && i <= config.maxQuoteRetries(); i++) {
-            last = step(intent.id());
-        }
         return new ProposalResult(intent.id(), last.after(),
                 last.after() == AWAITING_APPROVAL ? last.quote() : Optional.empty());
     }
@@ -314,9 +318,10 @@ public final class DefaultOrchestrator implements Orchestrator {
         boolean create = intent.requoteCount() == 0;
         AttemptOp op = create ? AttemptOp.CREATE : AttemptOp.UPDATE;
         int revision = create ? 0 : intent.requoteCount() - 1;
-        // Every earlier attempt under this key failed, or the intent would have left QUOTING.
-        int failures = (int) attempts.stream().filter(a -> a.op() == op && a.revision() == revision).count();
-        if (failures > config.maxQuoteRetries()) {
+        // Retries live in the gateway (7.2, 8.2): an attempt already under this key (answered with a failure, or left
+        // SENT by a crash) is not repeated here.
+        boolean tried = attempts.stream().anyMatch(a -> a.op() == op && a.revision() == revision);
+        if (tried) {
             Move m = move(intent, TransitionEvent.RETRIES_EXHAUSTED);
             PurchaseIntent next = m.next().withFailureReason(QUOTE_RETRIES_EXHAUSTED);
             intents.update(next, intent.version(), workerId);
@@ -333,18 +338,20 @@ public final class DefaultOrchestrator implements Orchestrator {
             call = () -> merchant.create(request, key);
         } else {
             SessionId session = requireSession(intent);
-            UpdateCheckout request = new UpdateCheckout(intent.lines(), Optional.of(intent.buyerEmail()));
+            // An update replaces the session, so it resends the line ids and buyer fields of the last response this
+            // intent stored (8.4). Nothing is fetched: one merchant call per step.
+            UpdateCheckout request = UpdateCheckout.from(intent.lines(), Buyer.ofEmail(intent.buyerEmail()),
+                    lastQuoteShape(attempts));
             body = CheckoutWire.updateBody(request);
             call = () -> merchant.update(session, request, key);
         }
         MerchantAttempt attempt = newAttempt(intent.id(), op, revision, key, Optional.of(new FrozenBody(body)));
         PurchaseIntent written = writeAhead(intent, attempt, intent.withState(QUOTING, clock.instant()));
-        return onQuoteOutcome(written, attempt, call.get(), failures + 1, create);
+        return onQuoteOutcome(written, attempt, call.get(), create);
     }
 
     private Step onQuoteOutcome(
-            PurchaseIntent written, MerchantAttempt attempt, CallOutcome<CheckoutView> outcome, int attemptsUnderKey,
-            boolean create) {
+            PurchaseIntent written, MerchantAttempt attempt, CallOutcome<CheckoutView> outcome, boolean create) {
         return switch (outcome) {
             case CallOutcome.Ok<CheckoutView> ok -> {
                 CheckoutView view = ok.value();
@@ -374,21 +381,35 @@ public final class DefaultOrchestrator implements Orchestrator {
                     yield finish(base, attempt, AttemptStatus.RESPONDED, http, summary,
                             move(base, TransitionEvent.ITEM_UNAVAILABLE), ITEM_UNAVAILABLE);
                 }
+                if (!sameBasket(base, view)) {
+                    // I2, Q2: no partial approval. A quote that is not the basket the user proposed (the merchant cut
+                    // a quantity, with or without a quantity_adjusted warning) is refused; re-propose instead.
+                    // Uses the QUOTING out_of_stock row (FAILED_NOT_CHARGED, cancel the session).
+                    yield finish(base, attempt, AttemptStatus.RESPONDED, http, summary,
+                            move(base, TransitionEvent.OUT_OF_STOCK),
+                            codes.contains(QUANTITY_ADJUSTED) ? QUANTITY_ADJUSTED : QUOTE_LINES_DIFFER);
+                }
                 if (view.status() == CheckoutStatus.READY_FOR_COMPLETE) {
                     yield quoteReady(base, attempt, http, summary, view);
                 }
                 // An answer that is neither a quote nor a known failure: retry under the same key until exhausted.
-                yield retryOrExhaust(base, attempt, AttemptStatus.RESPONDED, http, summary, TransitionEvent.UNCERTAIN,
-                        attemptsUnderKey);
+                yield exhaustQuoting(base, attempt, AttemptStatus.RESPONDED, http, summary);
             }
-            case CallOutcome.ProtocolError<CheckoutView> e when isRetryable(e) -> retryOrExhaust(written, attempt,
-                    AttemptStatus.RESPONDED, Optional.of(e.httpStatus()), Optional.of(describe(e)),
-                    TransitionEvent.NOT_SENT, attemptsUnderKey);
+            case CallOutcome.Rejected<CheckoutView> r when create -> finish(written, attempt, AttemptStatus.RESPONDED,
+                    Optional.of(r.httpStatus()), Optional.of(describe(r)), move(written, TransitionEvent.CREATE_REJECTED),
+                    rejectedReason(r));
+            // Rejected is valid only for create (8.1). On an update it cannot settle anything, so it is retried
+            // like an answer that is neither a quote nor a known failure.
+            case CallOutcome.Rejected<CheckoutView> r -> exhaustQuoting(written, attempt, AttemptStatus.RESPONDED,
+                    Optional.of(r.httpStatus()), Optional.of(describe(r)));
+            case CallOutcome.ProtocolError<CheckoutView> e when isRetryable(e) -> exhaustQuoting(written, attempt,
+                    AttemptStatus.RESPONDED, Optional.of(e.httpStatus()), Optional.of(describe(e)));
             case CallOutcome.ProtocolError<CheckoutView> e -> {
                 Optional<Integer> http = Optional.of(e.httpStatus());
                 Optional<String> response = Optional.of(describe(e));
                 if (OUT_OF_STOCK.equals(e.code())) {
-                    // A create with every item unavailable has no session id (A.1, FaultyMerchantModel).
+                    // Kept for a merchant that reports unavailability as a protocol error; the gateway reports a
+                    // create with every item unavailable as Rejected (8.1).
                     yield finish(written, attempt, AttemptStatus.RESPONDED, http, response,
                             move(written, TransitionEvent.OUT_OF_STOCK), OUT_OF_STOCK);
                 }
@@ -401,10 +422,10 @@ public final class DefaultOrchestrator implements Orchestrator {
                 yield finish(written, attempt, AttemptStatus.RESPONDED, http, response,
                         move(written, TransitionEvent.RETRIES_EXHAUSTED), MERCHANT_ERROR_PREFIX + e.code());
             }
-            case CallOutcome.NotSent<CheckoutView> n -> retryOrExhaust(written, attempt, AttemptStatus.UNCERTAIN,
-                    Optional.empty(), Optional.of(describe(n)), TransitionEvent.NOT_SENT, attemptsUnderKey);
-            case CallOutcome.Uncertain<CheckoutView> u -> retryOrExhaust(written, attempt, AttemptStatus.UNCERTAIN,
-                    Optional.empty(), Optional.of(describe(u)), TransitionEvent.UNCERTAIN, attemptsUnderKey);
+            case CallOutcome.NotSent<CheckoutView> n -> exhaustQuoting(written, attempt, AttemptStatus.UNCERTAIN,
+                    Optional.empty(), Optional.of(describe(n)));
+            case CallOutcome.Uncertain<CheckoutView> u -> exhaustQuoting(written, attempt, AttemptStatus.UNCERTAIN,
+                    Optional.empty(), Optional.of(describe(u)));
         };
     }
 
@@ -437,17 +458,15 @@ public final class DefaultOrchestrator implements Orchestrator {
         return new Step(QUOTING, m.next().state(), false, Optional.of(view));
     }
 
-    private Step retryOrExhaust(
+    /**
+     * Ends QUOTING after a failed or unusable answer (7.2, retries exhausted). Retries live in the gateway (8.2); the
+     * orchestrator never repeats a QUOTING call, so the first such answer is the last.
+     */
+    private Step exhaustQuoting(
             PurchaseIntent base, MerchantAttempt attempt, AttemptStatus status, Optional<Integer> http,
-            Optional<String> response, TransitionEvent event, int attemptsUnderKey) {
-        if (attemptsUnderKey > config.maxQuoteRetries()) {
-            return finish(base, attempt, status, http, response, move(base, TransitionEvent.RETRIES_EXHAUSTED),
-                    QUOTE_RETRIES_EXHAUSTED);
-        }
-        Move m = move(base, event, TransitionGuard.RETRIES_LEFT);
-        resolve(attempt, status, http, response, m.next(), base.version());
-        transitionEvent(base.id(), m.transition());
-        return moved(base, m.next());
+            Optional<String> response) {
+        return finish(base, attempt, status, http, response, move(base, TransitionEvent.RETRIES_EXHAUSTED),
+                QUOTE_RETRIES_EXHAUSTED);
     }
 
     /** Resolves the attempt and moves to a terminal state with a failure reason, in one write. */
@@ -555,19 +574,44 @@ public final class DefaultOrchestrator implements Orchestrator {
                 transitionEvent(written.id(), m.transition());
                 return moved(written, next);
             }
+            // 7.2: the merchant answered, did not complete, is not charging, and gave an error: not charged. A
+            // complete_in_progress answer is excluded (a charge may be running), and so is a bare Ok with no error.
+            Optional<MerchantMessage> error = view.messages().stream()
+                    .filter(m -> m.type().equals("error")).findFirst();
+            if (error.isPresent() && view.status() != CheckoutStatus.COMPLETED
+                    && view.status() != CheckoutStatus.COMPLETE_IN_PROGRESS) {
+                String code = error.get().code();
+                Move m = move(written, TransitionEvent.PAYMENT_DECLINED);
+                PurchaseIntent next = m.next().withFailureReason(
+                        CANCEL_OWED.contains(code) ? code : COMPLETE_ERROR_PREFIX + code);
+                settleSiblings(attempt, "not_charged");
+                resolve(attempt, AttemptStatus.RESPONDED, http, summary, next, written.version());
+                transitionEvent(written.id(), m.transition());
+                return moved(written, next);
+            }
             // Any other answer does not establish the outcome (8.1: when in doubt, Uncertain).
             return toReconciling(written, attempt, http, summary);
         }
         Optional<Integer> http = outcome instanceof CallOutcome.ProtocolError<CheckoutView> e
                 ? Optional.of(e.httpStatus())
                 : Optional.empty();
-        // 8.2: complete is never retried on Uncertain, and 429 or 503 are treated as Uncertain.
-        return toReconciling(written, attempt, http, Optional.of(describe(outcome)));
+        // 8.2: complete is never retried on Uncertain. A ProtocolError (7.2 protocol_error) and any other answer that
+        // is not Ok also go to RECONCILING: none of them proves that no order was created.
+        TransitionEvent event = outcome instanceof CallOutcome.ProtocolError<CheckoutView>
+                ? TransitionEvent.PROTOCOL_ERROR
+                : TransitionEvent.UNCERTAIN;
+        return toReconciling(written, attempt, http, Optional.of(describe(outcome)), event);
     }
 
     private Step toReconciling(
             PurchaseIntent written, MerchantAttempt attempt, Optional<Integer> http, Optional<String> response) {
-        Move m = move(written, TransitionEvent.UNCERTAIN);
+        return toReconciling(written, attempt, http, response, TransitionEvent.UNCERTAIN);
+    }
+
+    private Step toReconciling(
+            PurchaseIntent written, MerchantAttempt attempt, Optional<Integer> http, Optional<String> response,
+            TransitionEvent event) {
+        Move m = move(written, event);
         PurchaseIntent next = withUncertainSince(m.next());
         resolve(attempt, AttemptStatus.UNCERTAIN, http, response, next, written.version());
         transitionEvent(written.id(), m.transition());
@@ -759,7 +803,8 @@ public final class DefaultOrchestrator implements Orchestrator {
 
     private Step cancelIfOwed(PurchaseIntent intent, List<MerchantAttempt> attempts) {
         String reason = intent.failureReason().orElse("");
-        boolean owed = CANCEL_OWED.contains(reason) || reason.startsWith(POLICY_PREFIX);
+        boolean owed = CANCEL_OWED.contains(reason) || reason.startsWith(POLICY_PREFIX)
+                || reason.startsWith(COMPLETE_ERROR_PREFIX);
         if (!owed || intent.sessionId().isEmpty() || attempts.stream().anyMatch(a -> a.op() == AttemptOp.CANCEL)) {
             return idle(intent);
         }
@@ -839,6 +884,32 @@ public final class DefaultOrchestrator implements Orchestrator {
         return view.messages().stream().map(MerchantMessage::code).collect(Collectors.toSet());
     }
 
+    /** Whether the quote has exactly the items and quantities of the proposal (summed per item, order ignored). */
+    private static boolean sameBasket(PurchaseIntent intent, CheckoutView view) {
+        Map<String, Integer> proposed = new java.util.HashMap<>();
+        intent.lines().forEach(l -> proposed.merge(l.itemId(), l.quantity(), Integer::sum));
+        Map<String, Integer> quoted = new java.util.HashMap<>();
+        view.lines().forEach(l -> quoted.merge(l.itemId(), l.quantity(), Integer::sum));
+        return proposed.equals(quoted);
+    }
+
+    /** The lines and buyer of the newest stored response that has them (8.4, decision L). */
+    private static Optional<QuoteShape> lastQuoteShape(List<MerchantAttempt> attempts) {
+        for (int i = attempts.size() - 1; i >= 0; i--) {
+            Optional<QuoteShape> shape = attempts.get(i).responseJson().flatMap(CheckoutWire::quoteShape);
+            if (shape.isPresent()) {
+                return shape;
+            }
+        }
+        return Optional.empty();
+    }
+
+    private static String rejectedReason(CallOutcome.Rejected<CheckoutView> r) {
+        Set<String> codes = r.messages().stream().map(MerchantMessage::code).collect(Collectors.toSet());
+        return codes.contains(OUT_OF_STOCK) ? OUT_OF_STOCK
+                : codes.contains(ITEM_UNAVAILABLE) ? ITEM_UNAVAILABLE : CREATE_REJECTED_REASON;
+    }
+
     private static boolean isRetryable(CallOutcome.ProtocolError<CheckoutView> e) {
         return e.retryAfter().isPresent() || e.httpStatus() == 429 || e.httpStatus() == 503;
     }
@@ -853,6 +924,7 @@ public final class DefaultOrchestrator implements Orchestrator {
             case CallOutcome.NotSent<?> n -> "not_sent";
             case CallOutcome.Uncertain<?> u -> "uncertain";
             case CallOutcome.ProtocolError<?> e -> "protocol_error";
+            case CallOutcome.Rejected<?> r -> "rejected";
         };
     }
 
@@ -867,6 +939,10 @@ public final class DefaultOrchestrator implements Orchestrator {
                 m.put("code", e.code());
             }
             case CallOutcome.Ok<?> ok -> m.put("http_status", ok.httpStatus());
+            case CallOutcome.Rejected<?> r -> {
+                m.put("http_status", r.httpStatus());
+                m.put("codes", r.messages().stream().map(MerchantMessage::code).toList());
+            }
         }
         return CanonicalJson.write(m);
     }

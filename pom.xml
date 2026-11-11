@@ -46,6 +46,11 @@
             </dependency>
             <dependency>
                 <groupId>dev.ucplab</groupId>
+                <artifactId>merchant</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>dev.ucplab</groupId>
                 <artifactId>agent-ucp</artifactId>
                 <version>${project.version}</version>
             </dependency>

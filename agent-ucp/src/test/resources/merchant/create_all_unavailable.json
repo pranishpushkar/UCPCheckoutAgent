@@ -1,0 +1,1 @@
+{"continue_url":"https://merchant.example/","messages":[{"code":"out_of_stock","content":"All requested items are currently out of stock","severity":"unrecoverable","type":"error"}],"ucp":{"status":"error","version":"2026-08-25"}}

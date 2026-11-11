@@ -34,6 +34,9 @@ public final class SelfTest {
             raceOnSameSession();
             completeInProgressIsVisible();
             cancelRules();
+            catalogCapabilities();
+            catalogSearch();
+            catalogLookupAndProduct();
         } finally {
             server.stop();
         }
@@ -267,6 +270,91 @@ public final class SelfTest {
             if (itemId.equals(m.get("id"))) return ((Number) m.get("stock")).intValue();
         }
         return -1;
+    }
+
+    // ------------------------------------------------------------------ catalog (added after the original checks)
+
+    static Res catalogCall(String path, String body) throws Exception {
+        return call("POST", "/ucp/v1/catalog/" + path, body, null);
+    }
+
+    static List<Map<String, Object>> products(Res r) { return MerchantCore.listOfMaps(r.body.get("products")); }
+
+    static Map<String, Object> variant(Map<String, Object> product) {
+        return MerchantCore.listOfMaps(product.get("variants")).get(0);
+    }
+
+    static void catalogCapabilities() throws Exception {
+        section("catalog: discovery and headers");
+        Map<String, Object> caps = obj(obj(call("GET", "/.well-known/ucp", null, null).body.get("ucp")).get("capabilities"));
+        check(caps.containsKey("dev.ucp.shopping.catalog.search"), "profile lists dev.ucp.shopping.catalog.search");
+        check(caps.containsKey("dev.ucp.shopping.catalog.lookup"), "profile lists dev.ucp.shopping.catalog.lookup");
+        check(caps.containsKey("dev.ucp.shopping.checkout"), "profile still lists the checkout capability");
+        Res noAgent = raw("POST", "/ucp/v1/catalog/search", "{}", Map.of("Request-Id", "r1"));
+        check(noAgent.status == 400, "catalog call without UCP-Agent is rejected with 400");
+        Res ok = catalogCall("search", "{}");
+        check(ok.status == 200, "catalog call needs no Idempotency-Key");
+        check(raw("POST", "/ucp/v1/catalog/search", "[]",
+                Map.of("Request-Id", "r1", "UCP-Agent", "profile=\"https://p.example/.well-known/ucp\"")).status == 400,
+                "a body that is not a JSON object is rejected with 400");
+        check(call("GET", "/ucp/v1/catalog/search", null, null).status == 404, "catalog search is POST only");
+    }
+
+    static void catalogSearch() throws Exception {
+        section("catalog: search");
+        reset();
+        Res all = catalogCall("search", "{}");
+        check(all.status == 200 && products(all).size() == 3, "an empty search returns all three products");
+        check(obj(all.body.get("ucp")).get("version").equals(MerchantCore.VERSION), "response carries the ucp version");
+        Res mug = catalogCall("search", "{\"query\":\"blue mug\"}");
+        check(products(mug).size() == 1 && "item_456".equals(products(mug).get(0).get("id")), "search by title finds the Blue Mug");
+        Map<String, Object> p = products(mug).get(0);
+        check(((Number) obj(obj(p.get("price_range")).get("min")).get("amount")).longValue() == 1200
+                && "USD".equals(obj(obj(p.get("price_range")).get("min")).get("currency")), "price is integer minor units with a currency");
+        check("item_456".equals(variant(p).get("id")) && ((Number) obj(variant(p).get("price")).get("amount")).longValue() == 1200,
+                "the variant id is the item id a checkout takes");
+        check(products(catalogCall("search", "{\"query\":\"zzz\"}")).isEmpty(), "a query that matches nothing returns no products");
+        Res cheap = catalogCall("search", "{\"filters\":{\"price\":{\"max\":2500}}}");
+        check(products(cheap).size() == 2, "filters.price.max narrows the results");
+        Res page = catalogCall("search", "{\"pagination\":{\"limit\":2}}");
+        Map<String, Object> pg = obj(page.body.get("pagination"));
+        check(products(page).size() == 2 && Boolean.TRUE.equals(pg.get("has_next_page")) && pg.get("cursor") != null,
+                "pagination.limit returns a page with a cursor");
+        Res next = catalogCall("search", "{\"pagination\":{\"limit\":2,\"cursor\":\"" + pg.get("cursor") + "\"}}");
+        check(products(next).size() == 1 && Boolean.FALSE.equals(obj(next.body.get("pagination")).get("has_next_page")),
+                "the cursor returns the last page");
+        check(catalogCall("search", "{\"pagination\":{\"limit\":0}}").status == 400, "a limit below 1 is rejected with 400");
+    }
+
+    static void catalogLookupAndProduct() throws Exception {
+        section("catalog: lookup, product, availability");
+        reset();
+        Res l = catalogCall("lookup", "{\"ids\":[\"item_123\",\"nope\"]}");
+        check(l.status == 200 && products(l).size() == 1, "lookup returns the found products and skips unknown ids");
+        check(MerchantCore.listOfMaps(l.body.get("messages")).stream().anyMatch(m -> "not_found".equals(m.get("code"))
+                && "info".equals(m.get("type")) && "nope".equals(m.get("content"))), "an unknown id is an info not_found message");
+        check(!MerchantCore.listOfMaps(variant(products(l).get(0)).get("inputs")).isEmpty(), "a looked-up variant says which input resolved to it");
+        check(catalogCall("lookup", "{\"ids\":[]}").status == 400, "lookup with no ids is rejected with 400");
+        Res d = catalogCall("product", "{\"id\":\"item_789\"}");
+        Map<String, Object> product = obj(d.body.get("product"));
+        check(d.status == 200 && "item_789".equals(product.get("id")), "product returns one product object");
+        check(Boolean.TRUE.equals(obj(variant(product).get("availability")).get("available"))
+                && "in_stock".equals(obj(variant(product).get("availability")).get("status")), "an item with stock is available and in_stock");
+        check(!d.raw.contains("stock\":"), "no raw stock count is exposed");
+        lab("/_lab/stock", "{\"item_id\":\"item_789\",\"stock\":0}");
+        Res gone = catalogCall("product", "{\"id\":\"item_789\"}");
+        check(Boolean.FALSE.equals(obj(variant(obj(gone.body.get("product"))).get("availability")).get("available"))
+                && "out_of_stock".equals(obj(variant(obj(gone.body.get("product"))).get("availability")).get("status")),
+                "stock 0 is available false, out_of_stock");
+        lab("/_lab/price", "{\"item_id\":\"item_789\",\"price\":9900}");
+        check(((Number) obj(variant(obj(catalogCall("product", "{\"id\":\"item_789\"}").body.get("product"))).get("price")).get("amount")).longValue() == 9900,
+                "the catalog shows the lab's current price");
+        Res missing = catalogCall("product", "{\"id\":\"nope\"}");
+        check(missing.status == 200 && "error".equals(obj(missing.body.get("ucp")).get("status")), "an unknown product is 200 with ucp.status error");
+        check(MerchantCore.listOfMaps(missing.body.get("messages")).stream().anyMatch(m -> "not_found".equals(m.get("code"))
+                && "unrecoverable".equals(m.get("severity"))), "the unknown product message is unrecoverable not_found");
+        check(catalogCall("product", "{}").status == 400, "product without an id is rejected with 400");
+        reset();
     }
 
     static boolean hasMessage(Res r, String code) {

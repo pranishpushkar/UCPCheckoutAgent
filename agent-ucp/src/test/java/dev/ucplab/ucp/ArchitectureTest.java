@@ -18,8 +18,14 @@ class ArchitectureTest {
     void architecture_noAdkTypes_outsideAgentAdk() {
         noClasses()
                 .should().dependOnClassesThat().resideInAPackage("com.google.adk..")
-                // The module has no classes yet.
-                .allowEmptyShould(true)
+                .check(PRODUCTION_CLASSES);
+    }
+
+    // Covers: section 5.2, 8.4 (agent-ucp uses java.net.http and core's CanonicalJson, not Jackson)
+    @Test
+    void architecture_noJackson_inAgentUcp() {
+        noClasses()
+                .should().dependOnClassesThat().resideInAPackage("com.fasterxml.jackson..")
                 .check(PRODUCTION_CLASSES);
     }
 }

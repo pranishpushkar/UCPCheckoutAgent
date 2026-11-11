@@ -6,6 +6,10 @@ package dev.ucplab.core.merchant;
  */
 public interface MerchantGateway {
 
+    /**
+     * @throws IllegalArgumentException if this gateway is not bound to {@code merchant} (8.5)
+     * @throws DiscoveryFailedException if the profile could not be fetched or read
+     */
     MerchantProfile discover(MerchantId merchant);
 
     CallOutcome<CheckoutView> create(CreateCheckout request, IdempotencyKey key);

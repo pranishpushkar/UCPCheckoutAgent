@@ -47,6 +47,8 @@ final class Invariants {
     /** The request timeout of create and update (8.3); complete's is in OrchestratorConfig. */
     static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(5);
     /** 8.2 retry backoff: exponential from 200 ms, factor 2, capped at 2 s, full jitter (so at most the capped delay). */
+    /** In-call retries of the gateway (8.2). The orchestrator does not retry QUOTING calls (7.2), so this is the QUOTING bound. */
+    static final int GATEWAY_RETRIES = 3;
     static final Duration BACKOFF_BASE = Duration.ofMillis(200);
     static final Duration BACKOFF_CAP = Duration.ofSeconds(2);
 
@@ -256,8 +258,8 @@ final class Invariants {
         OrchestratorConfig c = o.config();
         return switch (s.state()) {
             case PROPOSED -> s.at().plus(WORKER_PASS);
-            case QUOTING -> s.at().plus(WORKER_PASS).plus(REQUEST_TIMEOUT.multipliedBy(c.maxQuoteRetries() + 1L))
-                    .plus(worstBackoff(c.maxQuoteRetries()));
+            case QUOTING -> s.at().plus(WORKER_PASS).plus(REQUEST_TIMEOUT.multipliedBy(GATEWAY_RETRIES + 1L))
+                    .plus(worstBackoff(GATEWAY_RETRIES));
             case APPROVED -> s.at().plus(WORKER_PASS).plus(c.completeRequestTimeout());
             case AWAITING_APPROVAL -> s.approvalExpiresAt().orElse(s.at().plus(DefaultApprovalService.DEFAULT_TTL));
             case COMPLETING, RECONCILING -> s.at().plus(c.reconcileDeadline());

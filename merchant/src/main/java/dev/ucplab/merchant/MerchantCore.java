@@ -281,9 +281,21 @@ final class MerchantCore {
         Map<String, Object> ucp = new LinkedHashMap<>();
         ucp.put("version", VERSION);
         ucp.put("services", Map.of("dev.ucp.shopping", List.of(service)));
-        ucp.put("capabilities", Map.of("dev.ucp.shopping.checkout", List.of(cap)));
+        Map<String, Object> capabilities = new LinkedHashMap<>();
+        capabilities.put("dev.ucp.shopping.checkout", List.of(cap));
+        capabilities.put(CatalogApi.SEARCH_CAPABILITY, List.of(catalogCap("search")));
+        capabilities.put(CatalogApi.LOOKUP_CAPABILITY, List.of(catalogCap("lookup")));
+        ucp.put("capabilities", capabilities);
         ucp.put("payment_handlers", handlers());
         return Map.of("ucp", ucp);
+    }
+
+    private static Map<String, Object> catalogCap(String name) {
+        Map<String, Object> cap = new LinkedHashMap<>();
+        cap.put("version", VERSION);
+        cap.put("spec", "https://ucp.dev/" + VERSION + "/specification/shopping/catalog/" + name);
+        cap.put("schema", "https://ucp.dev/" + VERSION + "/schemas/shopping/catalog_" + name + ".json");
+        return cap;
     }
 
     // ------------------------------------------------------------------ lab-only helpers (not part of UCP)
