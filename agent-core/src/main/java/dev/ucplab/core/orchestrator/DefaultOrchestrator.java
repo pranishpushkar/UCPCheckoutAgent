@@ -763,7 +763,10 @@ public final class DefaultOrchestrator implements Orchestrator {
                 } else {
                     intents.update(m.next(), intent.version(), workerId);
                 }
-                approvedResends.put(intent.id(), intent.version() + 1);
+                // The version the write actually stored, read back: both branches above are repository writes, and
+                // the port does not promise expected + 1.
+                approvedResends.put(intent.id(), intents.findForSystem(intent.id())
+                        .orElseThrow(() -> new IntentNotFoundException("no such intent: " + intent.id())).version());
                 transitionEvent(intent.id(), m.transition());
                 yield moved(intent, m.next());
             }

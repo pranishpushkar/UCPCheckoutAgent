@@ -15,6 +15,7 @@ import dev.ucplab.core.identity.AuthContext;
 import dev.ucplab.core.identity.UserId;
 import dev.ucplab.core.intent.InMemoryIntentRepository;
 import dev.ucplab.core.intent.IntentId;
+import dev.ucplab.core.intent.IntentRepository;
 import dev.ucplab.core.intent.IntentState;
 import dev.ucplab.core.intent.ProposalResult;
 import dev.ucplab.core.intent.ProposedLine;
@@ -100,16 +101,23 @@ final class Lab {
 
     /** A worker whose approval repository is {@code approvalRepository}, for tests that crash its writes. */
     Worker worker(String workerId, MerchantGateway gateway, ApprovalRepository approvalRepository) {
+        return worker(workerId, gateway, approvalRepository, intents);
+    }
+
+    /** A worker over {@code intentRepository}, for tests that decorate the intent store (it must wrap {@link #intents}). */
+    Worker worker(
+            String workerId, MerchantGateway gateway, ApprovalRepository approvalRepository,
+            IntentRepository intentRepository) {
         PolicyConfig policyConfig = PolicyConfig.defaults();
         RuleBasedPolicyEngine policy = new RuleBasedPolicyEngine(policyConfig,
                 m -> m.equals(SHOP)
                         ? Optional.of(new MerchantEntry(SHOP, URI.create("http://127.0.0.1:8081"), "Shop", MerchantStatus.ACTIVE))
                         : Optional.empty(),
                 NO_USAGE, clock);
-        DefaultApprovalService approvalService = new DefaultApprovalService(intents, approvalRepository,
+        DefaultApprovalService approvalService = new DefaultApprovalService(intentRepository, approvalRepository,
                 new ApprovalTokens(SECRET), clock, ids, workerId, config.lease(), DefaultApprovalService.DEFAULT_TTL,
                 DefaultApprovalService.DEFAULT_MAX_AUTH_AGE);
-        DefaultOrchestrator orchestrator = new DefaultOrchestrator(intents, approvalRepository, approvalService, gateway, policy,
+        DefaultOrchestrator orchestrator = new DefaultOrchestrator(intentRepository, approvalRepository, approvalService, gateway, policy,
                 new RequotePolicy(policyConfig), payment, config, clock, ids, workerId, new SplittableRandom(42));
         return new Worker(workerId, orchestrator, approvalService);
     }
