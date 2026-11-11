@@ -185,7 +185,7 @@ class UcpHttpGatewayTest {
     @Test
     void discover_retriesLikeGet() {
         withProfile();
-        transport.script.get("GET /.well-known/ucp").addFirst(new ConnectException("refused"));
+        transport.script.get("GET /.well-known/ucp").addFirst(notSent());
         transport.script.get("GET /.well-known/ucp").addFirst(new HttpTimeoutException("slow"));
 
         assertThat(gateway().discover(SHOP).ucpVersion()).isEqualTo("2026-08-25");
@@ -230,7 +230,7 @@ class UcpHttpGatewayTest {
     // Covers: decision K (when discovery fails no create is sent to that merchant)
     @Test
     void create_isNotSent_whenDiscoveryFails() {
-        transport.on("GET /.well-known/ucp", new ConnectException("refused"));
+        transport.on("GET /.well-known/ucp", notSent());
 
         CallOutcome<CheckoutView> outcome = gateway().create(createRequest(), CREATE_KEY);
 
@@ -293,8 +293,8 @@ class UcpHttpGatewayTest {
     @Test
     void complete_sendsFrozenBytesUnderTheKey() {
         FrozenBody body = CheckoutWire.completeBody(PaymentInstrument.mockCard("pi_1", "tok_ok"));
-        withProfile().on("POST /ucp/v1/checkout-sessions/chk_1001/complete", new ConnectException("refused"),
-                new ConnectException("refused"), reply(200, "complete_price_changed"));
+        withProfile().on("POST /ucp/v1/checkout-sessions/chk_1001/complete", notSent(),
+                notSent(), reply(200, "complete_price_changed"));
 
         CallOutcome<CheckoutView> outcome = gateway().complete(CHK_1001, body, COMPLETE_KEY);
 
@@ -394,7 +394,7 @@ class UcpHttpGatewayTest {
         assertThat(transport.callsTo("GET /.well-known/ucp")).hasSize(1);
 
         transport.script.get("GET /.well-known/ucp").clear();
-        transport.on("GET /.well-known/ucp", new ConnectException("refused"));
+        transport.on("GET /.well-known/ucp", notSent());
 
         assertThat(g.create(createRequest(), CREATE_KEY)).isInstanceOf(CallOutcome.NotSent.class);
         assertThat(transport.callsTo("POST /ucp/v1/checkout-sessions")).isEmpty();
@@ -407,7 +407,7 @@ class UcpHttpGatewayTest {
     // while get, the reconciliation read, still goes out)
     @Test
     void openBreaker_blocksEverythingButGet() {
-        withProfile().on("POST /ucp/v1/checkout-sessions", new ConnectException("refused"))
+        withProfile().on("POST /ucp/v1/checkout-sessions", notSent())
                 .on("GET /ucp/v1/checkout-sessions/chk_1001", reply(200, "get_ready"));
         UcpHttpGateway g = gateway(noRetries());
         g.discover(SHOP);
@@ -499,5 +499,12 @@ class UcpHttpGatewayTest {
             root.removeHandler(capture);
             root.setLevel(before);
         }
+    }
+
+    /** A DNS failure: the ConnectException that is NotSent (8.1); a refused connection is Uncertain. */
+    private static ConnectException notSent() {
+        ConnectException e = new ConnectException("unresolved");
+        e.initCause(new java.nio.channels.UnresolvedAddressException());
+        return e;
     }
 }
