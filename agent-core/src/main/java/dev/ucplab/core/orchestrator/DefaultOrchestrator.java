@@ -673,6 +673,7 @@ public final class DefaultOrchestrator implements Orchestrator {
                 if (approvedAt != null && approvedAt == intent.version()) {
                     yield resend(intent, sameKey);
                 }
+                // A takeover never moves the deadline: the persisted uncertain_since is kept (7.5 rule 1).
                 Move m = move(intent, TransitionEvent.UNCERTAIN);
                 PurchaseIntent next = withUncertainSince(m.next());
                 intents.update(next, intent.version(), workerId);

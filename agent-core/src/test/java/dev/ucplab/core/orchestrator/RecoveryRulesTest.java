@@ -3,6 +3,7 @@ package dev.ucplab.core.orchestrator;
 import static dev.ucplab.core.intent.IntentState.APPROVED;
 import static dev.ucplab.core.intent.IntentState.COMPLETED;
 import static dev.ucplab.core.intent.IntentState.COMPLETING;
+import static dev.ucplab.core.intent.IntentState.ESCALATED;
 import static dev.ucplab.core.intent.IntentState.RECONCILING;
 import static dev.ucplab.core.orchestrator.Lab.ALICE;
 import static dev.ucplab.core.orchestrator.Lab.TWO_SHIRTS;
@@ -19,6 +20,8 @@ import dev.ucplab.core.intent.MerchantAttempt;
 import dev.ucplab.core.merchant.fake.Fault;
 import dev.ucplab.core.merchant.fake.FaultRule;
 import dev.ucplab.core.merchant.fake.MerchantCall;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -109,5 +112,33 @@ class RecoveryRulesTest {
 
         assertThat(lab.merchant.log().stream().filter(c -> c.call() == MerchantCall.GET).count()).isEqualTo(readsBefore);
         assertThat(completes(id)).hasSize(2);
+    }
+
+    // Covers: 7.5 rule 1, 7.6, I5, I1 (a takeover that goes back to RECONCILING keeps the persisted uncertain_since, so
+    // the deadline still escalates on time, and no order exists)
+    @Test
+    void advance_keepsUncertainSince_whenAnotherWorkerTakesOverAResendItDidNotApprove() {
+        Lab.Worker first = lab.worker("worker-a");
+        IntentId id = lab.propose(first, TWO_SHIRTS).intentId();
+        lab.decide(first, id, true);
+        lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 1, new Fault.NotSent()));
+        assertThat(first.orchestrator().advance(id).after()).isEqualTo(RECONCILING);
+        Instant since = lab.intent(id).uncertainSince().orElseThrow();
+        lab.clock.advance(lab.config.resendQuietPeriod());
+        assertThat(first.orchestrator().advance(id).after()).isEqualTo(COMPLETING);
+        assertThat(lab.intent(id).uncertainSince()).contains(since);
+
+        lab.clock.advance(lab.config.lease().plusSeconds(1));
+        Lab.Worker second = lab.worker("worker-b");
+        assertThat(second.orchestrator().advance(id).after()).isEqualTo(RECONCILING);
+
+        assertThat(lab.intent(id).uncertainSince()).contains(since);
+        lab.clock.advance(Duration.between(lab.clock.instant(), since.plus(lab.config.reconcileDeadline())));
+        assertThat(lab.clock.instant()).isEqualTo(since.plus(lab.config.reconcileDeadline()));
+
+        assertThat(second.orchestrator().advance(id).after()).isEqualTo(ESCALATED);
+        assertThat(lab.merchant.delivered(MerchantCall.COMPLETE)).isZero();
+        assertThat(lab.merchant.orders()).isEmpty();
+        assertThat(completes(id)).hasSize(1);
     }
 }
