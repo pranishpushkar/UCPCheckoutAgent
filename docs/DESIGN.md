@@ -805,7 +805,7 @@ Effort figures are estimates in hours.
 | M6 Service and packaging | Spring Boot REST API (section 23), lab console (section 24) and CLI for runs and approvals, Docker Compose stack (section 25), README, architecture diagram, 90-second demo, results section | Quick start works from a clean clone. README links the report | 8 to 10 |
 | M6a Multiple merchants | Merchant registry, discovery check, per-merchant breaker and rate limit, fan-out search, catalog file option for the merchant, three merchants in Compose | S20, S21, S22 pass. I11 enforced in the repository | 8 to 10 |
 | M6b Sign-in and tenancy | OIDC sign-in, sessions, CSRF, AuthContext, owner-scoped repositories, recent-sign-in approvals, per-user lab sandboxes | S18, S19 pass. ArchUnit rule: no intent, approval or run repository method without a UserId, except the system methods used by RecoveryWorker | 8 to 12 |
-| M7 Stretch | OTel dashboards, A2A exposure, UCP Order capability and webhooks for reconciliation, Cloud Run demo deployment (21.2) | none required | none |
+| M7 Stretch | OTel dashboards, A2A exposure, UCP Order capability and webhooks for reconciliation, Cloud Run demo deployment (21.2). Conformance is revisited here with the order capability, webhooks and the simulation hook (docs/conformance.md, R3) | none required | none |
 
 Total about 90 to 115 hours for M0 to M6b.
 
@@ -817,7 +817,7 @@ Total about 90 to 115 hours for M0 to M6b.
 | --- | --- | --- |
 | R1 | UCP is evolving | Pin 2026-08-25 (the pin stays for M2). Contract tests. Re-verified before M2 against the raw spec and OpenAPI schema (`docs/spec-notes.md`). The 2026-01-11 and 2026-04-08 examples seen in the spec and conformance pages are recorded there as drift |
 | R2 | ADK for Java API not verified in this document | Isolate in `agent-adk`. Fall back to the Gemini API directly |
-| R3 | The conformance suite may need a simulation hook the merchant lacks | The 2-hour spike above, before building the client |
+| R3 | The conformance suite may need a simulation hook the merchant lacks | The 2-hour spike above, before building the client. Spike done (docs/conformance.md): the suite needs the order capability, webhooks and `/testing/simulate-shipping`; the merchant has none, so conformance is revisited in M7 |
 | R4 | Live model variance and cost | Scripted mode for CI. Cap runs. Report the mode with every number |
 | R5 | `/_lab/*` endpoints must never be exposed | Merchant binds to loopback. Document it. Add a profile flag |
 | R6 | Scope creep (catalog, orders, identity, signatures) | Non-goals N1 to N5. Stretch work only in M7 |

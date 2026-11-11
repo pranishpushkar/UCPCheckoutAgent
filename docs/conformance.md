@@ -53,8 +53,11 @@ Result: **78 tests: 6 passed, 5 failed, 40 errors, 27 skipped.** The raw output 
 - **3 are `AttributeError: 'NoneType' object has no attribute 'instruments'`** (`business_logic_test`:
   `test_buyer_info_persistence`, `test_discount_flow`, `test_totals_recalculation_on_update`). The test reads
   `checkout.payment.instruments` from the create response and resends it. The merchant's checkout response has no
-  `payment` object. **Unverified:** whether the 2026-08-25 `checkout.json` requires `payment` in a response; check
-  before deciding whether this is ours or the suite's.
+  `payment` object. **Checked against the raw 2026-08-25 `checkout.json`:** `required` is `ucp, id, line_items, status,
+  currency, totals, links`. `payment` is not required in a response (its `ucp_request` markers are create and update
+  optional, complete required). The SDK model the suite uses (`ucp-sdk` 0.4.6) also types it `Payment | None = None`.
+  So the merchant is **not** at fault: the response is valid, and the test dereferences an optional field without a
+  check. These 3 errors are the suite's, not a merchant gap.
 
 ### Skipped (27)
 
@@ -65,6 +68,12 @@ Result: **78 tests: 6 passed, 5 failed, 40 errors, 27 skipped.** The raw output 
 | 2 | Capability `dev.ucp.shopping.fulfillment` not advertised |
 | 12 | Fixtures we did not configure (known customers, stored addresses, free shipping, dynamic fulfillment, second and fixed discount codes) |
 | 1 | `test_discovery_urls`: hard-coded skip, "Schemas not yet published on remote ucp.dev domain" |
+
+## Fulfillment
+
+Fulfillment: not added in M2. The suite's create helper always drives fulfillment and its tests are gated only on
+checkout, so a checkout-only merchant errors instead of skipping (suite issue). Conformance is revisited in M7 with the
+order capability, webhooks and the simulation hook.
 
 ## What `SIMULATION_SECRET` requires from the server (R3)
 
@@ -93,12 +102,12 @@ Order plus webhooks are M7. The secret is **not** a credential the merchant must
 | # | Gap | Whose | Action |
 | --- | --- | --- | --- |
 | S1 | The suite and SDK target **2026-04-08**; we target **2026-08-25**. The README example, the SDK pin (`ucp-sdk==0.4.6`) and the suite's CI checkout are all 2026-04-08. We got `test_discovery` through by declaring 2026-08-25 in our input, but every response is parsed with SDK models of the older release | Suite's version | Try the `v2026-08-25` SDK tag and a suite revision that pins it; otherwise accept that a pass here means "conformant to 2026-04-08 shapes". R12 and 26.2 stand |
-| S2 | Checkout tests need **fulfillment** and error (not skip) without it | Suite (not gated), and ours (no capability) | Before M6a, decide whether the lab merchant gets a minimal fulfillment capability. Not in M2 |
+| S2 | Checkout tests need **fulfillment** and error (not skip) without it | Suite (not gated), and ours (no capability) | Not added in M2. Revisited in M7 |
 | O1 | `dev.ucp.shopping.order`, webhooks and the **simulation hook** (`/testing/simulate-shipping`, `Simulation-Secret`) | Ours | M7 (Order and webhooks). Not in M2 |
 | O2 | Discount, buyer consent | Ours | None planned. Skipped or failed, and out of scope (N1 to N5) |
 | O3 | No version negotiation on the merchant (422 for an unsupported `UCP-Agent` version) | Ours | A small merchant change if we want it, later |
 | O4 | `out_of_stock` used for an unknown item | Ours | Would be `not_found` or `item_unavailable` in the suite's list; trivial, not done in M2 |
-| O5 | No `payment` object in the checkout response | Unverified | Check `checkout.json` |
+| O5 | No `payment` object in the checkout response | Suite (optional field in 2026-08-25 and in the SDK model) | None |
 | R1 | README says an out-of-stock item gives **409**; the suite's code accepts **either** a 4xx **or** a 200 with `ucp.status: error`, no `id` and an `out_of_stock` or `item_unavailable` message | Suite's README is stale | None. The merchant's 200 matches the spec page (spec-notes) and passes `test_out_of_stock` |
 
 ## Reproducing
