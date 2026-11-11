@@ -6,7 +6,6 @@ import dev.ucplab.core.intent.IntentEvent;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentRepository;
 import dev.ucplab.core.intent.IntentState;
-import dev.ucplab.core.intent.LeaseLostException;
 import dev.ucplab.core.intent.PurchaseIntent;
 import dev.ucplab.core.intent.StaleVersionException;
 import dev.ucplab.core.intent.Transition;
@@ -28,7 +27,8 @@ import java.util.Set;
  *
  * <p>{@link #decide} checks, in order: the intent belongs to the caller (else NotFound, T6); the sign-in is recent
  * (else ReauthRequired, T4); the newest approval is PENDING, unexpired and the intent is AWAITING_APPROVAL (else
- * NotPending); the token matches the approval's snapshot hash in constant time (else InvalidToken). The intent write
+ * NotPending); the token matches the approval's snapshot hash in constant time (else InvalidToken); the lease is free
+ * or ours (else Busy with the time left on it, 23.5). The intent write
  * is version-checked, so two concurrent decisions cannot both win; the loser gets NotPending.
  *
  * <p>A rejection moves the intent to REJECTED here; the session cancel that table 7.2 lists is made by the
@@ -143,8 +143,16 @@ public final class DefaultApprovalService implements ApprovalService {
             return new ApprovalDecision.InvalidToken();
         }
 
-        PurchaseIntent intent = intents.claim(id, workerId, lease)
-                .orElseThrow(() -> new LeaseLostException(id, workerId));
+        Optional<PurchaseIntent> claimed = intents.claim(id, workerId, lease);
+        if (claimed.isEmpty()) {
+            // Another worker holds a live lease: busy, not lost (23.5). Re-read for the time left on it.
+            return intents.findForSystem(id)
+                    .<ApprovalDecision>map(held -> new ApprovalDecision.Busy(
+                            held.leaseUntil().map(until -> Duration.between(now, until)).filter(d -> !d.isNegative())
+                                    .orElse(Duration.ZERO)))
+                    .orElseGet(ApprovalDecision.NotFound::new);
+        }
+        PurchaseIntent intent = claimed.get();
         if (intent.state() != IntentState.AWAITING_APPROVAL) {
             return new ApprovalDecision.NotPending();
         }
