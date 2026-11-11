@@ -18,5 +18,11 @@
             <groupId>dev.ucplab</groupId>
             <artifactId>agent-core</artifactId>
         </dependency>
+        <!-- Section 5.2: the merchant is the system under test for contract tests only. -->
+        <dependency>
+            <groupId>dev.ucplab</groupId>
+            <artifactId>merchant</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 </project>
