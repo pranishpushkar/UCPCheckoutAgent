@@ -206,11 +206,8 @@ public final class DefaultOrchestrator implements Orchestrator {
             return new ProposalResult(intent.id(), intent.state(), Optional.empty());
         }
 
-        // Quote now: a create plus its retries, each one step (7.2 QUOTING rows).
+        // Quote now: one create call. Retries live in the gateway (7.2, 8.2); this never loops.
         Step last = step(intent.id());
-        for (int i = 0; last.after() == QUOTING && !last.idle() && i <= config.maxQuoteRetries(); i++) {
-            last = step(intent.id());
-        }
         return new ProposalResult(intent.id(), last.after(),
                 last.after() == AWAITING_APPROVAL ? last.quote() : Optional.empty());
     }
@@ -315,9 +312,10 @@ public final class DefaultOrchestrator implements Orchestrator {
         boolean create = intent.requoteCount() == 0;
         AttemptOp op = create ? AttemptOp.CREATE : AttemptOp.UPDATE;
         int revision = create ? 0 : intent.requoteCount() - 1;
-        // Every earlier attempt under this key failed, or the intent would have left QUOTING.
-        int failures = (int) attempts.stream().filter(a -> a.op() == op && a.revision() == revision).count();
-        if (failures > config.maxQuoteRetries()) {
+        // Retries live in the gateway (7.2, 8.2): an attempt already under this key (answered with a failure, or left
+        // SENT by a crash) is not repeated here.
+        boolean tried = attempts.stream().anyMatch(a -> a.op() == op && a.revision() == revision);
+        if (tried) {
             Move m = move(intent, TransitionEvent.RETRIES_EXHAUSTED);
             PurchaseIntent next = m.next().withFailureReason(QUOTE_RETRIES_EXHAUSTED);
             intents.update(next, intent.version(), workerId);
@@ -340,12 +338,11 @@ public final class DefaultOrchestrator implements Orchestrator {
         }
         MerchantAttempt attempt = newAttempt(intent.id(), op, revision, key, Optional.of(new FrozenBody(body)));
         PurchaseIntent written = writeAhead(intent, attempt, intent.withState(QUOTING, clock.instant()));
-        return onQuoteOutcome(written, attempt, call.get(), failures + 1, create);
+        return onQuoteOutcome(written, attempt, call.get(), create);
     }
 
     private Step onQuoteOutcome(
-            PurchaseIntent written, MerchantAttempt attempt, CallOutcome<CheckoutView> outcome, int attemptsUnderKey,
-            boolean create) {
+            PurchaseIntent written, MerchantAttempt attempt, CallOutcome<CheckoutView> outcome, boolean create) {
         return switch (outcome) {
             case CallOutcome.Ok<CheckoutView> ok -> {
                 CheckoutView view = ok.value();
@@ -379,19 +376,17 @@ public final class DefaultOrchestrator implements Orchestrator {
                     yield quoteReady(base, attempt, http, summary, view);
                 }
                 // An answer that is neither a quote nor a known failure: retry under the same key until exhausted.
-                yield retryOrExhaust(base, attempt, AttemptStatus.RESPONDED, http, summary, TransitionEvent.UNCERTAIN,
-                        attemptsUnderKey);
+                yield exhaustQuoting(base, attempt, AttemptStatus.RESPONDED, http, summary);
             }
             case CallOutcome.Rejected<CheckoutView> r when create -> finish(written, attempt, AttemptStatus.RESPONDED,
                     Optional.of(r.httpStatus()), Optional.of(describe(r)), move(written, TransitionEvent.CREATE_REJECTED),
                     rejectedReason(r));
             // Rejected is valid only for create (8.1). On an update it cannot settle anything, so it is retried
             // like an answer that is neither a quote nor a known failure.
-            case CallOutcome.Rejected<CheckoutView> r -> retryOrExhaust(written, attempt, AttemptStatus.RESPONDED,
-                    Optional.of(r.httpStatus()), Optional.of(describe(r)), TransitionEvent.UNCERTAIN, attemptsUnderKey);
-            case CallOutcome.ProtocolError<CheckoutView> e when isRetryable(e) -> retryOrExhaust(written, attempt,
-                    AttemptStatus.RESPONDED, Optional.of(e.httpStatus()), Optional.of(describe(e)),
-                    TransitionEvent.NOT_SENT, attemptsUnderKey);
+            case CallOutcome.Rejected<CheckoutView> r -> exhaustQuoting(written, attempt, AttemptStatus.RESPONDED,
+                    Optional.of(r.httpStatus()), Optional.of(describe(r)));
+            case CallOutcome.ProtocolError<CheckoutView> e when isRetryable(e) -> exhaustQuoting(written, attempt,
+                    AttemptStatus.RESPONDED, Optional.of(e.httpStatus()), Optional.of(describe(e)));
             case CallOutcome.ProtocolError<CheckoutView> e -> {
                 Optional<Integer> http = Optional.of(e.httpStatus());
                 Optional<String> response = Optional.of(describe(e));
@@ -410,10 +405,10 @@ public final class DefaultOrchestrator implements Orchestrator {
                 yield finish(written, attempt, AttemptStatus.RESPONDED, http, response,
                         move(written, TransitionEvent.RETRIES_EXHAUSTED), MERCHANT_ERROR_PREFIX + e.code());
             }
-            case CallOutcome.NotSent<CheckoutView> n -> retryOrExhaust(written, attempt, AttemptStatus.UNCERTAIN,
-                    Optional.empty(), Optional.of(describe(n)), TransitionEvent.NOT_SENT, attemptsUnderKey);
-            case CallOutcome.Uncertain<CheckoutView> u -> retryOrExhaust(written, attempt, AttemptStatus.UNCERTAIN,
-                    Optional.empty(), Optional.of(describe(u)), TransitionEvent.UNCERTAIN, attemptsUnderKey);
+            case CallOutcome.NotSent<CheckoutView> n -> exhaustQuoting(written, attempt, AttemptStatus.UNCERTAIN,
+                    Optional.empty(), Optional.of(describe(n)));
+            case CallOutcome.Uncertain<CheckoutView> u -> exhaustQuoting(written, attempt, AttemptStatus.UNCERTAIN,
+                    Optional.empty(), Optional.of(describe(u)));
         };
     }
 
@@ -446,17 +441,15 @@ public final class DefaultOrchestrator implements Orchestrator {
         return new Step(QUOTING, m.next().state(), false, Optional.of(view));
     }
 
-    private Step retryOrExhaust(
+    /**
+     * Ends QUOTING after a failed or unusable answer (7.2, retries exhausted). Retries live in the gateway (8.2); the
+     * orchestrator never repeats a QUOTING call, so the first such answer is the last.
+     */
+    private Step exhaustQuoting(
             PurchaseIntent base, MerchantAttempt attempt, AttemptStatus status, Optional<Integer> http,
-            Optional<String> response, TransitionEvent event, int attemptsUnderKey) {
-        if (attemptsUnderKey > config.maxQuoteRetries()) {
-            return finish(base, attempt, status, http, response, move(base, TransitionEvent.RETRIES_EXHAUSTED),
-                    QUOTE_RETRIES_EXHAUSTED);
-        }
-        Move m = move(base, event, TransitionGuard.RETRIES_LEFT);
-        resolve(attempt, status, http, response, m.next(), base.version());
-        transitionEvent(base.id(), m.transition());
-        return moved(base, m.next());
+            Optional<String> response) {
+        return finish(base, attempt, status, http, response, move(base, TransitionEvent.RETRIES_EXHAUSTED),
+                QUOTE_RETRIES_EXHAUSTED);
     }
 
     /** Resolves the attempt and moves to a terminal state with a failure reason, in one write. */

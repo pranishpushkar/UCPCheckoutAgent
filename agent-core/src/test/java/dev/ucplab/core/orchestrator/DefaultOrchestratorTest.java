@@ -93,33 +93,37 @@ class DefaultOrchestratorTest {
         assertThat(lab.merchant.sessionsCreated()).isEqualTo(1);
     }
 
-    // Covers: 7.2 (QUOTING not_sent, retries left), 8.2, S1, I4 (create is retried under the same key; one session)
+    // Covers: 7.2 (QUOTING retries exhausted), 8.2 "Retries live in one layer" (the gateway retries; the orchestrator
+    // makes one create call and a final NotSent goes straight to FAILED_NOT_CHARGED), I4
     @Test
-    void propose_retriesCreateUnderSameKey_afterNotSent() {
+    void propose_failsNotCharged_afterOneNotSent_becauseOnlyTheGatewayRetries() {
         lab.merchant.addRule(FaultRule.nth(MerchantCall.CREATE, 1, new Fault.NotSent()));
-        lab.merchant.addRule(FaultRule.nth(MerchantCall.CREATE, 2, new Fault.NotSent()));
 
         ProposalResult r = lab.propose(w, TWO_SHIRTS);
 
-        assertThat(r.state()).isEqualTo(AWAITING_APPROVAL);
-        assertThat(lab.merchant.sessionsCreated()).isEqualTo(1);
-        assertThat(attempts(r.intentId(), AttemptOp.CREATE)).hasSize(3)
-                .extracting(a -> a.idempotencyKey().orElseThrow())
-                .containsOnly(IdempotencyKey.derive(r.intentId(), MutatingOp.CREATE, 0));
+        assertThat(r.state()).isEqualTo(FAILED_NOT_CHARGED);
+        assertThat(lab.intent(r.intentId()).failureReason()).contains(DefaultOrchestrator.QUOTE_RETRIES_EXHAUSTED);
+        assertThat(lab.merchant.sessionsCreated()).isZero();
+        assertThat(attempts(r.intentId(), AttemptOp.CREATE)).singleElement()
+                .satisfies(a -> assertThat(a.idempotencyKey()).contains(
+                        IdempotencyKey.derive(r.intentId(), MutatingOp.CREATE, 0)));
+        assertThat(lab.merchant.delivered(MerchantCall.CREATE)).isZero();
     }
 
-    // Covers: 7.2 (QUOTING retries exhausted), I4 (every resend reuses the key, so the merchant made one session)
+    // Covers: 7.2 (QUOTING retries exhausted), 8.2 (one call: an Uncertain create is not re-sent by the orchestrator),
+    // I4 (the one session the merchant made is never completed)
     @Test
-    void propose_failsNotCharged_whenCreateStaysUncertain() {
+    void propose_failsNotCharged_afterOneUncertain_withoutResending() {
         lab.merchant.addRule(FaultRule.every(MerchantCall.CREATE, new Fault.CommitThenDrop()));
 
         ProposalResult r = lab.propose(w, TWO_SHIRTS);
 
         assertThat(r.state()).isEqualTo(FAILED_NOT_CHARGED);
         assertThat(lab.intent(r.intentId()).failureReason()).contains(DefaultOrchestrator.QUOTE_RETRIES_EXHAUSTED);
-        assertThat(attempts(r.intentId(), AttemptOp.CREATE)).hasSize(1 + lab.config.maxQuoteRetries());
+        assertThat(attempts(r.intentId(), AttemptOp.CREATE)).hasSize(1);
         assertThat(lab.merchant.sessionsCreated()).isEqualTo(1);
         assertThat(lab.merchant.orders()).isEmpty();
+        assertThat(lab.merchant.delivered(MerchantCall.CREATE)).isEqualTo(1);
     }
 
     // Covers: P2 (a quote above the per-purchase cap ends the intent without an approval and cancels the session)
@@ -383,7 +387,7 @@ class DefaultOrchestratorTest {
     void reconcile_stopsAfterMaxResends_pollsUntilLongerDeadline() {
         OrchestratorConfig d = OrchestratorConfig.defaults();
         Lab long120 = new Lab(new OrchestratorConfig(d.lease(), d.completeRequestTimeout(), d.resendQuietPeriod(),
-                Duration.ofSeconds(120), d.maxCompleteResends(), d.maxQuoteRetries(), d.pollInitial(), d.pollMax(),
+                Duration.ofSeconds(120), d.maxCompleteResends(), d.pollInitial(), d.pollMax(),
                 d.pollJitter()));
         Lab.Worker w120 = long120.worker("worker-a");
         IntentId id = long120.propose(w120, TWO_SHIRTS).intentId();
@@ -528,11 +532,11 @@ class DefaultOrchestratorTest {
         Duration poll = Duration.ofMillis(250);
         Duration pollMax = Duration.ofSeconds(2);
 
-        assertThatThrownBy(() -> new OrchestratorConfig(Duration.ofSeconds(30), ten, Duration.ofSeconds(9), minute, 3, 3,
+        assertThatThrownBy(() -> new OrchestratorConfig(Duration.ofSeconds(30), ten, Duration.ofSeconds(9), minute, 3,
                 poll, pollMax, 0.2)).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("7.5");
-        assertThatThrownBy(() -> new OrchestratorConfig(Duration.ofSeconds(24), ten, ten, minute, 3, 3,
+        assertThatThrownBy(() -> new OrchestratorConfig(Duration.ofSeconds(24), ten, ten, minute, 3,
                 poll, pollMax, 0.2)).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("7.6");
-        assertThatThrownBy(() -> new OrchestratorConfig(Duration.ofSeconds(30), ten, ten, minute, 3, 3,
+        assertThatThrownBy(() -> new OrchestratorConfig(Duration.ofSeconds(30), ten, ten, minute, 3,
                 pollMax, poll, 0.2)).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("7.5");
         assertThat(OrchestratorConfig.defaults().lease()).isEqualTo(Duration.ofSeconds(30));
         assertThat(OrchestratorConfig.defaults().resendQuietPeriod()).isEqualTo(Duration.ofSeconds(20));
@@ -544,7 +548,7 @@ class DefaultOrchestratorTest {
         OrchestratorConfig d = OrchestratorConfig.defaults();
 
         OrchestratorConfig rebuilt = new OrchestratorConfig(d.lease(), d.completeRequestTimeout(), d.resendQuietPeriod(),
-                d.reconcileDeadline(), d.maxCompleteResends(), d.maxQuoteRetries(), d.pollInitial(), d.pollMax(),
+                d.reconcileDeadline(), d.maxCompleteResends(), d.pollInitial(), d.pollMax(),
                 d.pollJitter());
 
         assertThat(rebuilt).isEqualTo(d);
@@ -558,11 +562,11 @@ class DefaultOrchestratorTest {
         OrchestratorConfig d = OrchestratorConfig.defaults();
 
         assertThatThrownBy(() -> new OrchestratorConfig(d.lease(), d.completeRequestTimeout(), d.resendQuietPeriod(),
-                d.reconcileDeadline(), 3, d.maxQuoteRetries(), d.pollInitial(), d.pollMax(), d.pollJitter()))
+                d.reconcileDeadline(), 3, d.pollInitial(), d.pollMax(), d.pollJitter()))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("7.5")
                 .hasMessageContaining("resend cap");
         assertThatThrownBy(() -> new OrchestratorConfig(d.lease(), d.completeRequestTimeout(), d.resendQuietPeriod(),
-                Duration.ofSeconds(40), 2, d.maxQuoteRetries(), d.pollInitial(), d.pollMax(), d.pollJitter()))
+                Duration.ofSeconds(40), 2, d.pollInitial(), d.pollMax(), d.pollJitter()))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("resend cap");
     }
 }

@@ -11,7 +11,6 @@ import java.util.Objects;
  * @param resendQuietPeriod minimum time between a {@code complete} attempt and its resend (7.5)
  * @param reconcileDeadline time from the first uncertainty to ESCALATED (7.5)
  * @param maxCompleteResends resends of {@code complete} under one key (7.5)
- * @param maxQuoteRetries retries of a create or update under one key before FAILED_NOT_CHARGED (7.2, 8.2)
  * @param pollInitial first reconciliation poll delay (7.5)
  * @param pollMax largest reconciliation poll delay (7.5)
  * @param pollJitter relative jitter on each poll delay, in [0, 1) (7.5)
@@ -22,7 +21,6 @@ public record OrchestratorConfig(
         Duration resendQuietPeriod,
         Duration reconcileDeadline,
         int maxCompleteResends,
-        int maxQuoteRetries,
         Duration pollInitial,
         Duration pollMax,
         double pollJitter) {
@@ -46,8 +44,8 @@ public record OrchestratorConfig(
         if (!reconcileDeadline.isPositive()) {
             throw new IllegalArgumentException("reconcileDeadline must be positive: " + reconcileDeadline);
         }
-        if (maxCompleteResends < 0 || maxQuoteRetries < 0) {
-            throw new IllegalArgumentException("retry counts must not be negative");
+        if (maxCompleteResends < 0) {
+            throw new IllegalArgumentException("maxCompleteResends must not be negative");
         }
         Duration resendSpan = resendQuietPeriod.multipliedBy(maxCompleteResends);
         if (reconcileDeadline.compareTo(resendSpan) <= 0) {
@@ -65,11 +63,11 @@ public record OrchestratorConfig(
 
     /**
      * Lease 30 s, complete timeout 10 s, quiet period 20 s (twice the complete timeout, 7.5), deadline 60 s,
-     * 2 resends (complete at 0, 20 and 40 s; 7.5 "Reconciliation defaults"), 3 retries, polls from 250 ms to 2 s with
+     * 2 resends (complete at 0, 20 and 40 s; 7.5 "Reconciliation defaults"), polls from 250 ms to 2 s with
      * 20% jitter.
      */
     public static OrchestratorConfig defaults() {
         return new OrchestratorConfig(Duration.ofSeconds(30), Duration.ofSeconds(10), Duration.ofSeconds(20),
-                Duration.ofSeconds(60), 2, 3, Duration.ofMillis(250), Duration.ofSeconds(2), 0.2);
+                Duration.ofSeconds(60), 2, Duration.ofMillis(250), Duration.ofSeconds(2), 0.2);
     }
 }
