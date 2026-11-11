@@ -38,3 +38,6 @@ target/
 
 ### Claude Code ###
 .claude/
+
+### Conformance spike ###
+.conformance/
