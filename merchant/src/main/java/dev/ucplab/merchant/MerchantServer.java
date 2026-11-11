@@ -21,6 +21,9 @@ import java.util.concurrent.Executors;
  *   PUT  /ucp/v1/checkout-sessions/{id}           update (full replacement)
  *   POST /ucp/v1/checkout-sessions/{id}/complete  place the order
  *   POST /ucp/v1/checkout-sessions/{id}/cancel    cancel
+ *   POST /ucp/v1/catalog/search                   catalog search (dev.ucp.shopping.catalog.search)
+ *   POST /ucp/v1/catalog/lookup                   batch lookup by id (dev.ucp.shopping.catalog.lookup)
+ *   POST /ucp/v1/catalog/product                  one product in full (dev.ucp.shopping.catalog.lookup)
  *   /_lab/*                                       test controls for the failure harness (not part of UCP)
  *
  * Deliberate gaps (see docs/spec-notes.md): plain HTTP, no authentication, no message signatures.
@@ -28,9 +31,11 @@ import java.util.concurrent.Executors;
 final class MerchantServer {
     private final MerchantCore core;
     private final HttpServer server;
+    private final CatalogApi catalogApi;
 
     MerchantServer(MerchantCore core, int port) throws IOException {
         this.core = core;
+        this.catalogApi = new CatalogApi(core.catalog());
         // Loopback only: this is a lab server with test controls, so it should not be reachable from outside.
         this.server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
         this.server.createContext("/", this::handle);
@@ -76,6 +81,11 @@ final class MerchantServer {
             send(ex, 400, MerchantCore.protocolError("missing_header", "Request-Id and UCP-Agent headers are required"));
             return;
         }
+        if (path.startsWith("/catalog/")) {
+            catalog(ex, method, path, bodyText);
+            return;
+        }
+
         boolean mutating = method.equals("POST") || method.equals("PUT");
         String key = h.getFirst("Idempotency-Key");
         if (mutating && key == null) {
@@ -110,6 +120,23 @@ final class MerchantServer {
         }
         ex.getResponseHeaders().add("Request-Id", h.getFirst("Request-Id"));
         send(ex, r.status(), r.body());
+    }
+
+    /** The catalog reads: POST with a JSON body, no Idempotency-Key (they change nothing). */
+    private void catalog(HttpExchange ex, String method, String path, String bodyText) throws IOException {
+        Map<String, Object> req = Json.parseObject(bodyText);
+        Map<String, Object> out = switch (method + " " + path) {
+            case "POST /catalog/search" -> catalogApi.search(req);
+            case "POST /catalog/lookup" -> catalogApi.lookup(req);
+            case "POST /catalog/product" -> catalogApi.product(req);
+            default -> null;
+        };
+        if (out == null) {
+            send(ex, 404, MerchantCore.protocolError("not_found", "No such route"));
+            return;
+        }
+        ex.getResponseHeaders().add("Request-Id", ex.getRequestHeaders().getFirst("Request-Id"));
+        send(ex, 200, out);
     }
 
     private void lab(HttpExchange ex, String method, String path, String bodyText) throws IOException {
