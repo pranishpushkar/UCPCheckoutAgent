@@ -378,12 +378,12 @@ public final class FaultyMerchantModel implements MerchantGateway {
 
     private CallOutcome<CheckoutView> doCreate(CreateCheckout request) {
         Priced priced = price(request.lines());
-        if (priced.availableCount == 0) {
-            return new CallOutcome.Rejected<>(200, List.of(
-                    message("error", "out_of_stock", "$.line_items", "every item is unavailable; no checkout was created")));
+        if (priced.lines.isEmpty()) {
+            return new CallOutcome.Rejected<>(200, List.of(new MerchantMessage("error", "out_of_stock", Optional.empty(),
+                    "All requested items are currently out of stock", Optional.of("unrecoverable"))));
         }
         Session s = new Session(new SessionId("cs_" + ids.next()), priced.lines, request.buyerEmail());
-        s.status = readiness(s, priced.messages);
+        s.status = readiness(s);
         sessions.put(s.id, s);
         return ok(201, s, priced.messages);
     }
@@ -402,9 +402,16 @@ public final class FaultyMerchantModel implements MerchantGateway {
             }
             default -> {
                 Priced priced = price(request.lines());
+                if (priced.lines.isEmpty()) {
+                    // The merchant leaves the session as it was and says so.
+                    List<MerchantMessage> messages = new ArrayList<>(priced.messages);
+                    messages.add(new MerchantMessage("error", "out_of_stock", Optional.empty(),
+                            "All requested items are currently out of stock", Optional.of("unrecoverable")));
+                    return ok(200, s, messages);
+                }
                 s.lines = priced.lines;
                 s.buyerEmail = request.buyerEmail();
-                s.status = readiness(s, priced.messages);
+                s.status = readiness(s);
                 return ok(200, s, priced.messages);
             }
         }
@@ -511,32 +518,37 @@ public final class FaultyMerchantModel implements MerchantGateway {
 
     // ---------------------------------------------------------------- helpers
 
+    /**
+     * Mirrors {@code MerchantCore.resolveLines}: an unknown item or stock 0 drops the line with an
+     * {@code item_unavailable} error; a quantity above the stock is cut to the stock with a
+     * {@code quantity_adjusted} warning and the line stays.
+     */
     private Priced price(List<ProposedLine> requested) {
         List<LineView> lines = new ArrayList<>();
         List<MerchantMessage> messages = new ArrayList<>();
-        int available = 0;
         for (int i = 0; i < requested.size(); i++) {
             ProposedLine line = requested.get(i);
             Item item = catalog.get(line.itemId());
             String path = "$.line_items[" + i + "]";
-            if (item == null) {
-                lines.add(new LineView(line.itemId(), line.quantity(), 0));
-                messages.add(message("error", "item_unavailable", path, line.itemId() + " is not sold"));
-            } else if (item.stock < line.quantity()) {
-                lines.add(new LineView(line.itemId(), line.quantity(), item.price));
-                messages.add(message("error", "out_of_stock", path, line.itemId() + " has " + item.stock + " left"));
-            } else {
-                lines.add(new LineView(line.itemId(), line.quantity(), item.price));
-                available++;
+            if (item == null || item.stock == 0) {
+                messages.add(new MerchantMessage("error", "item_unavailable", Optional.of(path),
+                        "Item " + line.itemId() + " is not available", Optional.of("recoverable")));
+                continue;
             }
+            int quantity = line.quantity();
+            if (quantity > item.stock) {
+                messages.add(message("warning", "quantity_adjusted", path + ".quantity", "Quantity adjusted, requested "
+                        + quantity + " units but only " + item.stock + " available"));
+                quantity = item.stock;
+            }
+            lines.add(new LineView(line.itemId(), quantity, item.price));
         }
-        return new Priced(List.copyOf(lines), List.copyOf(messages), available);
+        return new Priced(List.copyOf(lines), List.copyOf(messages));
     }
 
-    private static CheckoutStatus readiness(Session s, List<MerchantMessage> problems) {
-        return !s.lines.isEmpty() && problems.isEmpty() && s.buyerEmail.isPresent()
-                ? CheckoutStatus.READY_FOR_COMPLETE
-                : CheckoutStatus.INCOMPLETE;
+    /** The merchant's state rule: ready once there is a buyer email, whatever the messages say. */
+    private static CheckoutStatus readiness(Session s) {
+        return s.buyerEmail.isPresent() ? CheckoutStatus.READY_FOR_COMPLETE : CheckoutStatus.INCOMPLETE;
     }
 
     private CallOutcome<CheckoutView> ok(int httpStatus, Session s, List<MerchantMessage> messages) {
@@ -603,7 +615,7 @@ public final class FaultyMerchantModel implements MerchantGateway {
 
     private record Held(Instant dueAt, long order, Runnable action) {}
 
-    private record Priced(List<LineView> lines, List<MerchantMessage> messages, int availableCount) {}
+    private record Priced(List<LineView> lines, List<MerchantMessage> messages) {}
 
     private static final class Item {
         long price;

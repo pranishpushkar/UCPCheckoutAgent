@@ -143,7 +143,9 @@ class DefaultOrchestratorTest {
     // so nothing is retried or cancelled and no order can follow)
     @Test
     void propose_failsNotCharged_whenCreateIsRejectedBecauseEveryItemIsUnavailable() {
-        ProposalResult r = lab.propose(w, List.of(new ProposedLine("item_789", 4)));
+        lab.merchant.setStock("item_789", 0);
+
+        ProposalResult r = lab.propose(w, List.of(new ProposedLine("item_789", 1)));
 
         assertThat(r.state()).isEqualTo(FAILED_NOT_CHARGED);
         assertThat(lab.intent(r.intentId()).failureReason()).contains(DefaultOrchestrator.OUT_OF_STOCK);

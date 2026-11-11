@@ -14,6 +14,7 @@ import dev.ucplab.core.merchant.CreateCheckout;
 import dev.ucplab.core.merchant.FrozenBody;
 import dev.ucplab.core.merchant.IdempotencyKey;
 import dev.ucplab.core.merchant.MerchantId;
+import dev.ucplab.core.merchant.LineView;
 import dev.ucplab.core.merchant.MerchantMessage;
 import dev.ucplab.core.merchant.MutatingOp;
 import dev.ucplab.core.merchant.PaymentInstrument;
@@ -132,11 +133,14 @@ class FaultyMerchantModelTest {
         assertThat(merchant.sessionsCreated()).isEqualTo(1);
     }
 
-    // Covers: A.1, 8.1, 7.2 create_rejected (every item unavailable: no session id, reported as Rejected)
+    // Covers: A.1, 8.1, 7.2 create_rejected (every item unavailable: an unknown item or stock 0. No session id,
+    // reported as Rejected). Mirrors MerchantCore.resolveLines and create.
     @Test
-    void create_isRejected_whenEveryItemIsUnavailable() {
+    void create_isRejected_whenEveryItemIsUnknownOrOutOfStock() {
+        merchant.setStock("item_789", 0);
+
         CallOutcome<CheckoutView> outcome = merchant.create(new CreateCheckout(
-                List.of(new ProposedLine("item_789", 4), new ProposedLine("nope", 1)), Optional.of("a@example.com")),
+                List.of(new ProposedLine("item_789", 1), new ProposedLine("nope", 1)), Optional.of("a@example.com")),
                 CREATE_KEY);
 
         assertThat(outcome).isInstanceOfSatisfying(CallOutcome.Rejected.class, r -> {
@@ -147,15 +151,70 @@ class FaultyMerchantModelTest {
         assertThat(merchant.sessionsCreated()).isZero();
     }
 
-    // Covers: A.1 (a partly unavailable basket is created incomplete with a message per bad line)
+    // Covers: A.1 (insufficient stock is not unavailable: the line is kept with the quantity reduced to the stock and
+    // a quantity_adjusted warning, so a create of item_789 x4 with 3 in stock is a session for 3). Mirrors the
+    // merchant: only stock 0, an unknown item or a quantity below 1 drops a line.
     @Test
-    void create_isIncompleteWithLineMessages_whenSomeItemsAreUnavailable() {
+    void create_adjustsQuantityToStock_whenStockIsInsufficient() {
         CheckoutView view = ok(merchant.create(new CreateCheckout(
-                List.of(new ProposedLine("item_123", 1), new ProposedLine("item_789", 4)),
+                List.of(new ProposedLine("item_789", 4)), Optional.of("a@example.com")), CREATE_KEY));
+
+        assertThat(view.status()).isEqualTo(CheckoutStatus.READY_FOR_COMPLETE);
+        assertThat(view.lines()).containsExactly(new LineView("item_789", 3, 12000));
+        assertThat(view.messages()).singleElement().satisfies(m -> {
+            assertThat(m.type()).isEqualTo("warning");
+            assertThat(m.code()).isEqualTo("quantity_adjusted");
+            assertThat(m.path()).contains("$.line_items[0].quantity");
+        });
+        assertThat(view.totalMinor()).isEqualTo(38880);
+    }
+
+    // Covers: A.1 (an unknown item or stock 0 drops that line with an item_unavailable error; the rest stays and the
+    // session is still ready_for_complete, because readiness depends on the buyer email alone)
+    @Test
+    void create_dropsUnavailableLine_andStaysReady() {
+        merchant.setStock("item_456", 0);
+
+        CheckoutView view = ok(merchant.create(new CreateCheckout(
+                List.of(new ProposedLine("item_123", 1), new ProposedLine("item_456", 1), new ProposedLine("nope", 2)),
                 Optional.of("a@example.com")), CREATE_KEY));
 
-        assertThat(view.status()).isEqualTo(CheckoutStatus.INCOMPLETE);
-        assertThat(codes(view)).containsExactly("out_of_stock");
+        assertThat(view.lines()).containsExactly(new LineView("item_123", 1, 2500));
+        assertThat(view.status()).isEqualTo(CheckoutStatus.READY_FOR_COMPLETE);
+        assertThat(view.messages()).extracting(m -> m.code() + m.path().orElse("")).containsExactly(
+                "item_unavailable$.line_items[1]", "item_unavailable$.line_items[2]");
+        assertThat(view.messages()).allSatisfy(m -> assertThat(m.type()).isEqualTo("error"));
+    }
+
+    // Covers: A.1 (PUT with every line unavailable leaves the session unchanged and answers an out_of_stock error)
+    @Test
+    void update_leavesSessionUnchanged_whenEveryLineIsUnavailable() {
+        SessionId id = createSession();
+        CheckoutView before = ok(merchant.get(id));
+
+        CheckoutView after = ok(merchant.update(id,
+                new UpdateCheckout(List.of(new ProposedLine("nope", 1)), Optional.of("alice@example.com")),
+                IdempotencyKey.derive(INTENT, MutatingOp.UPDATE, 0)));
+
+        assertThat(after.lines()).isEqualTo(before.lines());
+        assertThat(after.status()).isEqualTo(before.status());
+        assertThat(codes(after)).contains("out_of_stock");
+    }
+
+    // Covers: A.1 (PUT applies the same availability rules as create: quantity adjusted, unavailable line dropped)
+    @Test
+    void update_adjustsAndDrops_likeCreate() {
+        SessionId id = createSession();
+        merchant.setStock("item_456", 0);
+
+        CheckoutView after = ok(merchant.update(id,
+                new UpdateCheckout(List.of(new ProposedLine("item_789", 5), new ProposedLine("item_456", 1)),
+                        Optional.of("alice@example.com")),
+                IdempotencyKey.derive(INTENT, MutatingOp.UPDATE, 0)));
+
+        assertThat(after.lines()).containsExactly(new LineView("item_789", 3, 12000));
+        assertThat(codes(after)).containsExactly("quantity_adjusted", "item_unavailable");
+        assertThat(after.status()).isEqualTo(CheckoutStatus.READY_FOR_COMPLETE);
     }
 
     // Covers: A.1, A.2, I1 (complete charges, creates one order and reserves stock)
