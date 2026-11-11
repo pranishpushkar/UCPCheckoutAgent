@@ -11,6 +11,7 @@ import dev.ucplab.core.approval.ApprovalStatus;
 import dev.ucplab.core.intent.AttemptOp;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.PurchaseIntent;
+import dev.ucplab.core.merchant.SessionId;
 import dev.ucplab.core.merchant.fake.MerchantCall;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -65,6 +66,16 @@ class ApprovalCheckBeforeSendTest {
         IntentId id = approved();
         PurchaseIntent intent = lab.intent(id);
         lab.intents.update(intent.withApprovedSnapshotHash(Optional.of("0".repeat(64))), intent.version(), "worker-a");
+
+        assertEscalatedWithNothingSent(id);
+    }
+
+    // Covers: I3, I4, I5 (the approved snapshot is for another session than the intent's: escalate, do not throw forever)
+    @Test
+    void advance_escalatesWithoutSending_whenApprovedSnapshotIsForAnotherSession() {
+        IntentId id = approved();
+        PurchaseIntent intent = lab.intent(id);
+        lab.intents.update(intent.withSessionId(new SessionId("some-other-session")), intent.version(), "worker-a");
 
         assertEscalatedWithNothingSent(id);
     }

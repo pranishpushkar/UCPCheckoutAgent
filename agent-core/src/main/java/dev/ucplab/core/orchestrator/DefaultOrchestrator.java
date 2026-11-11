@@ -563,6 +563,8 @@ public final class DefaultOrchestrator implements Orchestrator {
         Optional<ApprovalRecord> latest = approvals.findLatestForSystem(intent.id());
         Optional<ApprovalRecord> usable = latest
                 .filter(a -> hash.isPresent() && a.snapshotHash().equals(hash.get()))
+                // I3, I4: the approved snapshot is for this intent's session.
+                .filter(a -> intent.sessionId().equals(Optional.of(a.snapshot().sessionId())))
                 .filter(a -> Set.of(ApprovalStatus.PENDING, ApprovalStatus.APPROVED, ApprovalStatus.CONSUMED)
                         .contains(a.status()));
         if (usable.isEmpty()) {
@@ -570,9 +572,6 @@ public final class DefaultOrchestrator implements Orchestrator {
         }
         ApprovalRecord approval = usable.get();
         SessionId session = requireSession(intent);
-        if (!approval.snapshot().sessionId().equals(session)) {
-            throw new IllegalStateException("I3, I4: the approved snapshot is for another session: " + intent.id());
-        }
         int revision = intent.requoteCount();
         List<MerchantAttempt> completes = completes(attempts);
         if (completes.stream().anyMatch(a -> a.revision() >= revision)) {
@@ -836,8 +835,8 @@ public final class DefaultOrchestrator implements Orchestrator {
     }
 
     /**
-     * I3: the newest approval is missing, decided against, expired, or for another snapshot than the one the intent was
-     * approved with. Nothing is sent and no attempt is written; the intent goes to ESCALATED with a reason, so a human
+     * I3: the newest approval is missing, decided against, expired, or for another snapshot or another session than the
+     * intent was approved with. Nothing is sent and no attempt is written; the intent goes to ESCALATED with a reason, so a human
      * looks at it instead of the worker retrying forever.
      */
     private Step escalateInvalidApproval(
