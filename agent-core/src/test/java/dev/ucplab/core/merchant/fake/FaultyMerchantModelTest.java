@@ -160,7 +160,7 @@ class FaultyMerchantModelTest {
                 List.of(new ProposedLine("item_789", 4)), Optional.of("a@example.com")), CREATE_KEY));
 
         assertThat(view.status()).isEqualTo(CheckoutStatus.READY_FOR_COMPLETE);
-        assertThat(view.lines()).containsExactly(new LineView("item_789", 3, 12000));
+        assertThat(view.lines()).containsExactly(new LineView("item_789", 3, 12000, Optional.of("li_1")));
         assertThat(view.messages()).singleElement().satisfies(m -> {
             assertThat(m.type()).isEqualTo("warning");
             assertThat(m.code()).isEqualTo("quantity_adjusted");
@@ -179,7 +179,7 @@ class FaultyMerchantModelTest {
                 List.of(new ProposedLine("item_123", 1), new ProposedLine("item_456", 1), new ProposedLine("nope", 2)),
                 Optional.of("a@example.com")), CREATE_KEY));
 
-        assertThat(view.lines()).containsExactly(new LineView("item_123", 1, 2500));
+        assertThat(view.lines()).containsExactly(new LineView("item_123", 1, 2500, Optional.of("li_1")));
         assertThat(view.status()).isEqualTo(CheckoutStatus.READY_FOR_COMPLETE);
         assertThat(view.messages()).extracting(m -> m.code() + m.path().orElse("")).containsExactly(
                 "item_unavailable$.line_items[1]", "item_unavailable$.line_items[2]");
@@ -193,7 +193,7 @@ class FaultyMerchantModelTest {
         CheckoutView before = ok(merchant.get(id));
 
         CheckoutView after = ok(merchant.update(id,
-                new UpdateCheckout(List.of(new ProposedLine("nope", 1)), Optional.of("alice@example.com")),
+                UpdateCheckout.of(List.of(new ProposedLine("nope", 1)), Optional.of("alice@example.com")),
                 IdempotencyKey.derive(INTENT, MutatingOp.UPDATE, 0)));
 
         assertThat(after.lines()).isEqualTo(before.lines());
@@ -208,11 +208,11 @@ class FaultyMerchantModelTest {
         merchant.setStock("item_456", 0);
 
         CheckoutView after = ok(merchant.update(id,
-                new UpdateCheckout(List.of(new ProposedLine("item_789", 5), new ProposedLine("item_456", 1)),
+                UpdateCheckout.of(List.of(new ProposedLine("item_789", 5), new ProposedLine("item_456", 1)),
                         Optional.of("alice@example.com")),
                 IdempotencyKey.derive(INTENT, MutatingOp.UPDATE, 0)));
 
-        assertThat(after.lines()).containsExactly(new LineView("item_789", 3, 12000));
+        assertThat(after.lines()).containsExactly(new LineView("item_789", 3, 12000, Optional.of("li_1")));
         assertThat(codes(after)).containsExactly("quantity_adjusted", "item_unavailable");
         assertThat(after.status()).isEqualTo(CheckoutStatus.READY_FOR_COMPLETE);
     }
@@ -268,7 +268,7 @@ class FaultyMerchantModelTest {
         ok(merchant.complete(id, PAY_OK, COMPLETE_KEY));
 
         CheckoutView updated = ok(merchant.update(id,
-                new UpdateCheckout(List.of(new ProposedLine("item_123", 2)), Optional.of("alice@example.com")),
+                UpdateCheckout.of(List.of(new ProposedLine("item_123", 2)), Optional.of("alice@example.com")),
                 IdempotencyKey.derive(INTENT, MutatingOp.UPDATE, 0)));
         CheckoutView done = ok(merchant.complete(id, PAY_OK, COMPLETE_KEY_1));
 
@@ -404,7 +404,7 @@ class FaultyMerchantModelTest {
         assertThat(ok(merchant.get(id)).status()).isEqualTo(CheckoutStatus.COMPLETE_IN_PROGRESS);
         assertThat(merchant.complete(id, PAY_OK, COMPLETE_KEY)).isInstanceOf(CallOutcome.Uncertain.class);
         CheckoutView busy = ok(merchant.update(id,
-                new UpdateCheckout(List.of(new ProposedLine("item_123", 1)), Optional.of("a@example.com")),
+                UpdateCheckout.of(List.of(new ProposedLine("item_123", 1)), Optional.of("a@example.com")),
                 IdempotencyKey.derive(INTENT, MutatingOp.UPDATE, 0)));
         assertThat(codes(busy)).containsExactly("checkout_busy");
 

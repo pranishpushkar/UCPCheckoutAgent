@@ -35,6 +35,7 @@ import dev.ucplab.core.intent.TransitionEvent;
 import dev.ucplab.core.intent.TransitionGuard;
 import dev.ucplab.core.intent.TransitionTable;
 import dev.ucplab.core.json.CanonicalJson;
+import dev.ucplab.core.merchant.Buyer;
 import dev.ucplab.core.merchant.CallOutcome;
 import dev.ucplab.core.merchant.CheckoutStatus;
 import dev.ucplab.core.merchant.CheckoutView;
@@ -47,6 +48,7 @@ import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantMessage;
 import dev.ucplab.core.merchant.MutatingOp;
 import dev.ucplab.core.merchant.PaymentInstrument;
+import dev.ucplab.core.merchant.QuoteShape;
 import dev.ucplab.core.merchant.SessionId;
 import dev.ucplab.core.merchant.UpdateCheckout;
 import dev.ucplab.core.policy.PolicyDecision;
@@ -335,7 +337,10 @@ public final class DefaultOrchestrator implements Orchestrator {
             call = () -> merchant.create(request, key);
         } else {
             SessionId session = requireSession(intent);
-            UpdateCheckout request = new UpdateCheckout(intent.lines(), Optional.of(intent.buyerEmail()));
+            // An update replaces the session, so it resends the line ids and buyer fields of the last response this
+            // intent stored (8.4). Nothing is fetched: one merchant call per step.
+            UpdateCheckout request = UpdateCheckout.from(intent.lines(), Buyer.ofEmail(intent.buyerEmail()),
+                    lastQuoteShape(attempts));
             body = CheckoutWire.updateBody(request);
             call = () -> merchant.update(session, request, key);
         }
@@ -869,6 +874,17 @@ public final class DefaultOrchestrator implements Orchestrator {
         Map<String, Integer> quoted = new java.util.HashMap<>();
         view.lines().forEach(l -> quoted.merge(l.itemId(), l.quantity(), Integer::sum));
         return proposed.equals(quoted);
+    }
+
+    /** The lines and buyer of the newest stored response that has them (8.4, decision L). */
+    private static Optional<QuoteShape> lastQuoteShape(List<MerchantAttempt> attempts) {
+        for (int i = attempts.size() - 1; i >= 0; i--) {
+            Optional<QuoteShape> shape = attempts.get(i).responseJson().flatMap(CheckoutWire::quoteShape);
+            if (shape.isPresent()) {
+                return shape;
+            }
+        }
+        return Optional.empty();
     }
 
     private static String rejectedReason(CallOutcome.Rejected<CheckoutView> r) {

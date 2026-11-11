@@ -41,14 +41,14 @@ final class QuantityAdjustingGateway implements MerchantGateway {
         }
         CheckoutView v = ok.value();
         List<LineView> lines = v.lines().stream()
-                .map(l -> new LineView(l.itemId(), Math.min(l.quantity(), quantity), l.unitPriceMinor())).toList();
+                .map(l -> new LineView(l.itemId(), Math.min(l.quantity(), quantity), l.unitPriceMinor(), l.lineId())).toList();
         List<MerchantMessage> messages = new ArrayList<>(v.messages());
         if (warn) {
             messages.add(new MerchantMessage("warning", "quantity_adjusted", Optional.of("$.line_items[0].quantity"),
                     "Quantity adjusted", Optional.empty()));
         }
         CheckoutView adjusted = new CheckoutView(v.id(), v.status(), v.currency(), lines, v.subtotalMinor(),
-                v.taxMinor(), v.totalMinor(), v.order(), messages);
+                v.taxMinor(), v.totalMinor(), v.order(), v.buyer(), messages);
         return new CallOutcome.Ok<>(ok.httpStatus(), adjusted, messages);
     }
 

@@ -2,6 +2,7 @@ package dev.ucplab.ucp;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import dev.ucplab.core.merchant.Buyer;
 import dev.ucplab.core.merchant.CheckoutStatus;
 import dev.ucplab.core.merchant.CheckoutView;
 import dev.ucplab.core.merchant.LineView;
@@ -98,12 +99,14 @@ class CheckoutParserTest {
         assertThat(codes(v)).isEqualTo(codes);
     }
 
-    // Covers: 8.4, I2 (lines carry the merchant's unit price; subtotal, tax and total are read by type)
+    // Covers: 8.4, I2, decision L (lines carry the merchant's unit price and line id; the buyer is read; subtotal, tax
+    // and total are read by type)
     @Test
     void parseCheckout_readsLinesAndTotalsByType() {
         CheckoutView v = view(fixture("create_ready"));
 
-        assertThat(v.lines()).containsExactly(new LineView("item_123", 2, 2500));
+        assertThat(v.lines()).containsExactly(new LineView("item_123", 2, 2500, Optional.of("li_1")));
+        assertThat(v.buyer()).contains(Buyer.ofEmail("a@example.com"));
         assertThat(v.subtotalMinor()).isEqualTo(5000);
         assertThat(v.taxMinor()).isEqualTo(400);
         assertThat(v.totalMinor()).isEqualTo(5400);
@@ -150,7 +153,7 @@ class CheckoutParserTest {
         CheckoutView v = view(bytes(json));
 
         assertThat(v.totalMinor()).isEqualTo(5400);
-        assertThat(v.lines()).containsExactly(new LineView("item_123", 2, 2500));
+        assertThat(v.lines()).containsExactly(new LineView("item_123", 2, 2500, Optional.of("li_1")));
     }
 
     // Covers: 8.1 (subtotal and tax are optional in the schema and read as 0; the total is required)

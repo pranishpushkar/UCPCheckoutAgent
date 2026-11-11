@@ -336,6 +336,26 @@ class DefaultOrchestratorTest {
                 .containsOnly(IdempotencyKey.derive(id, MutatingOp.COMPLETE, 0));
     }
 
+    // Covers: decision L, 8.4 (a re-quote's update carries the line id the merchant gave in its last response, and the
+    // buyer, because an update replaces the whole session; the ids come from the stored response, with no extra call)
+    @Test
+    void requote_sendsLineIdsAndBuyerFromTheLastResponse() {
+        IntentId id = approved();
+        lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 1, new Fault.PriceChange("item_123", 2600)));
+
+        assertThat(w.orchestrator().advance(id).after()).isEqualTo(IntentState.QUOTING);
+        int getsBefore = lab.merchant.delivered(MerchantCall.GET);
+        int updatesBefore = lab.merchant.delivered(MerchantCall.UPDATE);
+        assertThat(w.orchestrator().advance(id).after()).isEqualTo(AWAITING_APPROVAL);
+
+        assertThat(lab.merchant.delivered(MerchantCall.UPDATE)).isEqualTo(updatesBefore + 1);
+        assertThat(lab.merchant.delivered(MerchantCall.GET)).isEqualTo(getsBefore);
+        assertThat(attempts(id, AttemptOp.UPDATE)).singleElement().satisfies(a -> {
+            String body = a.requestBody().orElseThrow().json();
+            assertThat(body).contains("\"id\":\"li_1\"").contains("\"buyer\":{\"email\":\"alice@example.com\"");
+        });
+    }
+
     // Covers: 7.2 (defensive QUOTING row: an update shows the session completed -> RECONCILING), I1, I2 (the order is
     // recorded through reconciliation, nothing new is sent, and nothing throws)
     @Test

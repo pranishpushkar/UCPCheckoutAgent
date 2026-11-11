@@ -1,6 +1,7 @@
 package dev.ucplab.ucp;
 
 import dev.ucplab.core.json.LenientJson;
+import dev.ucplab.core.merchant.Buyer;
 import dev.ucplab.core.merchant.CheckoutStatus;
 import dev.ucplab.core.merchant.CheckoutView;
 import dev.ucplab.core.merchant.LineView;
@@ -124,7 +125,7 @@ public final class CheckoutParser {
         Totals totals = totals(root.get("totals"));
         Optional<OrderRef> order = order(root.get("order"));
         return new CheckoutView(id, status, currency, lines, totals.subtotal, totals.tax, totals.total, order,
-                messages(root.get("messages")));
+                buyer(root.get("buyer")), messages(root.get("messages")));
     }
 
     private static List<LineView> lines(Object value) {
@@ -140,7 +141,8 @@ public final class CheckoutParser {
             if (quantity < 1 || quantity > Integer.MAX_VALUE) {
                 throw new Bad("quantity out of range");
             }
-            out.add(new LineView(text(item, "id"), (int) quantity, minor(item.get("price"), "item.price")));
+            out.add(new LineView(text(item, "id"), (int) quantity, minor(item.get("price"), "item.price"),
+                    line.get("id") instanceof String lineId && !lineId.isBlank() ? Optional.of(lineId) : Optional.empty()));
         }
         return out;
     }
@@ -181,6 +183,19 @@ public final class CheckoutParser {
             throw new Bad("negative " + type);
         }
         return amount;
+    }
+
+    /** The buyer is optional and every field of it is optional; a field of the wrong type is left out. */
+    private static Optional<Buyer> buyer(Object value) {
+        if (!(value instanceof Map<?, ?> b)) {
+            return Optional.empty();
+        }
+        return Optional.of(new Buyer(lenientText(b, "email"), lenientText(b, "first_name"),
+                lenientText(b, "last_name"), lenientText(b, "phone_number")));
+    }
+
+    private static Optional<String> lenientText(Map<?, ?> map, String key) {
+        return map.get(key) instanceof String s && !s.isBlank() ? Optional.of(s) : Optional.empty();
     }
 
     private static Optional<OrderRef> order(Object value) {

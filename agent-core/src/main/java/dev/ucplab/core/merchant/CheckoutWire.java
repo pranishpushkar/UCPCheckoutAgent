@@ -25,10 +25,16 @@ public final class CheckoutWire {
         return CanonicalJson.write(checkoutObject(request.lines(), request.buyerEmail()));
     }
 
-    /** PUT is a full replacement of buyer and line items (A.1), so it has the same shape as create. */
+    /**
+     * PUT is a full replacement of buyer and line items (A.1). It has the shape of create, plus the merchant's line id
+     * on each line that has one and every buyer field (8.4).
+     */
     public static String updateBody(UpdateCheckout request) {
         Objects.requireNonNull(request, "request");
-        return CanonicalJson.write(checkoutObject(request.lines(), request.buyerEmail()));
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("line_items", request.lines().stream().map(CheckoutWire::updateLineObject).toList());
+        request.buyer().map(CheckoutWire::buyerObject).filter(b -> !b.isEmpty()).ifPresent(b -> m.put("buyer", b));
+        return CanonicalJson.write(m);
     }
 
     /** The {@code complete} body, built once per approval and frozen (7.4, I7). */
@@ -77,7 +83,65 @@ public final class CheckoutWire {
         m.put("total_minor", view.totalMinor());
         view.order().ifPresent(o -> m.put("order_id", o.id()));
         m.put("message_codes", view.messages().stream().map(MerchantMessage::code).toList());
+        m.put("lines", view.lines().stream().map(l -> {
+            Map<String, Object> line = new LinkedHashMap<>();
+            line.put("item_id", l.itemId());
+            l.lineId().ifPresent(id -> line.put("line_id", id));
+            line.put("quantity", l.quantity());
+            line.put("unit_price_minor", l.unitPriceMinor());
+            return line;
+        }).toList());
+        view.buyer().map(CheckoutWire::buyerObject).filter(b -> !b.isEmpty()).ifPresent(b -> m.put("buyer", b));
         return CanonicalJson.write(m);
+    }
+
+    /**
+     * The lines and buyer of the view a {@link #responseSummary} was made from, so an update can resend them (8.4).
+     * Empty if the text is not such a summary or has no usable lines. Never throws.
+     */
+    public static Optional<QuoteShape> quoteShape(String summaryJson) {
+        Objects.requireNonNull(summaryJson, "summaryJson");
+        try {
+            Map<String, Object> root = CanonicalJson.readObject(summaryJson);
+            if (!(root.get("lines") instanceof List<?> raw)) {
+                return Optional.empty();
+            }
+            List<LineView> lines = new java.util.ArrayList<>();
+            for (Object o : raw) {
+                if (!(o instanceof Map<?, ?> l) || !(l.get("item_id") instanceof String item)
+                        || !(l.get("quantity") instanceof Long qty) || !(l.get("unit_price_minor") instanceof Long price)) {
+                    return Optional.empty();
+                }
+                lines.add(new LineView(item, Math.toIntExact(qty), price,
+                        l.get("line_id") instanceof String id ? Optional.of(id) : Optional.empty()));
+            }
+            Optional<Buyer> buyer = root.get("buyer") instanceof Map<?, ?> b ? Optional.of(new Buyer(text(b, "email"),
+                    text(b, "first_name"), text(b, "last_name"), text(b, "phone_number"))) : Optional.empty();
+            return Optional.of(new QuoteShape(lines, buyer));
+        } catch (IllegalArgumentException | ArithmeticException e) {
+            return Optional.empty();
+        }
+    }
+
+    private static Optional<String> text(Map<?, ?> map, String key) {
+        return map.get(key) instanceof String s ? Optional.of(s) : Optional.empty();
+    }
+
+    private static Map<String, Object> buyerObject(Buyer buyer) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        buyer.email().ifPresent(v -> m.put("email", v));
+        buyer.firstName().ifPresent(v -> m.put("first_name", v));
+        buyer.lastName().ifPresent(v -> m.put("last_name", v));
+        buyer.phoneNumber().ifPresent(v -> m.put("phone_number", v));
+        return m;
+    }
+
+    private static Map<String, Object> updateLineObject(UpdateLine line) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        line.lineId().ifPresent(id -> m.put("id", id));
+        m.put("item", Map.of("id", line.itemId()));
+        m.put("quantity", line.quantity());
+        return m;
     }
 
     private static Map<String, Object> checkoutObject(List<ProposedLine> lines, Optional<String> buyerEmail) {
