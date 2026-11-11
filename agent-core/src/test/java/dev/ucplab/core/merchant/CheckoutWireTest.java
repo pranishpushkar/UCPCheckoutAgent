@@ -19,13 +19,15 @@ class CheckoutWireTest {
                 "{\"buyer\":{\"email\":\"a@example.com\"},\"line_items\":[{\"item\":{\"id\":\"item_123\"},\"quantity\":2}]}");
     }
 
-    // Covers: 7.4, A.2 (the frozen complete body carries the instrument; its token can be read back)
+    // Covers: 7.4, 8.4, A.2, M2 decision M (the frozen complete body carries the instrument in payment.instruments[],
+    // as the 2026-08-25 schema requires; its token can be read back). Regression: it was once emitted as payment_data.
     @Test
     void completeBody_carriesInstrument_andTokenReadsBack() {
         FrozenBody body = CheckoutWire.completeBody(PaymentInstrument.mockCard("pi_1", "tok_ok"));
 
-        assertThat(body.json()).isEqualTo("{\"payment_data\":{\"credential\":{\"token\":\"tok_ok\",\"type\":\"MOCK\"},"
-                + "\"handler_id\":\"mock_pay_1\",\"id\":\"pi_1\",\"type\":\"mock_card\"}}");
+        assertThat(body.json()).isEqualTo("{\"payment\":{\"instruments\":[{\"credential\":{\"token\":\"tok_ok\","
+                + "\"type\":\"MOCK\"},\"handler_id\":\"mock_pay_1\",\"id\":\"pi_1\",\"type\":\"mock_card\"}]}}");
+        assertThat(body.json()).doesNotContain("payment_data");
         assertThat(CheckoutWire.paymentToken(body)).contains("tok_ok");
         assertThat(CheckoutWire.paymentToken(new FrozenBody("{\"x\":1}"))).isEmpty();
         assertThat(CheckoutWire.paymentToken(new FrozenBody("not json"))).isEmpty();

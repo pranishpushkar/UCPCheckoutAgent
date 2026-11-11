@@ -482,8 +482,8 @@ public final class FaultyMerchantModel implements MerchantGateway {
         s.status = CheckoutStatus.READY_FOR_COMPLETE;
         boolean declined = token.filter(TOKEN_DECLINE::equals).isPresent();
         return ok(200, s, List.of(declined
-                ? message("error", "payment_declined", "$.payment_data", "the card was declined")
-                : message("error", "payment_invalid", "$.payment_data", "the payment credential is not valid")));
+                ? message("error", "payment_declined", "$.payment", "the card was declined")
+                : message("error", "payment_invalid", "$.payment", "the payment credential is not valid")));
     }
 
     private CallOutcome<CheckoutView> doCancel(SessionId id) {

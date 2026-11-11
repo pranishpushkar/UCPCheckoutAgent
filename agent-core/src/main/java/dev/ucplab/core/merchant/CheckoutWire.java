@@ -13,8 +13,8 @@ import java.util.Optional;
  * makes a resend under the same {@code Idempotency-Key} safe (A.1: a different body returns 409). The HTTP gateway
  * sends these bytes, {@code merchant_attempt.request_body} stores them, and FaultyMerchantModel compares them.
  */
-// TODO(VERIFY): field names (line_items[].item.id, quantity, buyer.email, payment_data) are not confirmed against
-// https://ucp.dev/latest/specification/shopping/checkout/rest/ (2026-08-25). Check them in M2 before the HTTP client.
+// Field names were checked in M2 against the 2026-08-25 OpenAPI and checkout schemas (docs/spec-notes.md): line_items[]
+// with item.id and quantity, buyer.email, and the complete payment in payment.instruments[].
 public final class CheckoutWire {
 
     private CheckoutWire() {
@@ -42,7 +42,7 @@ public final class CheckoutWire {
         payment.put("handler_id", instrument.handlerId());
         payment.put("type", instrument.type());
         payment.put("credential", credential);
-        return new FrozenBody(CanonicalJson.write(Map.of("payment_data", payment)));
+        return new FrozenBody(CanonicalJson.write(Map.of("payment", Map.of("instruments", List.of(payment)))));
     }
 
     /** The credential token in a {@link #completeBody}, if the body has one. */
@@ -50,8 +50,11 @@ public final class CheckoutWire {
         Objects.requireNonNull(body, "body");
         try {
             Map<String, Object> root = CanonicalJson.readObject(body.json());
-            if (root.get("payment_data") instanceof Map<?, ?> payment
-                    && payment.get("credential") instanceof Map<?, ?> credential
+            if (root.get("payment") instanceof Map<?, ?> payment
+                    && payment.get("instruments") instanceof List<?> instruments
+                    && !instruments.isEmpty()
+                    && instruments.get(0) instanceof Map<?, ?> instrument
+                    && instrument.get("credential") instanceof Map<?, ?> credential
                     && credential.get("token") instanceof String token) {
                 return Optional.of(token);
             }
