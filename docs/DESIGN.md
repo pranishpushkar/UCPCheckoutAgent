@@ -295,7 +295,7 @@ Any event that is not in this table for the current state is a programming error
 | QUOTING | create_rejected | none | FAILED\_NOT\_CHARGED | no side effect: the merchant answered a create with every item unavailable (200, `ucp.status` error, no session id), so no session exists and nothing is cancelled. The gateway reports it as `CallOutcome.Rejected` (Appendix B, 8.1) |
 | COMPLETING | protocol\_error | none | RECONCILING | a `ProtocolError` on `complete` never settles the outcome, so it is never FAILED\_NOT\_CHARGED. Reconciliation reads the session and decides |
 
-**Retries do not stack \[CONTRACT\].** The gateway makes the in-call retries of 8.2 (up to 3, so 4 attempts). When it returns a final `NotSent` or `Uncertain`, that ends the step. The orchestrator does not call the merchant again inside the same `advance`; it returns `nextAttemptAt` and the caller waits (7.5, "Who waits"). A `ProtocolError` carrying `retryAfter` (8.2) feeds `nextAttemptAt` the same way. Each later `advance` is a fresh step under the same key.
+**Retries live in one layer \[CONTRACT\].** All retries of a create or update happen inside the gateway (8.2: up to 3, so 4 attempts, same key). The orchestrator does not retry QUOTING calls: it makes one call per step, and a final `NotSent`, `Uncertain` or retryable `ProtocolError` from the gateway goes straight to the exhausted row above (QUOTING, retries exhausted, FAILED\_NOT\_CHARGED, reason `quote_retries_exhausted`). The `RETRIES_LEFT` rows for `not_sent` and `uncertain` stay in the table, but the orchestrator's retry budget for QUOTING is 0, so their guard never holds. `propose` makes one create call and does not loop. The I5 bound for QUOTING (7.6, about 26 s: 4 attempts of 5 s plus backoff) stays, because it is the gateway's worst case. `advance` never sleeps.
 
 ### 7.3 Step function and write-ahead protocol \[CONTRACT\]
 
@@ -319,7 +319,9 @@ Create and update are safe to resend with the same key. `complete` is never rese
 
 ### 7.4 Idempotency keys \[CONTRACT\]
 
-`key = 'ucp-' + first 26 chars of base32(sha256(intentId + '|' + op + '|' + revision))`
+`key = uuid8(sha256(intentId + '|' + op + '|' + revision))`
+
+The key is a deterministic UUID version 8 (RFC 9562): the first 16 bytes of the SHA-256 digest, with the version nibble set to 8 and the variant bits to `10`, written in the canonical 8-4-4-4-12 hexadecimal form. The inputs and the determinism are the same as before (D3); only the encoding changes. The reason: the 2026-08-25 OpenAPI declares `Idempotency-Key` as `format: uuid`, and the earlier `ucp-` plus base32 form is not a UUID. **Spec contradiction, noted not resolved:** the signatures page asks for "at least 128 bits" of entropy and gives UUID v4 as an example, but a UUID carries 122 variable bits (6 are fixed for version and variant), so a UUID can never have 128 bits. A UUIDv8 key built from a 256-bit hash has 122 bits that depend on the inputs; collisions between different intents are as unlikely as for UUID v4.
 
 - `op` is one of `create`, `update`, `complete`, `cancel`.
 - `revision` is 0 for create and cancel. For update it is the number of updates already issued for the intent. For `complete` it is the intent's `requote_count` at the time of approval: 0 for the first approval, 1 after the first re-quote and new approval, and so on. Every approval therefore gets its own `complete` key, and all resends under that approval share it.
@@ -425,9 +427,9 @@ The raw 2026-08-25 schema has a sixth checkout status, `requires_escalation`, wh
 
 Backoff: exponential from 200 ms, factor 2, cap 2 s, full jitter.
 
-**Retry-After.** The value is seconds or an HTTP-date; a date is parsed against the injected `Clock`. If the wait is at most 2 s (the backoff cap), the gateway sleeps and retries. If it is longer, the gateway stops and returns `ProtocolError` with `retryAfter`; the caller uses it for `nextAttemptAt` (7.2, "Retries do not stack").
+**Retry-After.** The value is seconds or an HTTP-date; a date is parsed against the injected `Clock`. If the wait is at most 2 s (the backoff cap), the gateway sleeps and retries. If it is longer, the gateway stops and returns `ProtocolError` with `retryAfter`; the orchestrator does not wait and retry a QUOTING call (7.2, "Retries live in one layer"); reconciliation reads use it for `nextAttemptAt` (7.5).
 
-**Retries do not stack.** The gateway does every in-call retry. The orchestrator never re-calls inside the same step (7.2).
+**Retries live in one layer.** The gateway does every in-call retry. The orchestrator does not retry QUOTING calls (7.2).
 
 ### 8.3 Timeouts and circuit breaker
 
@@ -447,9 +449,10 @@ One circuit breaker per `host:port`, held in memory and driven by the injected `
 - `UCP-Agent` comes from configuration.
 - Mutating bodies use canonical JSON (keys sorted by UTF-16 code units, as String.compareTo does and as RFC 8785 specifies; no extra whitespace) so a replay is byte-identical.
 - `complete` carries its payment in `payment.instruments[]` (`id`, `handler_id`, `type`, `credential`), as the 2026-08-25 schema requires. It sends no line items or buyer.
-- An update sends the line item ids from the last `CheckoutView` and resends the full buyer fields. If this needs a change to core's `UpdateCheckout`, it is its own commit with tests.
+- An update (full replacement) sends the line item ids from the last `CheckoutView` the intent saw (taken from its last stored response, never fetched) and resends every buyer field of that view (`email`, `first_name`, `last_name`, `phone_number`), because an update replaces the whole session.
 - Ignore unknown JSON fields. Amounts are integers in minor units.
-- JSON is read with core's `CanonicalJson` and HTTP uses `java.net.http`. No Jackson in `agent-ucp`; it arrives with `agent-service`.
+- Responses are parsed with a lenient reader in core (`LenientJson`): `null`, decimals and unknown fields are allowed and ignored wherever we do not use them. A field we do use (an amount, a quantity) must still be an integer of the right type, or the body is invalid (8.1). The canonical writer and the hashes (7.4, 9.2) stay strict: `CanonicalJson` refuses `null` and floating point.
+- HTTP uses `java.net.http`. No Jackson in `agent-ucp`; it arrives with `agent-service`.
 
 ### 8.5 Gateway binding and discovery \[CONTRACT\]
 
@@ -726,7 +729,7 @@ Per scenario: runs; terminal-state distribution; invariant violations; time to t
 | Level | What | Tooling |
 | --- | --- | --- |
 | 1. Unit | Every row of table 7.2 and every illegal transition (table-driven), policy rules, approval, idempotency key, canonical JSON, redaction | JUnit 5, AssertJ |
-| 2. Property-based (most valuable) | Random sequences of events and fault schedules against `FaultyMerchantModel`, an in-memory fake with the real merchant's semantics (idempotent keys, session states, commit-then-drop-response). Properties: I1, I3, I4, I5, I7 hold for every generated schedule | JUnit 5 with an in-house seeded schedule generator (14.1) |
+| 2. Property-based (most valuable) | Random sequences of events and fault schedules against `FaultyMerchantModel`, an in-memory fake that must match the reference merchant's behaviour exactly (availability at create, update and complete, statuses and messages), with the real merchant's semantics (idempotent keys, session states, commit-then-drop-response). Properties: I1, I3, I4, I5, I7 hold for every generated schedule | JUnit 5 with an in-house seeded schedule generator (14.1) |
 | 3. Component | Orchestrator with the SQL adapter and a fake gateway. Crash injection at each boundary in 7.3, then restart the recovery worker | JUnit 5 |
 | 4. Contract | `agent-ucp` against the real merchant module started in-process on a free port (a test helper in the merchant's package gives access to its package-private classes). Every row of table 8.1 is exercised. In M2 the faults the merchant cannot produce come from a test-only stub server; from M4 they go through the fault proxy. Assertions use `/_lab/orders` as ground truth | JUnit 5 |
 | 5. Conformance | The official UCP conformance suite against the merchant. See the repositories listed at https://ucp.dev/documentation/contributing/ (**VERIFY** how its simulation hook works) | pytest (external) |
@@ -1367,7 +1370,7 @@ Create `.github/copilot-instructions.md` with this content before generating any
   for outcomes, no Lombok, no null returns, inject Clock and IdGenerator.
 - agent-core depends on the JDK only. Only agent-adk may import ADK types.
 - Never block inside synchronized. Never hold a lock across network I/O.
-- The merchant module is the system under test. Do not edit it to make agent tests pass.
+- Don't modify merchant/src except the M2 catalog addition; never change the original 46 SelfTest checks.
 - Never log credentials, tokens, Authorization headers or approval tokens.
 - Every test cites the IDs it covers (FR, I, S) in a comment.
 - User identity comes only from AuthContext. Every repository call on intents, approvals
