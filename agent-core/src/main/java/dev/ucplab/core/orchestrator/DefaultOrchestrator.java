@@ -131,6 +131,9 @@ public final class DefaultOrchestrator implements Orchestrator {
     /** Cancel attempts for one intent before the worker gives up (7.6). */
     static final int MAX_CANCEL_ATTEMPTS = 3;
 
+    /** Probe creates for one orphaned session before the worker gives up (7.6 M3 note). */
+    static final int MAX_PROBE_ATTEMPTS = 3;
+
     private static final int MAX_RATIONALE = 300;
 
     private final IntentRepository intents;
@@ -337,7 +340,11 @@ public final class DefaultOrchestrator implements Orchestrator {
         boolean tried = attempts.stream().anyMatch(a -> a.op() == op && a.revision() == revision);
         if (tried) {
             Move m = move(intent, TransitionEvent.RETRIES_EXHAUSTED);
-            PurchaseIntent next = m.next().withFailureReason(QUOTE_RETRIES_EXHAUSTED);
+            // A create left SENT may have made a session the intent never learned of: the probe finds it (7.6 M3 note).
+            boolean orphanPossible = create && attempts.stream()
+                    .anyMatch(a -> a.op() == AttemptOp.CREATE && a.revision() == 0 && mayHaveCreatedSession(a));
+            PurchaseIntent next = m.next().withFailureReason(QUOTE_RETRIES_EXHAUSTED)
+                    .withCancelPending(orphanPossible && intent.sessionId().isEmpty());
             intents.update(next, intent.version(), workerId);
             transitionEvent(intent.id(), m.transition());
             return moved(intent, next);
@@ -438,8 +445,25 @@ public final class DefaultOrchestrator implements Orchestrator {
             }
             case CallOutcome.NotSent<CheckoutView> n -> exhaustQuoting(written, attempt, AttemptStatus.UNCERTAIN,
                     Optional.empty(), Optional.of(describe(n)));
-            case CallOutcome.Uncertain<CheckoutView> u -> exhaustQuoting(written, attempt, AttemptStatus.UNCERTAIN,
-                    Optional.empty(), Optional.of(describe(u)));
+            case CallOutcome.Uncertain<CheckoutView> u -> create && written.sessionId().isEmpty()
+                    // The request may have reached the merchant and made a session: owe the probe (7.6 M3 note).
+                    ? finish(written, attempt, AttemptStatus.UNCERTAIN, Optional.empty(), Optional.of(describe(u)),
+                            move(written, TransitionEvent.RETRIES_EXHAUSTED), QUOTE_RETRIES_EXHAUSTED, true)
+                    : exhaustQuoting(written, attempt, AttemptStatus.UNCERTAIN, Optional.empty(),
+                            Optional.of(describe(u)));
+        };
+    }
+
+    /**
+     * Whether a create attempt may have left a session at the merchant: it is still SENT (a crash), or it is UNCERTAIN
+     * after an answer other than NotSent, which proves the request never left (8.1).
+     */
+    private static boolean mayHaveCreatedSession(MerchantAttempt create) {
+        return switch (create.status()) {
+            case SENT -> true;
+            case UNCERTAIN -> create.responseJson()
+                    .map(r -> !"not_sent".equals(CanonicalJson.readObject(r).get("outcome"))).orElse(true);
+            case RESPONDED -> false;
         };
     }
 
@@ -487,7 +511,15 @@ public final class DefaultOrchestrator implements Orchestrator {
     private Step finish(
             PurchaseIntent base, MerchantAttempt attempt, AttemptStatus status, Optional<Integer> http,
             Optional<String> response, Move m, String failureReason) {
+        return finish(base, attempt, status, http, response, m, failureReason, false);
+    }
+
+    /** As above; {@code cancelOwed} also sets cancel_pending, in the same write, for a session that may exist unseen. */
+    private Step finish(
+            PurchaseIntent base, MerchantAttempt attempt, AttemptStatus status, Optional<Integer> http,
+            Optional<String> response, Move m, String failureReason, boolean cancelOwed) {
         PurchaseIntent next = m.next().withFailureReason(failureReason);
+        next = cancelOwed ? next.withCancelPending(true) : next;
         resolve(attempt, status, http, response, next, base.version());
         transitionEvent(base.id(), m.transition());
         return moved(base, next);
@@ -889,8 +921,11 @@ public final class DefaultOrchestrator implements Orchestrator {
      * crash left SENT counts as one of the three.
      */
     private Step cancelIfOwed(PurchaseIntent intent, List<MerchantAttempt> attempts) {
-        if (!intent.cancelPending() || intent.sessionId().isEmpty()) {
+        if (!intent.cancelPending()) {
             return idle(intent);
+        }
+        if (intent.sessionId().isEmpty()) {
+            return probeOrphanSession(intent, attempts);
         }
         long tried = attempts.stream().filter(a -> a.op() == AttemptOp.CANCEL).count();
         if (tried >= MAX_CANCEL_ATTEMPTS) {
@@ -929,6 +964,75 @@ public final class DefaultOrchestrator implements Orchestrator {
             event(intent.id(), "cancel_gave_up", Map.of("attempts", tried + 1));
         }
         return new Step(intent.state(), intent.state(), false, Optional.empty());
+    }
+
+    /**
+     * The orphan-session probe (7.6 M3 note). A create that may have made a session the intent never learned of left
+     * {@code cancel_pending} set with no session id. One step re-sends that create under its own key, only when the body
+     * rebuilt from the intent is byte-identical to the frozen one (else nothing is sent), to learn the session id from the
+     * merchant's stored result; the next step cancels it. It never completes: the intent is terminal. At most
+     * {@link #MAX_PROBE_ATTEMPTS} probes; any answer that is not Ok counts, and the last one gives up with an event.
+     */
+    private Step probeOrphanSession(PurchaseIntent intent, List<MerchantAttempt> attempts) {
+        List<MerchantAttempt> creates = attempts.stream()
+                .filter(a -> a.op() == AttemptOp.CREATE && a.revision() == 0).toList();
+        if (creates.isEmpty()) {
+            return stopProbing(intent, "orphan_probe_no_create", Map.of());
+        }
+        int probes = creates.size() - 1;
+        if (probes >= MAX_PROBE_ATTEMPTS) {
+            return stopProbing(intent, "orphan_probe_gave_up", Map.of("probes", probes));
+        }
+        MerchantAttempt original = creates.get(0);
+        CreateCheckout request = new CreateCheckout(intent.lines(), Optional.of(intent.buyerEmail()));
+        FrozenBody frozen = original.requestBody().orElse(null);
+        IdempotencyKey key = original.idempotencyKey().orElse(null);
+        if (frozen == null || key == null || !frozen.json().equals(CheckoutWire.createBody(request))) {
+            return stopProbing(intent, "orphan_probe_body_mismatch", Map.of("attempt_id", original.id().value()));
+        }
+
+        // An attempt left SENT by a crash is settled as uncertain first, fenced like every write here; it counts as a probe.
+        List<AttemptId> unresolved = creates.stream().filter(a -> a.status() == AttemptStatus.SENT)
+                .map(MerchantAttempt::id).toList();
+        if (!unresolved.isEmpty()) {
+            intents.resolveAttempts(intent.id(), unresolved, AttemptStatus.UNCERTAIN, Optional.empty(),
+                    Optional.of(CanonicalJson.write(Map.of("resolved_by", "recovery"))), intent.version(), workerId);
+        }
+        MerchantAttempt attempt = newAttempt(intent.id(), AttemptOp.CREATE, 0, key, Optional.of(frozen));
+        PurchaseIntent written = writeAhead(intent, attempt, intent.withState(intent.state(), clock.instant()));
+        CallOutcome<CheckoutView> outcome = merchant.create(request, key);
+
+        if (outcome instanceof CallOutcome.Ok<CheckoutView> ok) {
+            PurchaseIntent next = written.withSessionId(ok.value().id()).withState(written.state(), clock.instant());
+            resolve(attempt, AttemptStatus.RESPONDED, Optional.of(ok.httpStatus()),
+                    Optional.of(CheckoutWire.responseSummary(ok.value())), next, written.version());
+            event(intent.id(), "orphan_session_found", Map.of("probe", probes + 1));
+            return new Step(intent.state(), intent.state(), false, Optional.empty());
+        }
+        boolean answered = outcome instanceof CallOutcome.Rejected<CheckoutView>
+                || outcome instanceof CallOutcome.ProtocolError<CheckoutView>;
+        Optional<Integer> http = switch (outcome) {
+            case CallOutcome.ProtocolError<CheckoutView> e -> Optional.of(e.httpStatus());
+            case CallOutcome.Rejected<CheckoutView> r -> Optional.of(r.httpStatus());
+            default -> Optional.empty();
+        };
+        boolean last = probes + 1 >= MAX_PROBE_ATTEMPTS;
+        PurchaseIntent next = written.withCancelPending(!last).withState(written.state(), clock.instant());
+        resolve(attempt, answered ? AttemptStatus.RESPONDED : AttemptStatus.UNCERTAIN, http,
+                Optional.of(describe(outcome)), next, written.version());
+        event(intent.id(), "orphan_probe_sent", Map.of("outcome", kind(outcome), "probe", probes + 1));
+        if (last) {
+            event(intent.id(), "orphan_probe_gave_up", Map.of("probes", probes + 1));
+        }
+        return new Step(intent.state(), intent.state(), false, Optional.empty());
+    }
+
+    /** Clears the owed cancel without sending anything, and leaves an event for the operator. */
+    private Step stopProbing(PurchaseIntent intent, String eventType, Map<String, ?> payload) {
+        PurchaseIntent next = intent.withCancelPending(false).withState(intent.state(), clock.instant());
+        intents.update(next, intent.version(), workerId);
+        event(intent.id(), eventType, payload);
+        return moved(intent, next);
     }
 
     // ---------------------------------------------------------------- helpers
