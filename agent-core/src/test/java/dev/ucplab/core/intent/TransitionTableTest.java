@@ -47,7 +47,8 @@ class TransitionTableTest {
             row(21, "RECONCILING", "OBSERVED_READY_FOR_COMPLETE", "QUIET_PERIOD_NOT_ELAPSED", "RECONCILING", "POLL_AGAIN"),
             row(22, "QUOTING", "OBSERVED_COMPLETED", "NONE", "RECONCILING", "NONE"),
             row(22, "QUOTING", "OBSERVED_COMPLETE_IN_PROGRESS", "NONE", "RECONCILING", "NONE"),
-            row(23, "QUOTING", "CREATE_REJECTED", "NONE", "FAILED_NOT_CHARGED", "NONE"));
+            row(23, "QUOTING", "CREATE_REJECTED", "NONE", "FAILED_NOT_CHARGED", "NONE"),
+            row(24, "COMPLETING", "PROTOCOL_ERROR", "NONE", "RECONCILING", "NONE"));
 
     static Stream<Arguments> expectedRows() {
         return EXPECTED.stream();

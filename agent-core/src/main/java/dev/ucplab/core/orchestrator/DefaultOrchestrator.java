@@ -570,13 +570,23 @@ public final class DefaultOrchestrator implements Orchestrator {
         Optional<Integer> http = outcome instanceof CallOutcome.ProtocolError<CheckoutView> e
                 ? Optional.of(e.httpStatus())
                 : Optional.empty();
-        // 8.2: complete is never retried on Uncertain, and 429 or 503 are treated as Uncertain.
-        return toReconciling(written, attempt, http, Optional.of(describe(outcome)));
+        // 8.2: complete is never retried on Uncertain. A ProtocolError (7.2 protocol_error) and any other answer that
+        // is not Ok also go to RECONCILING: none of them proves that no order was created.
+        TransitionEvent event = outcome instanceof CallOutcome.ProtocolError<CheckoutView>
+                ? TransitionEvent.PROTOCOL_ERROR
+                : TransitionEvent.UNCERTAIN;
+        return toReconciling(written, attempt, http, Optional.of(describe(outcome)), event);
     }
 
     private Step toReconciling(
             PurchaseIntent written, MerchantAttempt attempt, Optional<Integer> http, Optional<String> response) {
-        Move m = move(written, TransitionEvent.UNCERTAIN);
+        return toReconciling(written, attempt, http, response, TransitionEvent.UNCERTAIN);
+    }
+
+    private Step toReconciling(
+            PurchaseIntent written, MerchantAttempt attempt, Optional<Integer> http, Optional<String> response,
+            TransitionEvent event) {
+        Move m = move(written, event);
         PurchaseIntent next = withUncertainSince(m.next());
         resolve(attempt, AttemptStatus.UNCERTAIN, http, response, next, written.version());
         transitionEvent(written.id(), m.transition());

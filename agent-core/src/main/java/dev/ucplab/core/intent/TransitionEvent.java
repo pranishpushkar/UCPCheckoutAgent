@@ -13,6 +13,7 @@ public enum TransitionEvent {
     CREATE_REJECTED,
     NOT_SENT,
     UNCERTAIN,
+    PROTOCOL_ERROR,
     RETRIES_EXHAUSTED,
     APPROVED,
     REJECTED,

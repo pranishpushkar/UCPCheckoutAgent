@@ -53,7 +53,9 @@ public final class TransitionTable {
             row(QUOTING, TransitionEvent.OBSERVED_COMPLETED, TransitionGuard.NONE, RECONCILING, SideEffect.NONE),
             row(QUOTING, TransitionEvent.OBSERVED_COMPLETE_IN_PROGRESS, TransitionGuard.NONE, RECONCILING, SideEffect.NONE),
             // A create with every item unavailable has no session: nothing to cancel.
-            row(QUOTING, TransitionEvent.CREATE_REJECTED, TransitionGuard.NONE, FAILED_NOT_CHARGED, SideEffect.NONE));
+            row(QUOTING, TransitionEvent.CREATE_REJECTED, TransitionGuard.NONE, FAILED_NOT_CHARGED, SideEffect.NONE),
+            // A ProtocolError on complete does not settle the outcome: reconcile, never FAILED_NOT_CHARGED.
+            row(COMPLETING, TransitionEvent.PROTOCOL_ERROR, TransitionGuard.NONE, RECONCILING, SideEffect.NONE));
 
     private TransitionTable() {
     }

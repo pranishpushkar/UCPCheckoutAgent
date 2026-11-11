@@ -39,6 +39,8 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class DefaultOrchestratorTest {
 
@@ -251,6 +253,35 @@ class DefaultOrchestratorTest {
                 .satisfies(o -> assertThat(o.totalMinor()).isEqualTo(5616));
         assertThat(lab.intent(id).uncertainSince()).contains(secondKeySent);
         assertThat(lab.clock.instant()).isBefore(secondKeySent.plus(lab.config.reconcileDeadline()));
+    }
+
+    // Covers: 7.2 (COMPLETING protocol_error -> RECONCILING), 8.1, I1 (a ProtocolError on complete never settles the
+    // outcome: never FAILED_NOT_CHARGED; reconciliation reads the session, and a resend reuses the same key)
+    @ParameterizedTest
+    @ValueSource(ints = {400, 401, 403, 404, 409, 422})
+    void complete_movesToReconciling_onProtocolError(int status) {
+        IntentId id = approved();
+        lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 1, new Fault.Reject(status, "rejected", Optional.empty())));
+
+        StepResult step = w.orchestrator().advance(id);
+
+        assertThat(step.after()).isEqualTo(RECONCILING);
+        assertThat(lab.intent(id).failureReason()).isEmpty();
+        assertThat(attempts(id, AttemptOp.COMPLETE)).singleElement().satisfies(a -> {
+            assertThat(a.status()).isEqualTo(AttemptStatus.UNCERTAIN);
+            assertThat(a.httpStatus()).contains(status);
+        });
+        assertThat(lab.intents.events(id)).filteredOn(e -> e.type().equals("transition"))
+                .extracting(e -> e.payloadJson())
+                .anySatisfy(p -> assertThat(p).contains("\"from\":\"COMPLETING\"")
+                        .contains("\"event\":\"PROTOCOL_ERROR\"").contains("\"to\":\"RECONCILING\""));
+        assertThat(lab.merchant.orders()).isEmpty();
+
+        assertThat(lab.drive(w, id)).isEqualTo(COMPLETED);
+        assertThat(lab.merchant.orders()).hasSize(1);
+        assertThat(lab.merchant.sessionsCreated()).isEqualTo(1);
+        assertThat(attempts(id, AttemptOp.COMPLETE)).extracting(a -> a.idempotencyKey().orElseThrow())
+                .containsOnly(IdempotencyKey.derive(id, MutatingOp.COMPLETE, 0));
     }
 
     // Covers: 7.2 (defensive QUOTING row: an update shows the session completed -> RECONCILING), I1, I2 (the order is
