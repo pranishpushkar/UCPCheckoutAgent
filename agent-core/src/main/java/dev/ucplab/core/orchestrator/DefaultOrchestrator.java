@@ -65,6 +65,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 import java.util.random.RandomGenerator;
@@ -81,7 +82,10 @@ import java.util.stream.Collectors;
  * <p><b>Reading the attempt log after a crash.</b> In COMPLETING, the newest {@code complete} attempt under the
  * current key tells the step what happened: SENT means the outcome of a call is unknown (crash between 7.3 steps 3 and
  * 5), so the intent goes to RECONCILING; UNCERTAIN means reconciliation approved a resend (table 7.2, RECONCILING
- * observed ready_for_complete), which this step now makes with the stored key and body (I7). The two cannot be
+ * observed ready_for_complete). Only the process that made that observation makes the resend, with the stored key and
+ * body (I7): it remembers the approval in memory, keyed by the intent's version. A step that finds COMPLETING with an
+ * UNCERTAIN attempt and no such memory (a restart, or a worker that took over) sends nothing and goes back to
+ * RECONCILING, so a resend always follows a read that process made itself (7.6). The two attempt states cannot be
  * confused because an uncertain outcome is written together with the move to RECONCILING.
  *
  * <p><b>Keys.</b> create and cancel use revision 0; the update for re-quote n uses revision n-1, and the
@@ -141,6 +145,12 @@ public final class DefaultOrchestrator implements Orchestrator {
     private final String workerId;
     private final RandomGenerator jitter;
     private final ReentrantLock jitterLock = new ReentrantLock();
+    /**
+     * Resends this process approved after a {@code get} showed ready_for_complete (7.5), by intent: the version the
+     * intent has once the approving write is stored. Only the process that observed the status continues to the resend;
+     * after a restart or a takeover the map is empty, so the new worker reads again first (7.6).
+     */
+    private final Map<IntentId, Long> approvedResends = new ConcurrentHashMap<>();
 
     /**
      * @param payment the instrument put in every frozen {@code complete} body (7.4); one mock card in M1
@@ -542,8 +552,16 @@ public final class DefaultOrchestrator implements Orchestrator {
         Move m = move(intent, TransitionEvent.SEND_COMPLETE, TransitionGuard.ATTEMPT_PERSISTED);
         // A new key starts a fresh reconciliation deadline (7.5 rule 1); cleared in the same write as the attempt.
         PurchaseIntent written = writeAhead(intent, attempt, m.next().withoutUncertainSince());
+        // Both approval writes come after the fenced write-ahead and before the request leaves (7.6): only the worker
+        // that holds the lease repairs the approval. A PENDING approval under an APPROVED intent means a crash inside
+        // decide; the decision was the owner's, because only the owner can approve (I10).
+        if (approval.status() == ApprovalStatus.PENDING) {
+            approvals.transition(approval.id(), ApprovalStatus.PENDING, ApprovalStatus.APPROVED, clock.instant(),
+                    Optional.of(intent.owner()));
+            event(intent.id(), "approval_decision_recovered", Map.of("approval_id", approval.id()));
+        }
         if (approval.status() != ApprovalStatus.CONSUMED) {
-            approvals.transition(approval.id(), approval.status(), ApprovalStatus.CONSUMED, clock.instant(),
+            approvals.transition(approval.id(), ApprovalStatus.APPROVED, ApprovalStatus.CONSUMED, clock.instant(),
                     Optional.empty());
         }
         transitionEvent(intent.id(), m.transition());
@@ -647,7 +665,21 @@ public final class DefaultOrchestrator implements Orchestrator {
                 transitionEvent(intent.id(), m.transition());
                 yield moved(intent, next);
             }
-            case UNCERTAIN -> resend(intent, sameKey);
+            case UNCERTAIN -> {
+                // Reconciliation approved a resend and left this marker (see reconcile). Only the process that read
+                // ready_for_complete continues to it; after a restart or takeover nothing is sent and the next step
+                // reads again (7.6).
+                Long approvedAt = approvedResends.remove(intent.id());
+                if (approvedAt != null && approvedAt == intent.version()) {
+                    yield resend(intent, sameKey);
+                }
+                Move m = move(intent, TransitionEvent.UNCERTAIN);
+                PurchaseIntent next = withUncertainSince(m.next());
+                intents.update(next, intent.version(), workerId);
+                event(intent.id(), "resend_not_approved_here", Map.of("attempt_id", latest.id().value()));
+                transitionEvent(intent.id(), m.transition());
+                yield moved(intent, next);
+            }
             case RESPONDED -> throw new IllegalStateException(
                     "COMPLETING with a resolved complete attempt: " + intent.id());
         };
@@ -731,6 +763,7 @@ public final class DefaultOrchestrator implements Orchestrator {
                 } else {
                     intents.update(m.next(), intent.version(), workerId);
                 }
+                approvedResends.put(intent.id(), intent.version() + 1);
                 transitionEvent(intent.id(), m.transition());
                 yield moved(intent, m.next());
             }

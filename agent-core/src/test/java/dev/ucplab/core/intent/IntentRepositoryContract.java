@@ -318,6 +318,38 @@ public abstract class IntentRepositoryContract {
                 Optional.empty(), Optional.empty(), 0, W1)).isInstanceOf(IntentNotFoundException.class);
     }
 
+    // Covers: 7.6 (the worker also picks up APPROVED: a crash between approval and the first complete must not strand it)
+    @Test
+    void claimRecoverable_returnsApprovedIntents() {
+        repo.insert(proposed("i1", ALICE, "d1").withState(IntentState.APPROVED, clock.instant()));
+
+        assertThat(repo.claimRecoverable(W1, LEASE, 10)).extracting(i -> i.id().value()).containsExactly("i1");
+    }
+
+    // Covers: 7.6 (an intent that owes a cancel is picked up whatever its terminal state)
+    @Test
+    void claimRecoverable_returnsIntentsWithCancelPending_inTerminalStates() {
+        repo.insert(proposed("i1", ALICE, "d1").withState(IntentState.REJECTED, clock.instant())
+                .withSessionId(new SessionId("s1")).withCancelPending(true));
+        repo.insert(proposed("i2", ALICE, "d2").withState(IntentState.FAILED_NOT_CHARGED, clock.instant())
+                .withSessionId(new SessionId("s2")).withCancelPending(true));
+
+        assertThat(repo.claimRecoverable(W1, LEASE, 10)).extracting(i -> i.id().value())
+                .containsExactlyInAnyOrder("i1", "i2");
+    }
+
+    // Covers: 7.6 (states that need no worker are never claimed: waiting for a human, or settled with nothing owed)
+    @Test
+    void claimRecoverable_skipsIntentsThatNeedNoWorker() {
+        repo.insert(proposed("i1", ALICE, "d1").withState(IntentState.AWAITING_APPROVAL, clock.instant()));
+        repo.insert(proposed("i2", ALICE, "d2").withState(IntentState.REJECTED, clock.instant())
+                .withSessionId(new SessionId("s2")));
+        repo.insert(proposed("i3", ALICE, "d3").withState(IntentState.COMPLETED, clock.instant()));
+        repo.insert(proposed("i4", ALICE, "d4").withState(IntentState.ESCALATED, clock.instant()));
+
+        assertThat(repo.claimRecoverable(W1, LEASE, 10)).isEmpty();
+    }
+
     // Covers: 7.8 (an update for an unknown intent is a programming error, not a stale write)
     @Test
     void update_throwsNotFound_forUnknownIntent() {
@@ -479,7 +511,7 @@ public abstract class IntentRepositoryContract {
         assertThat(repo.renewLease(claimed.id(), W1, LEASE)).isFalse();
     }
 
-    // Covers: 7.6 (only QUOTING, COMPLETING and RECONCILING with no live lease are claimable)
+    // Covers: 7.6 (only QUOTING, APPROVED, COMPLETING and RECONCILING with no live lease are claimable)
     @Test
     void claimRecoverable_claimsOnlyRecoverableStatesWithoutLiveLease() {
         for (IntentState s : IntentState.values()) {
@@ -489,7 +521,8 @@ public abstract class IntentRepositoryContract {
         List<PurchaseIntent> claimed = repo.claimRecoverable(W1, LEASE, 100);
 
         assertThat(claimed).extracting(PurchaseIntent::state)
-                .containsExactlyInAnyOrder(IntentState.QUOTING, IntentState.COMPLETING, IntentState.RECONCILING);
+                .containsExactlyInAnyOrder(IntentState.QUOTING, IntentState.APPROVED, IntentState.COMPLETING,
+                        IntentState.RECONCILING);
         assertThat(claimed).allSatisfy(i -> {
             assertThat(i.leaseOwner()).contains(W1);
             assertThat(i.leaseUntil()).contains(clock.instant().plus(LEASE));

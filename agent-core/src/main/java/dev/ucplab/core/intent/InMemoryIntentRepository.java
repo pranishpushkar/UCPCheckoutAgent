@@ -28,7 +28,7 @@ import java.util.concurrent.locks.ReentrantLock;
 public final class InMemoryIntentRepository implements IntentRepository {
 
     private static final Set<IntentState> RECOVERABLE =
-            EnumSet.of(IntentState.QUOTING, IntentState.COMPLETING, IntentState.RECONCILING);
+            EnumSet.of(IntentState.QUOTING, IntentState.APPROVED, IntentState.COMPLETING, IntentState.RECONCILING);
 
     private final Clock clock;
     private final ReentrantLock lock = new ReentrantLock();
@@ -256,7 +256,7 @@ public final class InMemoryIntentRepository implements IntentRepository {
             Instant now = clock.instant();
             Instant until = now.plus(lease);
             List<PurchaseIntent> candidates = intents.values().stream()
-                    .filter(i -> RECOVERABLE.contains(i.state()))
+                    .filter(i -> RECOVERABLE.contains(i.state()) || i.cancelPending())
                     .filter(i -> i.leaseUntil().map(t -> t.isBefore(now)).orElse(true))
                     .sorted(Comparator.comparing(PurchaseIntent::createdAt).thenComparing(i -> i.id().value()))
                     .limit(limit)
@@ -286,6 +286,18 @@ public final class InMemoryIntentRepository implements IntentRepository {
             }
             intents.put(id, stored.withLease(stored.leaseOwner(), Optional.of(clock.instant().plus(lease))));
             return true;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** System view for {@link InMemoryRecoveryScan}: the intents in {@code state}, oldest first. */
+    List<PurchaseIntent> inState(IntentState state) {
+        lock.lock();
+        try {
+            return intents.values().stream().filter(i -> i.state() == state)
+                    .sorted(Comparator.comparing(PurchaseIntent::createdAt).thenComparing(i -> i.id().value()))
+                    .toList();
         } finally {
             lock.unlock();
         }

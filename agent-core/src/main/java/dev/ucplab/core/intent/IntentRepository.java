@@ -84,8 +84,9 @@ public interface IntentRepository {
     Optional<PurchaseIntent> claim(IntentId id, String owner, Duration lease);
 
     /**
-     * Claims up to {@code limit} intents in QUOTING, COMPLETING or RECONCILING whose lease is empty or expired,
-     * setting the lease owner and expiry to now + {@code lease} (7.6).
+     * Claims up to {@code limit} intents that need a worker whose lease is empty or expired, setting the lease owner and
+     * expiry to now + {@code lease} (7.6): those in QUOTING, APPROVED, COMPLETING or RECONCILING, and any intent with
+     * {@code cancel_pending} set. AWAITING_APPROVAL intents with an expired approval are found by {@link RecoveryScan}.
      */
     List<PurchaseIntent> claimRecoverable(String owner, Duration lease, int limit);
 
