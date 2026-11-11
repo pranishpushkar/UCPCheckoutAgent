@@ -433,6 +433,8 @@ Backoff: exponential from 200 ms, factor 2, cap 2 s, full jitter.
 
 **Retry-After.** The value is seconds or an HTTP-date; a date is parsed against the injected `Clock`. If the wait is at most 2 s (the backoff cap), the gateway sleeps and retries. If it is longer, the gateway stops and returns `ProtocolError` with `retryAfter`; the orchestrator does not wait and retry a QUOTING call (7.2, "Retries live in one layer"); it never delays QUOTING, which has no orchestrator retries (7.2). It delays only a reconciliation poll or a cancel: the next attempt is at the later of the normal next poll time and `retryAfter`, and never later than that state's deadline (7.5, 7.6).
 
+**An Uncertain attempt makes the whole call Uncertain \[CONTRACT\].** Once any attempt of a call was `Uncertain`, the request may have been processed, so the call's final outcome is never `NotSent` or `ProtocolError`: it is `Uncertain`, with a cause that names the first `Uncertain` attempt and the last outcome. This covers retries running out, the breaker refusing a later attempt, a long `Retry-After` stopping the loop, and an interrupt. A real answer under the same key still stands: `Ok` and `Rejected` are returned as they are. Why: a later `NotSent` or 4xx says nothing about the earlier request, and reporting it would let the orchestrator treat a possibly created session or charge as "nothing happened".
+
 **Retries live in one layer.** The gateway does every in-call retry. The orchestrator does not retry QUOTING calls (7.2).
 
 ### 8.3 Timeouts and circuit breaker

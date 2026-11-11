@@ -268,6 +268,120 @@ class RetryExecutorTest {
         assertThat(sleeps).isEmpty();
     }
 
+    // ---------------------------------------------------------------- an Uncertain attempt taints the call (8.2)
+
+    // Covers: 8.2, I1 (once an attempt was Uncertain the request may have been processed, so a later NotSent cannot
+    // make the call "not sent": the call is Uncertain, and the cause names the first Uncertain attempt and the last one)
+    @Test
+    void execute_isUncertain_whenAnUncertainAttemptIsFollowedByNotSent() {
+        transport.then(UNCERTAIN, NOT_SENT, NOT_SENT, NOT_SENT);
+
+        CallOutcome<CheckoutView> outcome = executor().execute(call(AttemptOp.CREATE));
+
+        assertThat(outcome).isInstanceOfSatisfying(CallOutcome.Uncertain.class, u -> {
+            assertThat(u.cause()).contains("HttpTimeoutException").contains("ConnectException");
+            assertThat(u.cause()).startsWith("an earlier attempt was uncertain");
+        });
+        assertThat(transport.calls).hasSize(4);
+    }
+
+    // Covers: 8.2, 8.3 (an Uncertain attempt followed by the breaker refusing the next one: Uncertain, not NotSent)
+    @Test
+    void execute_isUncertain_whenAnUncertainAttemptIsFollowedByTheGateRefusing() {
+        Gate refusesSecond = new Gate() {
+            int asked;
+
+            @Override
+            public boolean tryAcquire() {
+                return ++asked == 1;
+            }
+
+            @Override
+            public void record(CallOutcome<?> outcome) {
+                // not needed
+            }
+
+            @Override
+            public void recordReplied() {
+                // not needed
+            }
+        };
+        transport.then(UNCERTAIN);
+
+        CallOutcome<CheckoutView> outcome = executor(CONFIG, refusesSecond).execute(call(AttemptOp.CREATE));
+
+        assertThat(outcome).isInstanceOfSatisfying(CallOutcome.Uncertain.class,
+                u -> assertThat(u.cause()).contains("HttpTimeoutException").contains("circuit breaker open"));
+        assertThat(transport.calls).hasSize(1);
+    }
+
+    // Covers: 8.2, decision G (an Uncertain attempt followed by a 429 whose long Retry-After stops the loop: Uncertain,
+    // not the ProtocolError)
+    @Test
+    void execute_isUncertain_whenAnUncertainAttemptIsFollowedByALongRetryAfter() {
+        transport.then(UNCERTAIN, status(429, "Retry-After", "10"));
+
+        CallOutcome<CheckoutView> outcome = executor().execute(call(AttemptOp.UPDATE));
+
+        assertThat(outcome).isInstanceOfSatisfying(CallOutcome.Uncertain.class,
+                u -> assertThat(u.cause()).contains("HttpTimeoutException").contains("429"));
+        assertThat(transport.calls).hasSize(2);
+    }
+
+    // Covers: 8.2 (a 429 or 503 that runs out of retries after an Uncertain attempt is Uncertain too)
+    @Test
+    void execute_isUncertain_whenAnUncertainAttemptIsFollowedBy503UntilTheRetriesRunOut() {
+        transport.then(UNCERTAIN, status(503), status(503), status(503));
+
+        assertThat(executor().execute(call(AttemptOp.CANCEL))).isInstanceOf(CallOutcome.Uncertain.class);
+    }
+
+    // Covers: 8.2, 7.8 (an interrupt after an Uncertain attempt: Uncertain, interrupt flag kept)
+    @Test
+    void execute_isUncertain_whenAnUncertainAttemptIsFollowedByAnInterrupt() {
+        transport.then(UNCERTAIN, NOT_SENT, ok());
+        int[] sleeps = {0};
+        RetryExecutor interrupted = new RetryExecutor(CONFIG, transport,
+                new FailureClassifier(Clock.fixed(Instant.EPOCH, ZoneOffset.UTC)), Gate.NONE, d -> {
+                    if (++sleeps[0] == 2) {
+                        throw new InterruptedException();
+                    }
+                }, new SplittableRandom(1), new SequentialIdGenerator("req-"));
+
+        CallOutcome<CheckoutView> outcome = interrupted.execute(call(AttemptOp.GET));
+
+        assertThat(outcome).isInstanceOf(CallOutcome.Uncertain.class);
+        assertThat(transport.calls).hasSize(2);
+        assertThat(Thread.interrupted()).isTrue();
+    }
+
+    // Covers: 8.2 (a real answer under the same key settles it: Uncertain then Ok is Ok, and Uncertain then Rejected is
+    // Rejected)
+    @Test
+    void execute_returnsOkOrRejectedAsIs_afterAnUncertainAttempt() {
+        transport.then(UNCERTAIN, ok());
+        assertThat(executor().execute(call(AttemptOp.CREATE))).isInstanceOf(CallOutcome.Ok.class);
+
+        transport.calls.clear();
+        transport.then(UNCERTAIN, new HttpReply(200, Map.of(), fixture("create_all_unavailable")));
+        assertThat(executor().execute(call(AttemptOp.CREATE))).isInstanceOf(CallOutcome.Rejected.class);
+    }
+
+    // Covers: 8.2 (the cause names the first Uncertain attempt even when all attempts are Uncertain; a client error after an
+    // Uncertain attempt still makes the call Uncertain, because the 4xx may be about a state the first request changed)
+    @Test
+    void execute_namesTheFirstUncertainAttempt_whenEveryAttemptIsUncertain() {
+        transport.then(UNCERTAIN, UNCERTAIN, UNCERTAIN, UNCERTAIN);
+
+        CallOutcome<CheckoutView> outcome = executor().execute(call(AttemptOp.GET));
+
+        assertThat(outcome).isInstanceOfSatisfying(CallOutcome.Uncertain.class,
+                u -> assertThat(u.cause()).startsWith("an earlier attempt was uncertain"));
+        transport.calls.clear();
+        transport.then(UNCERTAIN, status(409));
+        assertThat(executor().execute(call(AttemptOp.CREATE))).isInstanceOf(CallOutcome.Uncertain.class);
+    }
+
     // ---------------------------------------------------------------- headers, keys and bytes (H, I7)
 
     // Covers: 8.4, decision H, I7 (every attempt carries the same Idempotency-Key and the same body bytes; each has its

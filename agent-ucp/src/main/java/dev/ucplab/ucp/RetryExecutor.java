@@ -30,7 +30,8 @@ import java.util.random.RandomGenerator;
  *   <li>everything else ({@code Ok}, {@code Rejected}, other {@code ProtocolError}) is returned at once.
  * </ul>
  * Backoff is full jitter: before retry k the delay is uniform in [0, min(cap, initial x 2^(k-1))], drawn from the
- * injected seeded generator. A call the {@link Gate} refuses is {@code NotSent} at once, without retries.
+ * injected seeded generator. A call the {@link Gate} refuses is {@code NotSent} at once, without retries, unless an
+ * earlier attempt was already {@code Uncertain}: then the whole call is {@code Uncertain} (see {@link #tainted}).
  *
  * <p>Each attempt has its own {@code Request-Id} (UUID-formatted, from the injected {@link IdGenerator}); the
  * {@code Idempotency-Key} and the body bytes are identical on every attempt. The executor never logs.
@@ -92,9 +93,10 @@ public final class RetryExecutor {
 
     private Attempt loop(ApiCall call, boolean raw) {
         int maxAttempts = config.maxRetries() + 1;
+        String firstUncertain = null;
         for (int attempt = 1;; attempt++) {
             if (!call.bypassGate() && !gate.tryAcquire()) {
-                return new Attempt.Result(FailureClassifier.circuitOpen(call.hostPort()));
+                return tainted(new Attempt.Result(FailureClassifier.circuitOpen(call.hostPort())), firstUncertain, attempt);
             }
             Attempt result = once(call, raw);
             if (!call.bypassGate()) {
@@ -106,17 +108,44 @@ public final class RetryExecutor {
             if (!(result instanceof Attempt.Result r)) {
                 return result;
             }
+            if (firstUncertain == null && r.outcome() instanceof CallOutcome.Uncertain<CheckoutView> u) {
+                firstUncertain = u.cause();
+            }
             Optional<Duration> wait = attempt >= maxAttempts ? Optional.empty() : retryDelay(call.op(), r.outcome(), attempt);
             if (wait.isEmpty()) {
-                return result;
+                return tainted(result, firstUncertain, attempt);
             }
             try {
                 sleeper.sleep(wait.get());
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                return result;
+                return tainted(result, firstUncertain, attempt);
             }
         }
+    }
+
+    /**
+     * Once any attempt of a call was Uncertain, the request may have been processed, so the call can never end as
+     * NotSent or ProtocolError (8.2): it is Uncertain, naming the first Uncertain attempt and the last outcome. Ok and
+     * Rejected are real answers under the same key and stay as they are. A lone Uncertain attempt is returned unchanged.
+     */
+    private static Attempt tainted(Attempt result, String firstUncertain, int attempt) {
+        if (firstUncertain == null || !(result instanceof Attempt.Result r)) {
+            return result;
+        }
+        CallOutcome<CheckoutView> last = r.outcome();
+        String lastText = switch (last) {
+            case CallOutcome.Ok<CheckoutView> ok -> null;
+            case CallOutcome.Rejected<CheckoutView> rej -> null;
+            case CallOutcome.NotSent<CheckoutView> n -> "not sent: " + n.cause();
+            case CallOutcome.Uncertain<CheckoutView> u -> u.cause();
+            case CallOutcome.ProtocolError<CheckoutView> e -> "http " + e.httpStatus() + " " + e.code();
+        };
+        if (lastText == null || (attempt == 1 && last instanceof CallOutcome.Uncertain<CheckoutView>)) {
+            return result;
+        }
+        return new Attempt.Result(new CallOutcome.Uncertain<>(
+                "an earlier attempt was uncertain (" + firstUncertain + "); last attempt: " + lastText));
     }
 
     /** The delay before the next attempt, or empty if this outcome is final. {@code attempt} counts from 1. */
