@@ -76,7 +76,7 @@ public final class RunScript {
         Instant startedAt = Instant.now();
         String name = "L" + lane.index() + "-" + scenario.id() + "-r" + run;
         lane.merchant().reset();
-        lane.proxy().install(scenario.rules().apply(scale));
+        lane.proxy().install(scenario.rules().build(scale, run));
         long startSeq = lane.proxyLogMark();
         UserId user = new UserId("eval-" + name);
         List<IntentId> proposed = new ArrayList<>();

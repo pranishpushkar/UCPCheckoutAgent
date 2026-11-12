@@ -3,6 +3,9 @@ package dev.ucplab.eval;
 import dev.ucplab.core.intent.IntentState;
 import dev.ucplab.core.intent.ProposedLine;
 import dev.ucplab.core.merchant.MerchantId;
+import dev.ucplab.faultproxy.Action;
+import dev.ucplab.faultproxy.Match;
+import dev.ucplab.faultproxy.Rule;
 import dev.ucplab.faultproxy.RuleSet;
 import java.util.List;
 import java.util.Optional;
@@ -27,21 +30,65 @@ public final class Scenarios {
     }
 
     public static final Scenario S0 = new Scenario("S0", "no fault", "none", Set.of(IntentState.COMPLETED),
-            List.of("I1", "I2", "I3"), t -> RuleSet.empty(), AutoApprover.Policy.APPROVE_ALL,
+            List.of("I1", "I2", "I3"), (t, run) -> RuleSet.empty(), AutoApprover.Policy.APPROVE_ALL,
             Scenario.Driver.PROPOSE_ONCE, SHOP, TWO_SHIRTS, PAY_OK);
+
+    /** The create endpoint and the complete endpoint, as the proxy matches them. */
+    static final String CREATE = "/ucp/v1/checkout-sessions";
+    static final String COMPLETE = "/ucp/v1/checkout-sessions/*/complete";
+
+    /**
+     * S1 as reworded in 13.2 (D4): a listening server cannot refuse one connection, so the proxy closes it before
+     * forwarding, which 8.1 classifies Uncertain as it does a refusal; create retries under the same key (8.2).
+     */
+    public static final Scenario S1 = new Scenario("S1", "connection closed before forwarding on the first 2 creates",
+            "fail_before_forward {close} on POST " + CREATE + ", times 2", Set.of(IntentState.COMPLETED),
+            List.of("I1", "I4"),
+            (t, run) -> rules(run, new Rule("close-create", Match.of("POST", CREATE),
+                    Action.FailBeforeForward.closeConnection()).withTimes(2)),
+            AutoApprover.Policy.APPROVE_ALL, Scenario.Driver.PROPOSE_ONCE, SHOP, TWO_SHIRTS, PAY_OK);
+
+    public static final Scenario S2 = new Scenario("S2", "complete response dropped after the merchant processed it",
+            "forward_then_drop_response on POST " + COMPLETE + ", nth 1", Set.of(IntentState.COMPLETED),
+            List.of("I1", "I4", "I7"),
+            (t, run) -> rules(run, new Rule("drop-complete", Match.of("POST", COMPLETE).withNth(1),
+                    new Action.ForwardThenDropResponse()).withTimes(1)),
+            AutoApprover.Policy.APPROVE_ALL, Scenario.Driver.PROPOSE_ONCE, SHOP, TWO_SHIRTS, PAY_OK);
+
+    /** S3: the merchant commits at once; the answer is held 1.5 complete timeouts, so the client times out first. */
+    public static final Scenario S3 = new Scenario("S3", "complete response delayed past the client timeout",
+            "forward_then_delay_response {1.5 x complete timeout} on POST " + COMPLETE + ", nth 1",
+            Set.of(IntentState.COMPLETED), List.of("I1", "I7"),
+            (t, run) -> rules(run, new Rule("hold-complete", Match.of("POST", COMPLETE).withNth(1),
+                    new Action.ForwardThenDelayResponse(t.s3Hold().toMillis())).withTimes(1)),
+            AutoApprover.Policy.APPROVE_ALL, Scenario.Driver.PROPOSE_ONCE, SHOP, TWO_SHIRTS, PAY_OK);
 
     public static final Scenario S4 = new Scenario("S4", "the same proposal submitted twice",
             "none; propose twice with the same basket (sequential in even runs, concurrent in odd runs)",
-            Set.of(IntentState.COMPLETED), List.of("I1"), t -> RuleSet.empty(), AutoApprover.Policy.APPROVE_ALL,
+            Set.of(IntentState.COMPLETED), List.of("I1"), (t, run) -> RuleSet.empty(), AutoApprover.Policy.APPROVE_ALL,
             Scenario.Driver.PROPOSE_TWICE, SHOP, TWO_SHIRTS, PAY_OK);
 
     public static final Scenario S11 = new Scenario("S11", "merchant host not on the allowlist",
             "none; the proposal names a merchant missing from the registry", Set.of(IntentState.REJECTED),
-            List.of("I3"), t -> RuleSet.empty(), AutoApprover.Policy.APPROVE_ALL, Scenario.Driver.PROPOSE_ONCE,
+            List.of("I3"), (t, run) -> RuleSet.empty(), AutoApprover.Policy.APPROVE_ALL, Scenario.Driver.PROPOSE_ONCE,
             UNLISTED, TWO_SHIRTS, PAY_OK);
 
+    /** S13: both copies of the first complete reach the merchant, at once in even runs, one after the other in odd. */
+    public static final Scenario S13 = new Scenario("S13", "duplicate_request on complete",
+            "duplicate_request on POST " + COMPLETE + ", nth 1 (parallel in even runs, sequential in odd runs)",
+            Set.of(IntentState.COMPLETED), List.of("I1"),
+            (t, run) -> rules(run, new Rule("duplicate-complete", Match.of("POST", COMPLETE).withNth(1),
+                    new Action.DuplicateRequest(run % 2 == 0 ? Action.DuplicateRequest.Mode.PARALLEL
+                            : Action.DuplicateRequest.Mode.SEQUENTIAL)).withTimes(1)),
+            AutoApprover.Policy.APPROVE_ALL, Scenario.Driver.PROPOSE_ONCE, SHOP, TWO_SHIRTS, PAY_OK);
+
+    /** Every row the harness can run, in catalogue order. */
     public static List<Scenario> all() {
-        return List.of(S0, S4, S11);
+        return List.of(S0, S1, S2, S3, S4, S11, S13);
+    }
+
+    private static RuleSet rules(int run, Rule... rules) {
+        return new RuleSet(run, List.of(rules));
     }
 
     /**

@@ -80,7 +80,7 @@ class RunScriptTest {
     void s0AfterAnOutageRun_isClean() {
         Scenario outage = new Scenario("S8x", "every UCP request answered 503", "fail_before_forward 503 on /ucp/v1/**",
                 Set.of(IntentState.FAILED_NOT_CHARGED, IntentState.ESCALATED), List.of("I1"),
-                t -> new RuleSet(1, List.of(new Rule("outage", new Match(Optional.empty(),
+                (t, run) -> new RuleSet(1, List.of(new Rule("outage", new Match(Optional.empty(),
                         Optional.of(new PathPattern("/ucp/v1/**")), OptionalInt.empty(), OptionalDouble.empty()),
                         Action.FailBeforeForward.status(503)))),
                 AutoApprover.Policy.APPROVE_ALL, Scenario.Driver.PROPOSE_ONCE, Scenarios.SHOP, Scenarios.TWO_SHIRTS,

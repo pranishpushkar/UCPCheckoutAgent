@@ -7,7 +7,6 @@ import dev.ucplab.faultproxy.RuleSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
-import java.util.function.Function;
 
 /**
  * One row of the scripted catalogue (13.2) as the harness runs it in M4: the fault (proxy rules built for the run's time
@@ -22,12 +21,18 @@ public record Scenario(
         String fault,
         Set<IntentState> expected,
         List<String> requiredInvariants,
-        Function<TimeScale, RuleSet> rules,
+        Rules rules,
         AutoApprover.Policy approver,
         Driver driver,
         MerchantId target,
         List<ProposedLine> basket,
         String paymentToken) {
+
+    /** The proxy rules of one run, built for the run's time scale; some rows vary by run (S13). */
+    @FunctionalInterface
+    public interface Rules {
+        RuleSet build(TimeScale scale, int run);
+    }
 
     /** How the harness calls {@code propose}. */
     public enum Driver {
