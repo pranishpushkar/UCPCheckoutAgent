@@ -23,6 +23,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
@@ -39,10 +40,21 @@ public final class RunScript {
 
     private final Lane lane;
     private final TimeScale scale;
+    private final Consumer<String> tokenSeen;
 
     public RunScript(Lane lane, TimeScale scale) {
+        this(lane, scale, t -> { });
+    }
+
+    /** @param tokenSeen given every approval token the approver uses (the redaction test only) */
+    RunScript(Lane lane, TimeScale scale, Consumer<String> tokenSeen) {
         this.lane = Objects.requireNonNull(lane, "lane");
         this.scale = Objects.requireNonNull(scale, "scale");
+        this.tokenSeen = Objects.requireNonNull(tokenSeen, "tokenSeen");
+    }
+
+    public TimeScale scale() {
+        return scale;
     }
 
     /**
@@ -76,7 +88,8 @@ public final class RunScript {
                 new SequentialIdGenerator(name), scenario.paymentToken())) {
             Supplier<AuthContext> auth = () -> new AuthContext(user, user.value() + "@eval.example",
                     stack.clock.instant(), "eval-session-" + name);
-            AutoApprover approver = new AutoApprover(stack.approvalService, scenario.approver(), auth, stack.clock);
+            AutoApprover approver = new AutoApprover(stack.approvalService, scenario.approver(), auth, stack.clock,
+                    tokenSeen);
             try {
                 proposed.addAll(propose(stack, scenario, run, auth));
                 Set<IntentId> ids = new LinkedHashSet<>(proposed);

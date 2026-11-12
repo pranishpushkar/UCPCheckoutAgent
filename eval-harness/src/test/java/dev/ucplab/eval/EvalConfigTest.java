@@ -35,4 +35,13 @@ class EvalConfigTest {
         assertThatThrownBy(() -> new EvalConfig(1, TimeScale.of(1), 0, 0)).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new EvalConfig(1, TimeScale.of(1), 65, 0)).isInstanceOf(IllegalArgumentException.class);
     }
+
+    // Covers: 13.1 (a scenario's seeds come from its catalogue id, so adding rows never moves another row's seeds)
+    @Test
+    void seedIndex_followsTheCatalogueId() {
+        assertThat(Scenarios.seedIndex(Scenarios.S0)).isZero();
+        assertThat(Scenarios.seedIndex(Scenarios.S4)).isEqualTo(8);
+        assertThat(Scenarios.seedIndex(Scenarios.S11)).isEqualTo(22);
+        assertThat(Scenarios.all()).extracting(Scenarios::seedIndex).doesNotHaveDuplicates();
+    }
 }

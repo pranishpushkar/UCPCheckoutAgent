@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
@@ -49,13 +50,24 @@ public final class AutoApprover {
     private final Clock clock;
     private final List<Decision> log = new ArrayList<>();
     private final Set<String> decided = new HashSet<>();
+    private final Consumer<String> tokenSeen;
 
     /** @param auth a fresh sign-in of the intent's owner, called again for every read and every decision */
     public AutoApprover(DefaultApprovalService service, Policy policy, Supplier<AuthContext> auth, Clock clock) {
+        this(service, policy, auth, clock, t -> { });
+    }
+
+    /**
+     * @param tokenSeen given every approval token the approver uses; only the redaction test passes one, so it can
+     *     search the written evidence for the real tokens
+     */
+    AutoApprover(DefaultApprovalService service, Policy policy, Supplier<AuthContext> auth, Clock clock,
+                 Consumer<String> tokenSeen) {
         this.service = Objects.requireNonNull(service, "service");
         this.policy = Objects.requireNonNull(policy, "policy");
         this.auth = Objects.requireNonNull(auth, "auth");
         this.clock = Objects.requireNonNull(clock, "clock");
+        this.tokenSeen = Objects.requireNonNull(tokenSeen, "tokenSeen");
     }
 
     /**
@@ -76,6 +88,7 @@ public final class AutoApprover {
             case APPROVE_FIRST_THEN_DECLINE -> seq == 1;
         };
         Instant at = clock.instant();
+        tokenSeen.accept(p.token());
         ApprovalDecision outcome = service.decide(auth.get(), id, p.token(), approve);
         if (!(outcome instanceof ApprovalDecision.Approved) && !(outcome instanceof ApprovalDecision.Rejected)) {
             return false;

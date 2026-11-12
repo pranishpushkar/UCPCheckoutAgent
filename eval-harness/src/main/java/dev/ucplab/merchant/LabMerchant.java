@@ -24,6 +24,9 @@ public final class LabMerchant implements AutoCloseable {
     /** The UCP-Agent of the harness's own ground-truth reads, so they can never be mistaken for the agent's. */
     static final String GROUND_TRUTH_AGENT = "profile=\"https://eval.ucplab.dev/ground-truth\"";
 
+    /** The UCP version the merchant speaks, for the report's configuration block. */
+    public static final String UCP_VERSION = MerchantCore.VERSION;
+
     private final MerchantServer server;
     private final HttpClient http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1)
             .followRedirects(HttpClient.Redirect.NEVER).connectTimeout(Duration.ofSeconds(2)).build();

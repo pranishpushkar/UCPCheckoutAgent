@@ -1,0 +1,120 @@
+package dev.ucplab.eval.report;
+
+import dev.ucplab.eval.EvalConfig;
+import dev.ucplab.eval.check.Checks;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+
+/**
+ * One evaluation's report (13.5, m4-plan section 11), before it is written as JSON or Markdown. It is reduced unless
+ * every row has at least {@value #FULL_RUNS} runs at time scale 1.
+ *
+ * @param merchantVersion the UCP version the in-process merchant speaks
+ * @param runtime the Java version and the operating system, as one line each
+ */
+public record Report(Instant generatedAt, CommitInfo commit, EvalConfig config, String merchantVersion,
+                     List<String> runtime, List<ScenarioSummary> scenarios) {
+
+    /** 13.5: the acceptance report has 200 runs per scenario. */
+    public static final int FULL_RUNS = 200;
+
+    /** The exit codes of 13.5. */
+    public static final int CLEAN = 0;
+    public static final int VIOLATION_OR_ABORT = 1;
+    public static final int UNEXPECTED_OUTCOME = 2;
+    public static final int HARNESS_ERROR = 3;
+
+    public Report {
+        Objects.requireNonNull(generatedAt, "generatedAt");
+        Objects.requireNonNull(commit, "commit");
+        Objects.requireNonNull(config, "config");
+        Objects.requireNonNull(merchantVersion, "merchantVersion");
+        runtime = List.copyOf(runtime);
+        scenarios = List.copyOf(scenarios);
+    }
+
+    public boolean reduced() {
+        return config.timeScale().k() != 1 || scenarios.isEmpty()
+                || scenarios.stream().anyMatch(s -> s.n() < FULL_RUNS);
+    }
+
+    /** The first line of a reduced report (13.5: a reduced report says so in its first line). */
+    public String reducedBanner() {
+        int fewest = scenarios.stream().mapToInt(ScenarioSummary::n).min().orElse(0);
+        return "REDUCED: " + fewest + " runs per scenario, time scale " + config.timeScale().k()
+                + " — not an acceptance report";
+    }
+
+    public int violations() {
+        return scenarios.stream().mapToInt(ScenarioSummary::violatedRuns).sum();
+    }
+
+    public int aborted() {
+        return scenarios.stream().mapToInt(ScenarioSummary::aborted).sum();
+    }
+
+    public int unexpected() {
+        return scenarios.stream().mapToInt(ScenarioSummary::unexpected).sum();
+    }
+
+    /** 1 for any violation or aborted run, else 2 for any unexpected terminal state, else 0. */
+    public int exitCode() {
+        if (violations() > 0 || aborted() > 0) {
+            return VIOLATION_OR_ABORT;
+        }
+        return unexpected() > 0 ? UNEXPECTED_OUTCOME : CLEAN;
+    }
+
+    /** The mode and driver, as 13.1 asks every number to be labelled. */
+    public static final String MODE = "scripted";
+    public static final String DRIVER = "orchestrator-direct (M4, no model)";
+    /** Why the agent-only columns are empty. */
+    public static final String NO_AGENT = "n/a: no agent until M5";
+
+    /** How the numbers were produced, for the method section of both formats. */
+    public List<String> methodNotes() {
+        List<String> notes = new ArrayList<>(List.of(
+                "Scripted, orchestrator-direct (13.1 M4 note): each run calls Orchestrator.propose with the scenario's"
+                        + " fixed basket; an automatic approver decides through the approval service; the recovery"
+                        + " worker drives the intent. There is no model, so model calls, tokens, cost and traces read "
+                        + NO_AGENT + ".",
+                "Real time throughout, every duration divided by the time scale k = " + config.timeScale().k()
+                        + " (13.1); approval lifetime and sign-in age are not scaled.",
+                "Each run gets a fresh database, gateway, circuit breakers, worker id and user, and the merchant is"
+                        + " reset before it; runs in one lane are sequential, lanes share nothing.",
+                "Policy usage is a harness stub with no earlier spend or proposals: every run has a user of its own,"
+                        + " so there is nothing to count. A real PolicyUsage is out of scope for M4 (it belongs with"
+                        + " agent-service in M6).",
+                "Invariants are checked on ground truth the agent does not control: O (/_lab/orders), G (the merchant's"
+                        + " own GET of each order's session), L (the fault proxy's log in front of the merchant,"
+                        + " including Idempotency-Key and a keyed body hash) and A (the approver's own decisions). An"
+                        + " aborted run fails every check.",
+                "Terminal states, the expected outcome and reconciliation times come from the agent's stored state"
+                        + " (D), which is what they describe; time to terminal is the harness's own observation."));
+        Checks.all().forEach(c -> notes.add(c.id() + " (" + c.description() + "): "
+                + c.evidence() + "."));
+        return notes;
+    }
+
+    /** Why this report does not meet {@code --require-full}: empty when it does. */
+    public List<String> requireFullProblems() {
+        List<String> out = new ArrayList<>();
+        if (config.timeScale().k() != 1) {
+            out.add("time scale " + config.timeScale().k() + ", not 1");
+        }
+        if (scenarios.isEmpty()) {
+            out.add("no scenarios");
+        }
+        scenarios.stream().filter(s -> s.n() < FULL_RUNS)
+                .forEach(s -> out.add(s.scenario().id() + " has " + s.n() + " runs, fewer than " + FULL_RUNS));
+        if (!commit.known()) {
+            out.add("the commit is unknown");
+        }
+        if (commit.dirty()) {
+            out.add("the working tree has uncommitted changes");
+        }
+        return out;
+    }
+}

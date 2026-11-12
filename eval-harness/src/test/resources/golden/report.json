@@ -1,0 +1,305 @@
+{
+  "schema": "ucplab.eval.report/1",
+  "banner": "REDUCED: 3 runs per scenario, time scale 4 — not an acceptance report",
+  "generatedAt": "2026-11-12T12:00:00Z",
+  "mode": "scripted",
+  "driver": "orchestrator-direct (M4, no model)",
+  "reduced": true,
+  "commit": {
+    "sha": "0123456789abcdef0123456789abcdef01234567",
+    "branch": "feature/m4-fault-proxy",
+    "dirty": false,
+    "source": "git"
+  },
+  "config": {
+    "runsPerScenario": 3,
+    "timeScale": 4,
+    "lanes": 2,
+    "baseSeed": 42,
+    "ucp": {
+      "connectTimeoutMs": 500,
+      "requestTimeoutMs": 1250,
+      "completeTimeoutMs": 2500,
+      "maxRetries": 3,
+      "backoffInitialMs": 50,
+      "backoffCapMs": 500,
+      "breakerThreshold": 5,
+      "breakerOpenForMs": 7500
+    },
+    "orchestrator": {
+      "leaseMs": 10000,
+      "completeTimeoutMs": 2500,
+      "resendQuietPeriodMs": 5000,
+      "reconcileDeadlineMs": 15000,
+      "maxCompleteResends": 2,
+      "pollInitialMs": 62,
+      "pollMaxMs": 500,
+      "pollJitter": 0.2
+    },
+    "recovery": {
+      "periodMs": 1250,
+      "limit": 50,
+      "maxStepsPerIntent": 500
+    },
+    "merchant": {
+      "ucpVersion": "2026-08-25",
+      "module": "dev.ucplab:merchant (in process, same commit)"
+    },
+    "runtime": ["Java 21.0.5 (Test)", "TestOS 1.0 x86_64"]
+  },
+  "method": ["Scripted, orchestrator-direct (13.1 M4 note): each run calls Orchestrator.propose with the scenario's fixed basket; an automatic approver decides through the approval service; the recovery worker drives the intent. There is no model, so model calls, tokens, cost and traces read n/a: no agent until M5.", "Real time throughout, every duration divided by the time scale k = 4 (13.1); approval lifetime and sign-in age are not scaled.", "Each run gets a fresh database, gateway, circuit breakers, worker id and user, and the merchant is reset before it; runs in one lane are sequential, lanes share nothing.", "Policy usage is a harness stub with no earlier spend or proposals: every run has a user of its own, so there is nothing to count. A real PolicyUsage is out of scope for M4 (it belongs with agent-service in M6).", "Invariants are checked on ground truth the agent does not control: O (/_lab/orders), G (the merchant's own GET of each order's session), L (the fault proxy's log in front of the merchant, including Idempotency-Key and a keyed body hash) and A (the approver's own decisions). An aborted run fails every check.", "Terminal states, the expected outcome and reconciliation times come from the agent's stored state (D), which is what they describe; time to terminal is the harness's own observation.", "I1 (at most one order per run, and each order's session is completed with that order): O (/_lab/orders) and G (the merchant's GET of each order's session); D is not read.", "I2 (every order matches the snapshot the user approved for its key: merchant, session, lines, currency, and an amount not above the approved maximum): O, G (lines and currency of each order's session), L (which key produced the order, and when it was first sent) and A (the approved snapshot); D is not read.", "I3 (every complete follows an unexpired approval of the same session by the owner, matched by revision, with no decline in between): L (every complete, its key and arrival) and A (the decisions); D only for the stored approval row's status and decided_by, which I3 is about.", "I4 (after the first complete, no create for the intent and no request to another session, and the stored session id is the completed one): L (every request after the intent's first complete); D only for the final stored session_id, which I4 is about.", "I5 (every intent is terminal with no cancel owed, and no state outlasted its 7.6 bound): D for the end state and the time in each state (I5 is about the agent's state), L and the harness's own terminal observation for the last complete stretch.", "I7 (one key and one byte-identical body per approval, a new key for each new approval): L (keys and bodyHmac of every complete) and A (the approval in force); D only as a cross-check that L's body hash is the hash of the agent's frozen body."],
+  "scenarios": [
+    {
+      "id": "S0",
+      "title": "no fault",
+      "fault": "none",
+      "expected": ["COMPLETED"],
+      "requiredInvariants": ["I1", "I2", "I3"],
+      "alsoChecked": ["I4", "I5", "I7"],
+      "runs": 3,
+      "aborted": 0,
+      "terminal": {
+        "COMPLETED": 3,
+        "REJECTED": 0,
+        "FAILED_NOT_CHARGED": 0,
+        "ESCALATED": 0
+      },
+      "expectedOutcome": {
+        "k": 3,
+        "n": 3,
+        "rate": 1.0,
+        "wilson95": [0.4385, 1.0]
+      },
+      "violations": {
+        "I1": 1,
+        "I2": 0,
+        "I3": 0,
+        "I4": 0,
+        "I5": 0,
+        "I7": 0
+      },
+      "violationUpperBound95": {
+        "method": "wilson",
+        "value": 0.7923
+      },
+      "timeToTerminalMs": {
+        "p50": 120,
+        "p95": 140,
+        "max": 140
+      },
+      "reconciliation": {
+        "runs": 1,
+        "timeToResolveMs": {
+          "p50": 60,
+          "p95": 60
+        }
+      },
+      "modelCalls": null,
+      "tokens": null,
+      "costPerCompletedPurchase": null,
+      "traces": null,
+      "deferred": "n/a: no agent until M5",
+      "failures": [
+        {
+          "run": 2,
+          "seed": 44,
+          "lane": 0,
+          "kind": "violation",
+          "invariant": "I1",
+          "detail": "the merchant holds 2 orders for the run: [ord_1 on cs_1, ord_2 on cs_1]",
+          "evidence": "evidence/S0/run-2"
+        }
+      ]
+    },
+    {
+      "id": "S4",
+      "title": "the same proposal submitted twice",
+      "fault": "none; propose twice with the same basket (sequential in even runs, concurrent in odd runs)",
+      "expected": ["COMPLETED"],
+      "requiredInvariants": ["I1"],
+      "alsoChecked": ["I2", "I3", "I4", "I5", "I7"],
+      "runs": 3,
+      "aborted": 1,
+      "terminal": {
+        "COMPLETED": 2,
+        "REJECTED": 0,
+        "FAILED_NOT_CHARGED": 0,
+        "ESCALATED": 0
+      },
+      "expectedOutcome": {
+        "k": 2,
+        "n": 3,
+        "rate": 0.6667,
+        "wilson95": [0.2077, 0.9385]
+      },
+      "violations": {
+        "I1": 1,
+        "I2": 1,
+        "I3": 1,
+        "I4": 1,
+        "I5": 1,
+        "I7": 1
+      },
+      "violationUpperBound95": {
+        "method": "wilson",
+        "value": 0.7923
+      },
+      "timeToTerminalMs": {
+        "p50": 110,
+        "p95": 130,
+        "max": 130
+      },
+      "reconciliation": {
+        "runs": 0,
+        "timeToResolveMs": {
+          "p50": null,
+          "p95": null
+        }
+      },
+      "modelCalls": null,
+      "tokens": null,
+      "costPerCompletedPurchase": null,
+      "traces": null,
+      "deferred": "n/a: no agent until M5",
+      "failures": [
+        {
+          "run": 1,
+          "seed": 20043,
+          "lane": 1,
+          "kind": "aborted",
+          "detail": "no terminal state within the time limit PT23.4375S",
+          "evidence": "evidence/S4/run-1"
+        }
+      ]
+    },
+    {
+      "id": "S11",
+      "title": "merchant host not on the allowlist",
+      "fault": "none; the proposal names a merchant missing from the registry",
+      "expected": ["REJECTED"],
+      "requiredInvariants": ["I3"],
+      "alsoChecked": ["I1", "I2", "I4", "I5", "I7"],
+      "runs": 3,
+      "aborted": 0,
+      "terminal": {
+        "COMPLETED": 1,
+        "REJECTED": 2,
+        "FAILED_NOT_CHARGED": 0,
+        "ESCALATED": 0
+      },
+      "expectedOutcome": {
+        "k": 2,
+        "n": 3,
+        "rate": 0.6667,
+        "wilson95": [0.2077, 0.9385]
+      },
+      "violations": {
+        "I1": 0,
+        "I2": 0,
+        "I3": 0,
+        "I4": 0,
+        "I5": 0,
+        "I7": 0
+      },
+      "violationUpperBound95": {
+        "method": "rule_of_three",
+        "value": 1.0
+      },
+      "timeToTerminalMs": {
+        "p50": 25,
+        "p95": 90,
+        "max": 90
+      },
+      "reconciliation": {
+        "runs": 0,
+        "timeToResolveMs": {
+          "p50": null,
+          "p95": null
+        }
+      },
+      "modelCalls": null,
+      "tokens": null,
+      "costPerCompletedPurchase": null,
+      "traces": null,
+      "deferred": "n/a: no agent until M5",
+      "failures": [
+        {
+          "run": 1,
+          "seed": 220043,
+          "lane": 1,
+          "kind": "unexpected",
+          "detail": "ended COMPLETED with 1 intent(s); expected [REJECTED]",
+          "evidence": "evidence/S11/run-1"
+        }
+      ]
+    }
+  ],
+  "invariants": [
+    {
+      "id": "I1",
+      "scenarios": 3,
+      "runs": 9,
+      "violations": 2,
+      "upperBound95": {
+        "method": "wilson",
+        "value": 0.5474
+      }
+    },
+    {
+      "id": "I2",
+      "scenarios": 3,
+      "runs": 9,
+      "violations": 1,
+      "upperBound95": {
+        "method": "wilson",
+        "value": 0.435
+      }
+    },
+    {
+      "id": "I3",
+      "scenarios": 3,
+      "runs": 9,
+      "violations": 1,
+      "upperBound95": {
+        "method": "wilson",
+        "value": 0.435
+      }
+    },
+    {
+      "id": "I4",
+      "scenarios": 3,
+      "runs": 9,
+      "violations": 1,
+      "upperBound95": {
+        "method": "wilson",
+        "value": 0.435
+      }
+    },
+    {
+      "id": "I5",
+      "scenarios": 3,
+      "runs": 9,
+      "violations": 1,
+      "upperBound95": {
+        "method": "wilson",
+        "value": 0.435
+      }
+    },
+    {
+      "id": "I7",
+      "scenarios": 3,
+      "runs": 9,
+      "violations": 1,
+      "upperBound95": {
+        "method": "wilson",
+        "value": 0.435
+      }
+    }
+  ],
+  "exit": {
+    "code": 1,
+    "violations": 2,
+    "unexpectedOutcomes": 1,
+    "aborted": 1
+  }
+}
