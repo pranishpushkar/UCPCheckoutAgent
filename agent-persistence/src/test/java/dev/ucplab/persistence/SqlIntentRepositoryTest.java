@@ -68,6 +68,7 @@ class SqlIntentRepositoryTest extends IntentRepositoryContract {
     static final class NeedsClaimsAndFencing implements ExecutionCondition {
 
         static final Set<String> SKIPPED = Set.of(
+            "claimRecoverable_renewsTheCallersOwnLiveLease",
             "update_writesFieldsAndBumpsVersion_whenVersionAndLeaseMatch",
             "update_throwsStaleVersion_whenVersionIsOld",
             "update_throwsLeaseLost_whenAnotherWorkerHoldsTheLease",

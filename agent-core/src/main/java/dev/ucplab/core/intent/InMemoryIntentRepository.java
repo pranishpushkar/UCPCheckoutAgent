@@ -257,7 +257,8 @@ public final class InMemoryIntentRepository implements IntentRepository {
             Instant until = now.plus(lease);
             List<PurchaseIntent> candidates = intents.values().stream()
                     .filter(i -> RECOVERABLE.contains(i.state()) || i.cancelPending())
-                    .filter(i -> i.leaseUntil().map(t -> t.isBefore(now)).orElse(true))
+                    .filter(i -> i.leaseOwner().equals(Optional.of(owner))
+                            || i.leaseUntil().map(t -> t.isBefore(now)).orElse(true))
                     .sorted(Comparator.comparing(PurchaseIntent::createdAt).thenComparing(i -> i.id().value()))
                     .limit(limit)
                     .toList();

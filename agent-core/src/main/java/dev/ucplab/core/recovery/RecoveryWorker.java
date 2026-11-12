@@ -14,7 +14,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
@@ -53,6 +55,8 @@ public final class RecoveryWorker {
     private final String workerId;
     /** Intents this worker is driving now, so a later pass cannot start a second driver for one of them. */
     private final Set<IntentId> inFlight = ConcurrentHashMap.newKeySet();
+    /** Intents whose next step is not due yet: a wait too long to sleep through. Per process; a restart starts clean. */
+    private final Map<IntentId, Instant> notBefore = new ConcurrentHashMap<>();
 
     /**
      * @param orchestrator must use {@code workerId} as its lease owner, so the lease this worker claims is the one the
@@ -98,10 +102,19 @@ public final class RecoveryWorker {
                 picked.add(id);
             }
         }
+        notBefore.keySet().retainAll(picked);
+        Instant now = clock.instant();
         List<IntentId> started = new ArrayList<>();
         for (int i = 0; i < picked.size(); i++) {
             IntentId id = picked.get(i);
             boolean claimedHere = i < claimedCount;
+            Instant notYet = notBefore.get(id);
+            if (notYet != null) {
+                if (now.isBefore(notYet)) {
+                    continue;
+                }
+                notBefore.remove(id, notYet);
+            }
             if (!inFlight.add(id)) {
                 continue;
             }
@@ -137,7 +150,7 @@ public final class RecoveryWorker {
                 if (result.idle()) {
                     return;
                 }
-                if (!waitUntil(result.nextAttemptAt())) {
+                if (!waitUntil(id, result.nextAttemptAt())) {
                     return;
                 }
             } catch (LeaseLostException | StaleVersionException e) {
@@ -155,14 +168,21 @@ public final class RecoveryWorker {
                 id, config.maxStepsPerIntent());
     }
 
-    /** Sleeps until {@code next} when it is in the future. False when the worker was interrupted. */
-    private boolean waitUntil(java.util.Optional<Instant> next) {
+    /**
+     * Sleeps until {@code next} when it is in the future and no longer than half the lease. False when the driver
+     * should stop for this pass: the wait is longer than that (the intent is parked until due), or it was interrupted.
+     */
+    private boolean waitUntil(IntentId id, Optional<Instant> next) {
         if (next.isEmpty()) {
             return true;
         }
         Duration wait = Duration.between(clock.instant(), next.get());
         if (wait.isNegative() || wait.isZero()) {
             return true;
+        }
+        if (wait.compareTo(config.lease().dividedBy(2)) > 0) {
+            notBefore.put(id, next.get());
+            return false;
         }
         try {
             sleeper.sleep(wait);

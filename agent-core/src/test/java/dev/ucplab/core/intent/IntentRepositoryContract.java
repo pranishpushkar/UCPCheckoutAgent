@@ -544,6 +544,19 @@ public abstract class IntentRepositoryContract {
         assertThat(second.get(0).leaseOwner()).contains(W2);
     }
 
+    // Covers: 7.6 (a worker takes back its own live lease, which renews it; another worker still cannot)
+    @Test
+    void claimRecoverable_renewsTheCallersOwnLiveLease() {
+        PurchaseIntent claimed = insertAndClaim("i1", ALICE, "d1", W1);
+        clock.advance(Duration.ofSeconds(20));
+
+        List<PurchaseIntent> again = repo.claimRecoverable(W1, LEASE, 10);
+
+        assertThat(again).extracting(PurchaseIntent::id).containsExactly(claimed.id());
+        assertThat(again.get(0).leaseUntil()).contains(T0.plusSeconds(20).plus(LEASE));
+        assertThat(repo.claimRecoverable(W2, LEASE, 10)).isEmpty();
+    }
+
     // Covers: 7.6 (the limit caps a claim, oldest first)
     @Test
     void claimRecoverable_respectsLimit_oldestFirst() {

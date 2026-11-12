@@ -384,6 +384,7 @@ Lease rules \[CONTRACT\]:
 - **Worker id.** The lease owner id is unique per process start and comes from `IdGenerator`; it is never a configured, stable name. With a stable name, a paused process and its restarted successor would share an owner and fencing could not tell them apart.
 - **Fencing.** Every write inside `advance` (attempt row, event, state change) is conditional on both `version` and `lease_owner`. Settling attempts (recording what reconciliation or a same-key answer established) is a fenced write too: `resolveAttempts` takes `expectedVersion` and `leaseOwner` (Appendix B). A worker that paused past its lease, for example in a long GC pause, fails its next write with `StaleVersionException` or `LeaseLostException` and abandons the step.
 - **Why overlap is still safe.** The paused worker's merchant call may already have happened. Duplicate GETs are reads, and a duplicate `complete` resend reuses the same key and byte-identical body (I7), so no second order can result. Fencing makes this hold by construction rather than by timing.
+- **Long waits.** `RecoveryWorker` sleeps for a wait of at most half the lease. A longer wait (a poll delayed by `Retry-After`, up to the deadline) is not slept: the worker parks the intent until it is due, claims it again on each pass (renewing the lease, since a worker may claim an intent whose lease it already holds) and skips it, then advances it at the due time.
 - **Deadline.** The reconciliation deadline comes from the persisted `uncertain_since`, so a change of worker never resets it (7.5).
 
 ### 7.7 De-duplication of proposals
@@ -1319,7 +1320,7 @@ public interface IntentRepository {
   void appendEvent(IntentId id, IntentEvent event);
   void recordAttempt(MerchantAttempt attempt, PurchaseIntent intent, long expectedVersion, String leaseOwner); // one transaction (7.3 step 3)
   void resolveAttempt(AttemptId id, AttemptStatus status, Optional<Integer> httpStatus, Optional<String> responseJson);
-  /** QUOTING, APPROVED, COMPLETING and RECONCILING intents, and any intent with cancel_pending set, whose lease is empty or expired (7.6). */
+  /** QUOTING, APPROVED, COMPLETING and RECONCILING intents, and any intent with cancel_pending set, whose lease is empty, expired or already held by owner (7.6; the last lets a worker renew a lease it parked an intent under). */
   List<PurchaseIntent> claimRecoverable(String owner, Duration lease, int limit);
   /** Settles attempts under the same fencing as update (7.6): lease owner, then version. Writes only the attempts; the intent's version is unchanged. All or none. */
   void resolveAttempts(IntentId intentId, List<AttemptId> ids, AttemptStatus status, Optional<Integer> httpStatus,
