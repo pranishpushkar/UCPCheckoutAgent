@@ -1098,7 +1098,7 @@ In `prod` these routes do not exist (404).
 
 ### 23.5 Errors and limits
 
-Errors use one shape: `{code, message, request_id}`. Codes: `unauthenticated` (401), `reauth_required` (401), `csrf_failed` (403), `not_found` (404), `approval_not_pending` (409), `intent_busy` (409, with Retry-After set to the remaining lease time; returned when another worker still holds the intent's lease, for example for up to 30 s after a crash), `validation_failed` (422), `rate_limited` (429, with `Retry-After`), `internal` (500, no internals in the message). Core reports `intent_busy` as `ApprovalDecision.Busy(retryAfter)`; the REST layer maps it to 409 `intent_busy` with `Retry-After` (M6). `POST /api/runs` is limited per user by P5 and returns 429 when exceeded.
+Errors use one shape: `{code, message, request_id}`. Codes: `unauthenticated` (401), `reauth_required` (401), `csrf_failed` (403), `not_found` (404), `approval_not_pending` (409), `intent_busy` (409, with Retry-After set to the remaining lease time; returned when another worker still holds the intent's lease, for example for up to 30 s after a crash), `validation_failed` (422), `rate_limited` (429, with `Retry-After`), `internal` (500, no internals in the message). Core reports `intent_busy` as `ApprovalDecision.Busy(retryAfter)`; the REST layer maps it to 409 `intent_busy` with `Retry-After` (M6). A `LeaseLostException` from a fenced write inside `advance` or `decide` also maps to 409 `intent_busy` (the caller retries after the lease), and a `StaleVersionException` inside `decide` maps to `approval_not_pending` (M6). `POST /api/runs` is limited per user by P5 and returns 429 when exceeded.
 
 ## 24. Lab console (UI)
 
