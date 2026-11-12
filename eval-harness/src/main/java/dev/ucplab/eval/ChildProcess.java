@@ -19,8 +19,12 @@ import java.util.concurrent.TimeUnit;
  */
 final class ChildProcess implements AutoCloseable {
 
-    /** At most this many child JVMs at once across all lanes (m4-plan section 8). */
-    static final int MAX_CHILDREN = 8;
+    /**
+     * At most this many child JVMs at once across all lanes (m4-plan section 8 said 8). 16, one per lane of eval-full:
+     * a child peaked at about 91 MB RSS (S9 and S28, 20 runs each at k = 1 and k = 4), so 16 are about 1.5 GB, and the
+     * simulated eval-full is about 34 min at 16 against about 57 min at 8, past its 40 min budget (m4-progress5.md).
+     */
+    static final int MAX_CHILDREN = 16;
     /** SIGKILL is signal 9; a JVM killed by a signal exits with 128 plus the signal. */
     static final int SIGKILL_EXIT = 137;
 
