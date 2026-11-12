@@ -40,6 +40,11 @@ public final class Scenarios {
     /** The create endpoint and the complete endpoint, as the proxy matches them. */
     static final String CREATE = "/ucp/v1/checkout-sessions";
     static final String COMPLETE = "/ucp/v1/checkout-sessions/*/complete";
+    /** Every UCP endpoint the agent calls after discovery. */
+    static final String UCP_ALL = "/ucp/v1/**";
+    /** S8's rule set, as {@code POST /_proxy/rules} takes it: 503 for every method under {@link #UCP_ALL}. */
+    static final String S8_OUTAGE_RULES = "{\"seed\":8,\"rules\":[{\"id\":\"outage-503\",\"match\":{\"pathPattern\":\""
+            + UCP_ALL + "\"},\"action\":{\"type\":\"fail_before_forward\",\"status\":503}}]}";
 
     /**
      * S1 as reworded in 13.2 (D4): a listening server cannot refuse one connection, so the proxy closes it before
@@ -80,19 +85,19 @@ public final class Scenarios {
             + " approved", "POST /_lab/price item_123 2500 -> 2600 before the first decision; approve every quote",
             Set.of(IntentState.COMPLETED), List.of("I2", "I3"), (t, run) -> RuleSet.empty(),
             AutoApprover.Policy.APPROVE_ALL, Scenario.Driver.PROPOSE_ONCE, SHOP, TWO_SHIRTS, PAY_OK,
-            m -> m.setPrice("item_123", S5_NEW_PRICE));
+            (m, t) -> m.setPrice("item_123", S5_NEW_PRICE));
 
     public static final Scenario S5B = new Scenario("S5b", "price changes between quote and complete; the re-quote is"
             + " declined", "POST /_lab/price item_123 2500 -> 2600 before the first decision; decline the re-quote",
             Set.of(IntentState.REJECTED), List.of("I2", "I3"), (t, run) -> RuleSet.empty(),
             AutoApprover.Policy.APPROVE_FIRST_THEN_DECLINE, Scenario.Driver.PROPOSE_ONCE, SHOP, TWO_SHIRTS, PAY_OK,
-            m -> m.setPrice("item_123", S5_NEW_PRICE));
+            (m, t) -> m.setPrice("item_123", S5_NEW_PRICE));
 
     public static final Scenario S6 = new Scenario("S6", "item sells out after the quote",
             "POST /_lab/stock item_123 0 after the quote, before the first decision",
             Set.of(IntentState.FAILED_NOT_CHARGED), List.of("I1"), (t, run) -> RuleSet.empty(),
             AutoApprover.Policy.APPROVE_ALL, Scenario.Driver.PROPOSE_ONCE, SHOP, TWO_SHIRTS, PAY_OK,
-            m -> m.setStock("item_123", 0));
+            (m, t) -> m.setStock("item_123", 0));
 
     /** S7 (13.2: tok_decline). The report names no token, not even a mock one (I8), so the text describes the card. */
     public static final Scenario S7 = new Scenario("S7", "payment declined",
@@ -100,6 +105,20 @@ public final class Scenarios {
             Set.of(IntentState.FAILED_NOT_CHARGED), List.of("I1"),
             (t, run) -> RuleSet.empty(), AutoApprover.Policy.APPROVE_ALL, Scenario.Driver.PROPOSE_ONCE, SHOP,
             TWO_SHIRTS, PAY_DECLINE);
+
+    /**
+     * S8: the outage begins after approval, so the quote is untouched and the first complete is answered 503 (the
+     * gateway makes that Uncertain, 8.2). Every UCP call fails for 20 s / k; discovery is outside the pattern and is
+     * cached anyway. The window is opened and closed through the proxy's admin API, since a rule has no time window
+     * (§12). After it closes a read shows {@code ready_for_complete}, and the quiet period has passed, so the complete
+     * is resent under the same key: COMPLETED, or ESCALATED if the deadline passed first.
+     */
+    public static final Scenario S8 = new Scenario("S8", "merchant returns 503 on every call for 20 s, then recovers",
+            "fail_before_forward {status 503} on every method of " + UCP_ALL + ", installed after approval and"
+                    + " cleared 20 s / k later through the admin API",
+            Set.of(IntentState.COMPLETED, IntentState.ESCALATED), List.of("I5"), (t, run) -> RuleSet.empty(),
+            AutoApprover.Policy.APPROVE_ALL, Scenario.Driver.PROPOSE_ONCE, SHOP, TWO_SHIRTS, PAY_OK,
+            Scenario.MerchantEvent.NONE, t -> Optional.of(new Scenario.AdminRules(S8_OUTAGE_RULES, t.s8Outage())));
 
     public static final Scenario S11 = new Scenario("S11", "merchant host not on the allowlist",
             "none; the proposal names a merchant missing from the registry", Set.of(IntentState.REJECTED),
@@ -115,9 +134,21 @@ public final class Scenarios {
                             : Action.DuplicateRequest.Mode.SEQUENTIAL)).withTimes(1)),
             AutoApprover.Policy.APPROVE_ALL, Scenario.Driver.PROPOSE_ONCE, SHOP, TWO_SHIRTS, PAY_OK);
 
+    /**
+     * S14 (13.2 as reworded, D4; no S14w, Decision 3): {@link RunScript#RACERS} workers call {@code advance} together
+     * on the APPROVED intent. Payment takes a quarter of the complete timeout, so the winner's complete is still in
+     * flight while the others try to claim the intent.
+     */
+    public static final Scenario S14 = new Scenario("S14", "24 workers call advance concurrently on one APPROVED intent",
+            "none; " + RunScript.RACERS + " workers, each with its own orchestrator, worker id and connection, call"
+                    + " advance at once; payment latency complete timeout / 4",
+            Set.of(IntentState.COMPLETED), List.of("I1"), (t, run) -> RuleSet.empty(),
+            AutoApprover.Policy.APPROVE_ALL, Scenario.Driver.ADVANCE_RACE, SHOP, TWO_SHIRTS, PAY_OK,
+            (m, t) -> m.setPaymentLatencyMs(t.completeTimeout().dividedBy(4).toMillis()));
+
     /** Every row the harness can run, in catalogue order. */
     public static List<Scenario> all() {
-        return List.of(S0, S1, S2, S3, S4, S5A, S5B, S6, S7, S11, S13);
+        return List.of(S0, S1, S2, S3, S4, S5A, S5B, S6, S7, S8, S11, S13, S14);
     }
 
     private static RuleSet rules(int run, Rule... rules) {

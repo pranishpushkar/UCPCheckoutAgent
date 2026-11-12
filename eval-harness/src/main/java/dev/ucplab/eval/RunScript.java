@@ -6,8 +6,12 @@ import dev.ucplab.core.identity.UserId;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.ProposalResult;
 import dev.ucplab.core.intent.PurchaseIntent;
+import dev.ucplab.core.intent.StepResult;
 import dev.ucplab.faultproxy.LogEntry;
 import java.io.IOException;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -23,6 +27,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -37,20 +42,33 @@ public final class RunScript {
 
     /** How often the harness looks at the database, the approver channel and the proxy log. */
     static final Duration POLL = Duration.ofMillis(20);
+    /** S14: how many workers race (13.2). */
+    public static final int RACERS = 24;
+
+    /** What one S14 racer's {@code advance} did: its step, or the exception it threw, and how long it took. */
+    record RaceOutcome(String workerId, Optional<StepResult> step, Optional<String> error, Duration took) {
+    }
 
     private final Lane lane;
     private final TimeScale scale;
     private final Consumer<String> tokenSeen;
+    private final Consumer<List<RaceOutcome>> raceSeen;
 
     public RunScript(Lane lane, TimeScale scale) {
-        this(lane, scale, t -> { });
+        this(lane, scale, t -> { }, r -> { });
     }
 
     /** @param tokenSeen given every approval token the approver uses (the redaction test only) */
     RunScript(Lane lane, TimeScale scale, Consumer<String> tokenSeen) {
+        this(lane, scale, tokenSeen, r -> { });
+    }
+
+    /** @param raceSeen given the outcome of every racer of an S14 run (its test only) */
+    RunScript(Lane lane, TimeScale scale, Consumer<String> tokenSeen, Consumer<List<RaceOutcome>> raceSeen) {
         this.lane = Objects.requireNonNull(lane, "lane");
         this.scale = Objects.requireNonNull(scale, "scale");
         this.tokenSeen = Objects.requireNonNull(tokenSeen, "tokenSeen");
+        this.raceSeen = Objects.requireNonNull(raceSeen, "raceSeen");
     }
 
     public TimeScale scale() {
@@ -84,23 +102,48 @@ public final class RunScript {
         Optional<String> aborted = Optional.empty();
         Optional<Instant> terminalSeenAt = Optional.empty();
         List<RunEvidence.Persisted> persisted = new ArrayList<>();
-        try (AgentStack stack = new AgentStack(lane, lane.newDatabase(name), scale, seed,
-                new SequentialIdGenerator(name), scenario.paymentToken())) {
+        boolean race = scenario.driver() == Scenario.Driver.ADVANCE_RACE;
+        Optional<Scenario.AdminRules> window = scenario.afterApproval().build(scale);
+        Optional<Thread> clearer = Optional.empty();
+        AtomicReference<String> windowFailed = new AtomicReference<>();
+        List<AgentStack.Racer> racers = new ArrayList<>();
+        try (AgentStack stack = new AgentStack(lane.agentFacingUrl(), lane.newDatabase(name), scale, seed,
+                new SequentialIdGenerator(name), scenario.paymentToken(),
+                race ? AgentStack.DECISION_ONLY : scale.orchestrator().lease())) {
             Supplier<AuthContext> auth = () -> new AuthContext(user, user.value() + "@eval.example",
                     stack.clock.instant(), "eval-session-" + name);
             AutoApprover approver = new AutoApprover(stack.approvalService, scenario.approver(), auth, stack.clock,
-                    tokenSeen, () -> scenario.beforeFirstDecision().apply(lane.merchant()));
+                    tokenSeen, () -> scenario.beforeFirstDecision().apply(lane.merchant(), scale));
             try {
                 proposed.addAll(propose(stack, scenario, run, auth));
                 Set<IntentId> ids = new LinkedHashSet<>(proposed);
-                stack.loop.start();
+                if (race) {
+                    for (int i = 0; i < RACERS; i++) {
+                        racers.add(stack.racer(new SequentialIdGenerator(name + "-w" + i), i));
+                    }
+                } else {
+                    stack.loop.start();
+                }
                 Instant deadline = Instant.now().plus(timeLimit());
                 while (true) {
                     for (IntentId id : ids) {
                         if (approver.tick(id)) {
-                            // The first complete is not held back by the loop period (m4-plan section 2, step 5).
-                            stack.worker.runOnce();
+                            if (window.isPresent() && clearer.isEmpty()) {
+                                clearer = Optional.of(openWindow(window.get(), windowFailed));
+                            }
+                            if (race && !racers.isEmpty()) {
+                                aborted = race(stack, id, racers);
+                                racers.forEach(AgentStack.Racer::close);
+                                racers.clear();
+                                stack.loop.start();
+                            } else {
+                                // The first complete is not held back by the loop period (m4-plan section 2, step 5).
+                                stack.worker.runOnce();
+                            }
                         }
+                    }
+                    if (aborted.isPresent()) {
+                        break;
                     }
                     if (ids.stream().allMatch(id -> done(stack, id))) {
                         terminalSeenAt = Optional.of(Instant.now());
@@ -113,6 +156,12 @@ public final class RunScript {
                     Thread.sleep(POLL);
                 }
                 stack.loop.close();
+                if (clearer.isPresent() && !closeWindow(clearer.get(), window.get())) {
+                    aborted = aborted.or(() -> Optional.of("the fault window was not cleared"));
+                }
+                if (windowFailed.get() != null) {
+                    aborted = aborted.or(() -> Optional.of(windowFailed.get()));
+                }
                 if (!awaitSettled(startSeq)) {
                     aborted = aborted.or(() -> Optional.of("the proxy did not settle within " + settleLimit()));
                 }
@@ -125,6 +174,9 @@ public final class RunScript {
                 aborted = Optional.of("interrupted");
             } catch (RuntimeException e) {
                 aborted = Optional.of("harness error: " + e.getClass().getSimpleName());
+            } finally {
+                racers.forEach(AgentStack.Racer::close);
+                clearer.ifPresent(Thread::interrupt);
             }
             decisions = approver.log();
         } catch (IOException e) {
@@ -154,7 +206,7 @@ public final class RunScript {
                                    Supplier<AuthContext> auth) throws InterruptedException {
         String rationale = "scripted run: " + scenario.id();
         return switch (scenario.driver()) {
-            case PROPOSE_ONCE -> List.of(stack.orchestrator.propose(auth.get(), scenario.target(), scenario.basket(),
+            case PROPOSE_ONCE, ADVANCE_RACE -> List.of(stack.orchestrator.propose(auth.get(), scenario.target(), scenario.basket(),
                     rationale).intentId());
             case PROPOSE_TWICE -> {
                 if (run % 2 == 0) {
@@ -193,6 +245,108 @@ public final class RunScript {
                 }
             }
             return ids;
+        }
+    }
+
+    /**
+     * S14: waits until the decision's lease has run out (it holds the intent only for its own write), then releases
+     * every racer at the same instant and waits for all of them. Returns why the run must be aborted, if a racer threw.
+     */
+    private Optional<String> race(AgentStack stack, IntentId id, List<AgentStack.Racer> racers)
+            throws InterruptedException {
+        Instant limit = Instant.now().plus(scale.lease());
+        while (stack.intents.findForSystem(id).flatMap(PurchaseIntent::leaseUntil)
+                .filter(until -> !Instant.now().isAfter(until)).isPresent()) {
+            if (Instant.now().isAfter(limit)) {
+                return Optional.of("S14: the decision's lease did not run out within " + scale.lease());
+            }
+            Thread.sleep(1);
+        }
+        CountDownLatch ready = new CountDownLatch(racers.size());
+        CountDownLatch go = new CountDownLatch(1);
+        List<Future<RaceOutcome>> calls = new ArrayList<>();
+        // Platform threads, one per racer, as separate worker processes would be.
+        try (ExecutorService pool = Executors.newFixedThreadPool(racers.size())) {
+            for (AgentStack.Racer r : racers) {
+                calls.add(pool.submit(() -> {
+                    ready.countDown();
+                    go.await();
+                    long t0 = System.nanoTime();
+                    try {
+                        StepResult step = r.orchestrator().advance(id);
+                        return new RaceOutcome(r.workerId(), Optional.of(step), Optional.empty(),
+                                Duration.ofNanos(System.nanoTime() - t0));
+                    } catch (RuntimeException e) {
+                        return new RaceOutcome(r.workerId(), Optional.empty(),
+                                Optional.of(e.getClass().getSimpleName()), Duration.ofNanos(System.nanoTime() - t0));
+                    }
+                }));
+            }
+            ready.await();
+            go.countDown();
+            List<RaceOutcome> outcomes = new ArrayList<>();
+            for (Future<RaceOutcome> call : calls) {
+                try {
+                    outcomes.add(call.get());
+                } catch (ExecutionException e) {
+                    throw new IllegalStateException(e.getCause());
+                }
+            }
+            raceSeen.accept(List.copyOf(outcomes));
+            return outcomes.stream().filter(o -> o.error().isPresent()).findFirst()
+                    .map(o -> "S14 racer " + o.workerId() + " threw " + o.error().get());
+        }
+    }
+
+    /**
+     * S8: installs the window's rules through the proxy's admin API, and starts the thread that clears them through it
+     * when the window ends. The wait is the fault's own length, not a guess at how long something takes.
+     */
+    private Thread openWindow(Scenario.AdminRules window, AtomicReference<String> failed) {
+        admin("POST", window.rulesJson());
+        return Thread.ofVirtual().name("eval-window-L" + lane.index()).start(() -> {
+            try {
+                Thread.sleep(window.clearAfter());
+            } catch (InterruptedException e) {
+                // Cleared below all the same.
+            }
+            try {
+                admin("DELETE", "");
+            } catch (RuntimeException e) {
+                failed.set("could not clear the fault window: " + e.getMessage());
+            }
+        });
+    }
+
+    /** Waits for the window to end (or ends it now, if the run is over first). True once it was cleared. */
+    private boolean closeWindow(Thread clearer, Scenario.AdminRules window) throws InterruptedException {
+        if (!clearer.join(window.clearAfter().plus(settleLimit()))) {
+            clearer.interrupt();
+            return clearer.join(settleLimit());
+        }
+        return true;
+    }
+
+    /** One call to the proxy's admin API ({@code /_proxy/rules}); anything but 204 is an error. */
+    private void admin(String method, String body) {
+        try (HttpClient http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1)
+                .connectTimeout(Duration.ofSeconds(2)).build()) {
+            HttpRequest.Builder r = HttpRequest.newBuilder(lane.proxy().baseUrl().resolve("/_proxy/rules"))
+                    .timeout(Duration.ofSeconds(5));
+            if (method.equals("POST")) {
+                r.header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(body));
+            } else {
+                r.DELETE();
+            }
+            int status = http.send(r.build(), HttpResponse.BodyHandlers.discarding()).statusCode();
+            if (status != 204) {
+                throw new IllegalStateException(method + " /_proxy/rules answered " + status);
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException(method + " /_proxy/rules failed: " + e.getClass().getSimpleName(), e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(method + " /_proxy/rules interrupted", e);
         }
     }
 
