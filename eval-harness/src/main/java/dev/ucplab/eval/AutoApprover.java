@@ -51,23 +51,28 @@ public final class AutoApprover {
     private final List<Decision> log = new ArrayList<>();
     private final Set<String> decided = new HashSet<>();
     private final Consumer<String> tokenSeen;
+    private final Runnable beforeFirstDecision;
+    private boolean first = true;
 
     /** @param auth a fresh sign-in of the intent's owner, called again for every read and every decision */
     public AutoApprover(DefaultApprovalService service, Policy policy, Supplier<AuthContext> auth, Clock clock) {
-        this(service, policy, auth, clock, t -> { });
+        this(service, policy, auth, clock, t -> { }, () -> { });
     }
 
     /**
      * @param tokenSeen given every approval token the approver uses; only the redaction test passes one, so it can
      *     search the written evidence for the real tokens
+     * @param beforeFirstDecision run once, when the first pending quote has been read and before it is decided
+     *     (the scenario's change at the merchant)
      */
     AutoApprover(DefaultApprovalService service, Policy policy, Supplier<AuthContext> auth, Clock clock,
-                 Consumer<String> tokenSeen) {
+                 Consumer<String> tokenSeen, Runnable beforeFirstDecision) {
         this.service = Objects.requireNonNull(service, "service");
         this.policy = Objects.requireNonNull(policy, "policy");
         this.auth = Objects.requireNonNull(auth, "auth");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.tokenSeen = Objects.requireNonNull(tokenSeen, "tokenSeen");
+        this.beforeFirstDecision = Objects.requireNonNull(beforeFirstDecision, "beforeFirstDecision");
     }
 
     /**
@@ -87,6 +92,10 @@ public final class AutoApprover {
             case DECLINE_ALL -> false;
             case APPROVE_FIRST_THEN_DECLINE -> seq == 1;
         };
+        if (first) {
+            first = false;
+            beforeFirstDecision.run();
+        }
         Instant at = clock.instant();
         tokenSeen.accept(p.token());
         ApprovalDecision outcome = service.decide(auth.get(), id, p.token(), approve);

@@ -23,6 +23,10 @@ public final class Scenarios {
     /** Every M4 run holds exactly this one basket, so every order in a run belongs to that run (m4-plan section 5). */
     public static final List<ProposedLine> TWO_SHIRTS = List.of(new ProposedLine("item_123", 2));
     public static final String PAY_OK = "tok_ok";
+    /** The mock card the merchant declines (A.2). */
+    public static final String PAY_DECLINE = "tok_decline";
+    /** S5: item_123's price after the change, up from 2500. */
+    public static final long S5_NEW_PRICE = 2600;
 
     private static final Pattern ID = Pattern.compile("S(\\d+)([ab]?)");
 
@@ -68,6 +72,35 @@ public final class Scenarios {
             Set.of(IntentState.COMPLETED), List.of("I1"), (t, run) -> RuleSet.empty(), AutoApprover.Policy.APPROVE_ALL,
             Scenario.Driver.PROPOSE_TWICE, SHOP, TWO_SHIRTS, PAY_OK);
 
+    /**
+     * S5 is reported as two rows (Decision 3). The price of item_123 goes from 2500 to 2600 between the quote and the
+     * first complete, so complete rev 0 is answered {@code price_changed}, the agent re-quotes and asks again.
+     */
+    public static final Scenario S5A = new Scenario("S5a", "price changes between quote and complete; the re-quote is"
+            + " approved", "POST /_lab/price item_123 2500 -> 2600 before the first decision; approve every quote",
+            Set.of(IntentState.COMPLETED), List.of("I2", "I3"), (t, run) -> RuleSet.empty(),
+            AutoApprover.Policy.APPROVE_ALL, Scenario.Driver.PROPOSE_ONCE, SHOP, TWO_SHIRTS, PAY_OK,
+            m -> m.setPrice("item_123", S5_NEW_PRICE));
+
+    public static final Scenario S5B = new Scenario("S5b", "price changes between quote and complete; the re-quote is"
+            + " declined", "POST /_lab/price item_123 2500 -> 2600 before the first decision; decline the re-quote",
+            Set.of(IntentState.REJECTED), List.of("I2", "I3"), (t, run) -> RuleSet.empty(),
+            AutoApprover.Policy.APPROVE_FIRST_THEN_DECLINE, Scenario.Driver.PROPOSE_ONCE, SHOP, TWO_SHIRTS, PAY_OK,
+            m -> m.setPrice("item_123", S5_NEW_PRICE));
+
+    public static final Scenario S6 = new Scenario("S6", "item sells out after the quote",
+            "POST /_lab/stock item_123 0 after the quote, before the first decision",
+            Set.of(IntentState.FAILED_NOT_CHARGED), List.of("I1"), (t, run) -> RuleSet.empty(),
+            AutoApprover.Policy.APPROVE_ALL, Scenario.Driver.PROPOSE_ONCE, SHOP, TWO_SHIRTS, PAY_OK,
+            m -> m.setStock("item_123", 0));
+
+    /** S7 (13.2: tok_decline). The report names no token, not even a mock one (I8), so the text describes the card. */
+    public static final Scenario S7 = new Scenario("S7", "payment declined",
+            "none; the agent pays with the mock card the merchant declines (A.2)",
+            Set.of(IntentState.FAILED_NOT_CHARGED), List.of("I1"),
+            (t, run) -> RuleSet.empty(), AutoApprover.Policy.APPROVE_ALL, Scenario.Driver.PROPOSE_ONCE, SHOP,
+            TWO_SHIRTS, PAY_DECLINE);
+
     public static final Scenario S11 = new Scenario("S11", "merchant host not on the allowlist",
             "none; the proposal names a merchant missing from the registry", Set.of(IntentState.REJECTED),
             List.of("I3"), (t, run) -> RuleSet.empty(), AutoApprover.Policy.APPROVE_ALL, Scenario.Driver.PROPOSE_ONCE,
@@ -84,7 +117,7 @@ public final class Scenarios {
 
     /** Every row the harness can run, in catalogue order. */
     public static List<Scenario> all() {
-        return List.of(S0, S1, S2, S3, S4, S11, S13);
+        return List.of(S0, S1, S2, S3, S4, S5A, S5B, S6, S7, S11, S13);
     }
 
     private static RuleSet rules(int run, Rule... rules) {

@@ -89,7 +89,7 @@ public final class RunScript {
             Supplier<AuthContext> auth = () -> new AuthContext(user, user.value() + "@eval.example",
                     stack.clock.instant(), "eval-session-" + name);
             AutoApprover approver = new AutoApprover(stack.approvalService, scenario.approver(), auth, stack.clock,
-                    tokenSeen);
+                    tokenSeen, () -> scenario.beforeFirstDecision().apply(lane.merchant()));
             try {
                 proposed.addAll(propose(stack, scenario, run, auth));
                 Set<IntentId> ids = new LinkedHashSet<>(proposed);
