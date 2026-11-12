@@ -30,12 +30,22 @@ public final class Database implements AutoCloseable {
     private final String url;
     private final SQLiteConfig config;
     private final BlockingQueue<Connection> idle;
+    private final int poolSize;
     private final AtomicBoolean closed = new AtomicBoolean();
 
     private Database(String url, SQLiteConfig config, int poolSize) {
         this.url = url;
         this.config = config;
         this.idle = new ArrayBlockingQueue<>(poolSize);
+        this.poolSize = poolSize;
+    }
+
+    /**
+     * Connections borrowed right now. Zero while the orchestrator calls the merchant: no connection is held across
+     * network I/O (7.8).
+     */
+    public int inUse() {
+        return poolSize - idle.size();
     }
 
     /** Opens the file (creating it when absent) with {@code poolSize} connections. Run {@link Migrations} before use. */

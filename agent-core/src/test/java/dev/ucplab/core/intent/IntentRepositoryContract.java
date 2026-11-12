@@ -57,6 +57,12 @@ public abstract class IntentRepositoryContract {
         return PurchaseIntent.proposed(new IntentId(id), owner, SHOP, dedupeKey, LINES, "a@example.com", clock.instant());
     }
 
+    /** The intent in {@code state}; a COMPLETED intent has its order id, as the schema requires (10). */
+    private PurchaseIntent inState(PurchaseIntent p, IntentState state) {
+        PurchaseIntent moved = p.withState(state, clock.instant());
+        return state == IntentState.COMPLETED ? moved.withOrderId("order-" + p.id().value()) : moved;
+    }
+
     /** Inserts an intent in QUOTING and claims it for {@code worker}; returns the claimed copy (version 0). */
     private PurchaseIntent insertAndClaim(String id, UserId owner, String dedupeKey, String worker) {
         repo.insert(proposed(id, owner, dedupeKey).withState(IntentState.QUOTING, clock.instant()));
@@ -344,7 +350,7 @@ public abstract class IntentRepositoryContract {
         repo.insert(proposed("i1", ALICE, "d1").withState(IntentState.AWAITING_APPROVAL, clock.instant()));
         repo.insert(proposed("i2", ALICE, "d2").withState(IntentState.REJECTED, clock.instant())
                 .withSessionId(new SessionId("s2")));
-        repo.insert(proposed("i3", ALICE, "d3").withState(IntentState.COMPLETED, clock.instant()));
+        repo.insert(inState(proposed("i3", ALICE, "d3"), IntentState.COMPLETED));
         repo.insert(proposed("i4", ALICE, "d4").withState(IntentState.ESCALATED, clock.instant()));
 
         assertThat(repo.claimRecoverable(W1, LEASE, 10)).isEmpty();
@@ -515,7 +521,7 @@ public abstract class IntentRepositoryContract {
     @Test
     void claimRecoverable_claimsOnlyRecoverableStatesWithoutLiveLease() {
         for (IntentState s : IntentState.values()) {
-            repo.insert(proposed("i-" + s, ALICE, "d-" + s).withState(s, clock.instant()));
+            repo.insert(inState(proposed("i-" + s, ALICE, "d-" + s), s));
         }
 
         List<PurchaseIntent> claimed = repo.claimRecoverable(W1, LEASE, 100);

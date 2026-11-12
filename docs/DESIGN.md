@@ -643,6 +643,8 @@ CREATE TABLE agent_run (
 );
 ```
 
+**Guards in the schema (M3, migration V4).** The tables above carry `CHECK`s on `state`, `op` and `status` (the values of the Java enums, tested), `cancel_pending IN (0, 1)` and non-negative counters, plus `CHECK (state <> 'COMPLETED' OR order_id IS NOT NULL)` and `UNIQUE (merchant_id, order_id) WHERE order_id IS NOT NULL`. They do not make at-most-one-order by themselves: a resend legitimately writes several `COMPLETE` attempt rows under one key, and the merchant owns order creation (7.4, 7.5). There is deliberately no `UNIQUE (intent_id) WHERE status = 'SENT'`: a crash leaves a `SENT` row that recovery must be free to supersede. Indexes serve `claimRecoverable` and `RecoveryScan.approvalsDue` (7.6).
+
 ## 11. Observability
 
 **Traces** (OpenTelemetry API, export optional): `agent.run`, `llm.call`, `tool.call`, `intent.transition` (attributes: `intent_id`, `from`, `to`, `event`), `ucp.request` (attributes: `op`, `http.status`, `request_id`, `attempt_id`, `idempotency_key_hash`, `outcome` as ok, not\_sent, uncertain or protocol\_error), and `reconcile.loop`.

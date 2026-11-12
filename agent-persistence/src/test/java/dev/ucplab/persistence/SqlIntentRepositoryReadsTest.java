@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.ucplab.core.MutableClock;
 import dev.ucplab.core.identity.UserId;
-import dev.ucplab.core.intent.AttemptId;
 import dev.ucplab.core.intent.AttemptOp;
 import dev.ucplab.core.intent.AttemptStatus;
 import dev.ucplab.core.intent.DuplicateIntentException;
@@ -18,12 +17,10 @@ import dev.ucplab.core.intent.PurchaseIntent;
 import dev.ucplab.core.merchant.FrozenBody;
 import dev.ucplab.core.merchant.IdempotencyKey;
 import dev.ucplab.core.merchant.MerchantId;
-import dev.ucplab.core.merchant.MutatingOp;
 import dev.ucplab.core.merchant.SessionId;
 import java.nio.file.Path;
 import java.sql.PreparedStatement;
 import java.sql.Types;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -99,7 +96,8 @@ class SqlIntentRepositoryReadsTest {
     @Test
     void findActiveByDedupeKey_ignoresTerminalIntents() {
         for (IntentState s : IntentState.values()) {
-            repo.insert(proposed("i-" + s, ALICE, "k-" + s).withState(s, T0));
+            PurchaseIntent moved = proposed("i-" + s, ALICE, "k-" + s).withState(s, T0);
+            repo.insert(s == IntentState.COMPLETED ? moved.withOrderId("order-1") : moved);
             assertThat(repo.findActiveByDedupeKey("k-" + s).isPresent()).as(s.name()).isEqualTo(!s.isTerminal());
         }
     }
@@ -222,26 +220,5 @@ class SqlIntentRepositoryReadsTest {
         assertThat(second.responseJson()).isEmpty();
         assertThat(second.respondedAt()).isEmpty();
         assertThat(repo.attempts(new IntentId("none"))).isEmpty();
-    }
-
-    // Covers: 7.8 (the methods not written yet fail loudly rather than pretend)
-    @Test
-    void unwrittenMethods_throwUnsupportedOperation() {
-        PurchaseIntent p = proposed("i1", ALICE, "k1");
-        repo.insert(p);
-
-        assertThatThrownBy(() -> repo.update(p, 0, "w")).isInstanceOf(UnsupportedOperationException.class);
-        assertThatThrownBy(() -> repo.claim(p.id(), "w", Duration.ofSeconds(1)))
-                .isInstanceOf(UnsupportedOperationException.class);
-        assertThatThrownBy(() -> repo.claimRecoverable("w", Duration.ofSeconds(1), 1))
-                .isInstanceOf(UnsupportedOperationException.class);
-        assertThatThrownBy(() -> repo.renewLease(p.id(), "w", Duration.ofSeconds(1)))
-                .isInstanceOf(UnsupportedOperationException.class);
-        assertThatThrownBy(() -> repo.resolveAttempt(new AttemptId("a"), AttemptStatus.RESPONDED, Optional.empty(),
-                Optional.empty())).isInstanceOf(UnsupportedOperationException.class);
-        assertThatThrownBy(() -> repo.recordAttempt(
-                MerchantAttempt.sent(new AttemptId("a"), p.id(), AttemptOp.CREATE, 0,
-                        Optional.of(IdempotencyKey.derive(p.id(), MutatingOp.CREATE, 0)), Optional.empty(), T0),
-                p, 0, "w")).isInstanceOf(UnsupportedOperationException.class);
     }
 }
