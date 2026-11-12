@@ -4,7 +4,6 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InterruptedIOException;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -16,6 +15,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
@@ -23,8 +23,10 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -232,26 +234,114 @@ public final class FaultProxy implements AutoCloseable {
             return;
         }
         String method = ex.getRequestMethod();
-        LogEntry entry = log.open(method, rawPath, header(ex, "Request-Id"), header(ex, "Idempotency-Key"),
-                bodyHmac(body), Optional.empty(), Optional.empty());
-        long seq = entry.seq();
-        UpstreamReply reply;
+        // The rule set is read once, on arrival: a request in flight keeps the set it started with.
+        Optional<Rule> fired = matcher.get().decide(method, rawPath) instanceof Matcher.Decision.Fire f
+                ? Optional.of(f.rule())
+                : Optional.empty();
+        long seq = log.open(method, rawPath, header(ex, "Request-Id"), header(ex, "Idempotency-Key"), bodyHmac(body),
+                fired.map(r -> r.action().type()), fired.map(Rule::id)).seq();
+        HttpRequest request = upstreamRequest(ex, method, rawPath, rawQuery, body);
+        // Every path that returns without sending a reply leaves handle() to close the exchange, which the client sees
+        // as the connection ending with no answer (§12 implementation note).
         try {
-            reply = forward(ex, seq, method, rawPath, rawQuery, body);
+            if (fired.isEmpty()) {
+                sendReply(ex, seq, forward(seq, request, true));
+                return;
+            }
+            switch (fired.get().action()) {
+                case Action.Delay d -> {
+                    Thread.sleep(d.ms());
+                    sendReply(ex, seq, forward(seq, request, true));
+                }
+                case Action.FailBeforeForward f -> failBeforeForward(ex, seq, f);
+                case Action.ForwardThenDropResponse d -> forward(seq, request, true);
+                case Action.ForwardThenDelayResponse d -> {
+                    UpstreamReply reply = forward(seq, request, true);
+                    Thread.sleep(d.ms());
+                    sendReply(ex, seq, reply);
+                }
+                case Action.DuplicateRequest d -> sendReply(ex, seq, duplicate(seq, request, d.mode()));
+                case Action.CorruptResponse c -> sendReply(ex, seq, corrupt(forward(seq, request, true), c.kind()));
+            }
         } catch (IOException e) {
+            // The merchant could not be reached or its reply could not be read: close with no reply (Uncertain, 8.1).
             log.update(seq, LogEntry::withUpstreamError);
+        } catch (InterruptedException e) {
+            // The proxy is closing.
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /** Answers with the rule's status (and {@code Retry-After}), or answers nothing; never contacts the merchant. */
+    private void failBeforeForward(HttpExchange ex, long seq, Action.FailBeforeForward f) {
+        if (f.close()) {
             return;
         }
-        sendReply(ex, seq, reply);
+        int status = f.status().orElseThrow();
+        f.retryAfterSeconds().ifPresent(s -> ex.getResponseHeaders().set("Retry-After", Integer.toString(s)));
+        try {
+            respond(ex, status, "{\"error\":\"fault_injected\",\"status\":" + status + "}");
+        } catch (IOException e) {
+            log.update(seq, LogEntry::withClientGone);
+        }
+    }
+
+    /**
+     * Sends two copies with identical headers and body and returns the first copy's reply. {@code PARALLEL} has both
+     * in flight together and waits for both, so the entry is final when the client is answered; {@code SEQUENTIAL}
+     * sends the second only after the first is answered (and not at all if the first failed).
+     */
+    private UpstreamReply duplicate(long seq, HttpRequest request, Action.DuplicateRequest.Mode mode)
+            throws IOException, InterruptedException {
+        if (mode == Action.DuplicateRequest.Mode.SEQUENTIAL) {
+            UpstreamReply first = forward(seq, request, true);
+            try {
+                forward(seq, request, false);
+            } catch (IOException e) {
+                log.update(seq, LogEntry::withUpstreamError);
+            }
+            return first;
+        }
+        try (ExecutorService copies = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<UpstreamReply> first = copies.submit(() -> forward(seq, request, true));
+            Future<UpstreamReply> second = copies.submit(() -> forward(seq, request, false));
+            try {
+                second.get();
+            } catch (ExecutionException e) {
+                log.update(seq, LogEntry::withUpstreamError);
+            }
+            try {
+                return first.get();
+            } catch (ExecutionException e) {
+                throw e.getCause() instanceof IOException io ? io : new IOException(e.getCause());
+            }
+        }
+    }
+
+    /** {@code TRUNCATE}: the first half of the body; {@code GARBLE}: every {@code "} replaced by {@code '}. */
+    private static UpstreamReply corrupt(UpstreamReply reply, Action.CorruptResponse.Kind kind) {
+        byte[] body = reply.body();
+        byte[] out = switch (kind) {
+            case TRUNCATE -> Arrays.copyOf(body, body.length / 2);
+            case GARBLE -> {
+                byte[] garbled = body.clone();
+                for (int i = 0; i < garbled.length; i++) {
+                    if (garbled[i] == '"') {
+                        garbled[i] = '\'';
+                    }
+                }
+                yield garbled;
+            }
+        };
+        return new UpstreamReply(reply.status(), reply.headers(), out);
     }
 
     /** The merchant's complete reply to one forwarded copy. */
     record UpstreamReply(int status, Map<String, List<String>> headers, byte[] body) {
     }
 
-    /** Sends one copy of the request to the merchant and reads the whole reply; counts the copy in the log. */
-    private UpstreamReply forward(HttpExchange ex, long seq, String method, String rawPath, String rawQuery,
-                                  byte[] body) throws IOException {
+    /** The request as it goes to the merchant: same method, path, query, body and end-to-end headers. */
+    private HttpRequest upstreamRequest(HttpExchange ex, String method, String rawPath, String rawQuery, byte[] body) {
         HttpRequest.Builder request = HttpRequest.newBuilder(
                         URI.create(upstream + rawPath + (rawQuery == null ? "" : "?" + rawQuery)))
                 .timeout(REQUEST_TIMEOUT)
@@ -264,30 +354,33 @@ public final class FaultProxy implements AutoCloseable {
                 values.forEach(v -> request.header(name, v));
             }
         });
-        HttpRequest built = request.build();
+        return request.build();
+    }
+
+    /**
+     * Sends one copy to the merchant and reads the whole reply. The copy is counted in the log before it is sent;
+     * {@code recordStatus} is false for a duplicate's second copy, so {@code merchantStatus} is always the first's.
+     */
+    private UpstreamReply forward(long seq, HttpRequest request, boolean recordStatus)
+            throws IOException, InterruptedException {
         log.update(seq, LogEntry::withForward);
-        try {
-            HttpResponse<InputStream> response = client.send(built, HttpResponse.BodyHandlers.ofInputStream());
-            byte[] out;
-            try (InputStream in = response.body()) {
-                out = in.readNBytes(MAX_BODY_BYTES + 1);
-            }
-            if (out.length > MAX_BODY_BYTES) {
-                throw new IOException("merchant response larger than " + MAX_BODY_BYTES + " bytes");
-            }
-            log.update(seq, e -> e.withMerchantStatus(response.statusCode()));
-            if (method.equals("GET") && rawPath.equals("/.well-known/ucp")) {
-                out = new String(out, StandardCharsets.UTF_8)
-                        .replace(upstream.getRawAuthority(), baseUrl().getRawAuthority())
-                        .getBytes(StandardCharsets.UTF_8);
-            }
-            return new UpstreamReply(response.statusCode(), response.headers().map(), out);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            InterruptedIOException io = new InterruptedIOException("interrupted while forwarding");
-            io.initCause(e);
-            throw io;
+        HttpResponse<InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+        byte[] out;
+        try (InputStream in = response.body()) {
+            out = in.readNBytes(MAX_BODY_BYTES + 1);
         }
+        if (out.length > MAX_BODY_BYTES) {
+            throw new IOException("merchant response larger than " + MAX_BODY_BYTES + " bytes");
+        }
+        if (recordStatus) {
+            log.update(seq, e -> e.withMerchantStatus(response.statusCode()));
+        }
+        if (request.method().equals("GET") && request.uri().getRawPath().equals("/.well-known/ucp")) {
+            out = new String(out, StandardCharsets.UTF_8)
+                    .replace(upstream.getRawAuthority(), baseUrl().getRawAuthority())
+                    .getBytes(StandardCharsets.UTF_8);
+        }
+        return new UpstreamReply(response.statusCode(), response.headers().map(), out);
     }
 
     /** Sends the merchant's reply to the client; a client that is no longer there is logged as {@code clientGone}. */
