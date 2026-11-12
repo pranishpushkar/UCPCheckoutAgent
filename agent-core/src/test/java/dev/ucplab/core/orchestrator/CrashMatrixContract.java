@@ -53,6 +53,11 @@ abstract class CrashMatrixContract {
 
     private static final ConcurrentLinkedQueue<Result> RESULTS = new ConcurrentLinkedQueue<>();
 
+    /** An adapter's own rows (SQL row 20) go into the same result table. */
+    static void recordResult(int row, String crashPoint, String endState, int orders) {
+        RESULTS.add(new Result(row, crashPoint, endState, orders));
+    }
+
     static Stream<Arguments> points() {
         return Stream.of(Boundary.values()).flatMap(b -> b.points.stream().map(p -> Arguments.of(b, p)));
     }
@@ -94,7 +99,7 @@ abstract class CrashMatrixContract {
         intent.ifPresent(i -> assertInvariants(h, i));
     }
 
-    private static void crashed(Runnable action) {
+    static void crashed(Runnable action) {
         try {
             action.run();
         } catch (InterceptingGateway.SimulatedCrash expected) {
@@ -103,7 +108,15 @@ abstract class CrashMatrixContract {
     }
 
     /** I1, I3, I4, I5, I7 and the cancel rule of 7.6, read from the merchant's records and the stores. */
-    private void assertInvariants(CrashHarness h, PurchaseIntent intent) {
+    void assertInvariants(CrashHarness h, PurchaseIntent intent) {
+        // The shared checks of the property tests (14, level 2), over the merchant's own records: I1 one order, I4 no
+        // create or other session after the first complete, I5 the intent drained to a terminal state, I7 one key and
+        // one body per approval. The checks below read the stores as well.
+        Observations observed = h.observations();
+        assertThat(Invariants.i1(observed)).as("shared I1").isEmpty();
+        assertThat(Invariants.i4(observed)).as("shared I4").isEmpty();
+        assertThat(Invariants.i5(observed)).as("shared I5").isEmpty();
+        assertThat(Invariants.i7(observed)).as("shared I7").isEmpty();
         List<MerchantAttempt> attempts = h.stores.intents().attempts(intent.id());
         // I5: the intent is terminal, or waits only for the owner.
         assertThat(intent.state().isTerminal() || intent.state() == IntentState.AWAITING_APPROVAL)
@@ -212,5 +225,21 @@ abstract class CrashMatrixContract {
         Path out = Path.of("target", "crash-matrix-" + System.getProperty("crash.matrix.adapter", "in-memory") + ".md");
         Files.createDirectories(out.getParent());
         Files.writeString(out, table);
+        compareWithInMemory(out, table);
+    }
+
+    /**
+     * An adapter's table must equal the in-memory one row for row (crash points, end states, orders), except the rows
+     * that exist only for that adapter (20). The in-memory table is written by agent-core's run, which comes first in the
+     * reactor; when it is not there (this module run alone) there is nothing to compare.
+     */
+    private static void compareWithInMemory(Path adapterTable, String table) throws IOException {
+        Path memory = Path.of("..", "agent-core", "target", "crash-matrix-in-memory.md");
+        if (adapterTable.getFileName().toString().equals("crash-matrix-in-memory.md") || !Files.exists(memory)) {
+            return;
+        }
+        Function<String, List<String>> shared = t -> t.lines().filter(l -> !l.startsWith("| 20 |")).toList();
+        assertThat(shared.apply(table)).as("%s against the in-memory crash matrix", adapterTable.getFileName())
+                .isEqualTo(shared.apply(Files.readString(memory)));
     }
 }

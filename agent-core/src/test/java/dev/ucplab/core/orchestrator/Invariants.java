@@ -380,7 +380,7 @@ final class Invariants {
         String basket = orderLines.stream().map(l -> l.itemId() + ":" + l.quantity()).sorted()
                 .collect(Collectors.joining(","));
         for (Map.Entry<Integer, IntentId> slot : o.intentsBySlot().entrySet()) {
-            List<ProposedLine> lines = ScheduleExecutor.SLOT_LINES.get(slot.getKey());
+            List<ProposedLine> lines = o.baskets().get(slot.getKey());
             String slotBasket = lines.stream().map(l -> l.itemId() + ":" + l.quantity()).sorted()
                     .collect(Collectors.joining(","));
             if (slotBasket.equals(basket)) {

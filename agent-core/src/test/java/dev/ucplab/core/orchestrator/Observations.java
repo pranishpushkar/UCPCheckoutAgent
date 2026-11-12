@@ -34,7 +34,23 @@ record Observations(
         List<CrashEvent> crashes,
         List<Sample> samples,
         List<String> aborts,
-        OrchestratorConfig config) {
+        OrchestratorConfig config,
+        Map<Integer, List<dev.ucplab.core.intent.ProposedLine>> baskets) {
+
+    /** The property runs' form: each slot's basket is {@link ScheduleExecutor#SLOT_LINES}. */
+    Observations(
+            Map<Integer, IntentId> intentsBySlot, List<ClientCall> calls, List<CallRecord> merchantLog,
+            List<ModelOrder> orders, List<Decision> decisions, List<CrashEvent> crashes, List<Sample> samples,
+            List<String> aborts, OrchestratorConfig config) {
+        this(intentsBySlot, calls, merchantLog, orders, decisions, crashes, samples, aborts, config,
+                slotBaskets(intentsBySlot));
+    }
+
+    private static Map<Integer, List<dev.ucplab.core.intent.ProposedLine>> slotBaskets(Map<Integer, IntentId> slots) {
+        Map<Integer, List<dev.ucplab.core.intent.ProposedLine>> out = new java.util.HashMap<>();
+        slots.keySet().forEach(slot -> out.put(slot, ScheduleExecutor.SLOT_LINES.get(slot)));
+        return out;
+    }
 
     Observations {
         intentsBySlot = Map.copyOf(intentsBySlot);
@@ -45,6 +61,7 @@ record Observations(
         crashes = List.copyOf(crashes);
         samples = List.copyOf(samples);
         aborts = List.copyOf(aborts);
+        baskets = Map.copyOf(baskets);
     }
 
     /**

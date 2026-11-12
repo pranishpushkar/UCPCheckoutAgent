@@ -70,11 +70,15 @@ final class CrashHarness {
     final FaultyMerchantModel merchant;
     final Stores stores;
     private final SequentialIdGenerator ids = new SequentialIdGenerator("id");
+    private final java.util.concurrent.atomic.AtomicInteger seq = new java.util.concurrent.atomic.AtomicInteger();
+    private final ProbeGateway probe;
+    private final List<Observations.Decision> decisions = new java.util.ArrayList<>();
     private final PaymentInstrument payment = PaymentInstrument.mockCard("pi_1", FaultyMerchantModel.TOKEN_OK);
 
     CrashHarness(java.util.function.Function<MutableClock, Stores> storeFactory) {
         this.stores = storeFactory.apply(clock);
         this.merchant = new FaultyMerchantModel(SHOP, FaultyMerchantModel.Mode.LAB, clock, new SequentialIdGenerator("m"));
+        this.probe = new ProbeGateway(merchant, clock, seq);
     }
 
     Process process(String workerId) {
@@ -83,7 +87,7 @@ final class CrashHarness {
         CrashPlan<CrashingGateway.Op> gatewayPlan = new CrashPlan<>(CrashingGateway.Op.class);
         CrashingIntentRepository intents = new CrashingIntentRepository(stores.intents(), intentPlan);
         CrashingApprovalRepository approvals = new CrashingApprovalRepository(stores.approvals(), approvalPlan);
-        CrashingGateway gateway = new CrashingGateway(merchant, gatewayPlan);
+        CrashingGateway gateway = new CrashingGateway(probe, gatewayPlan);
         PolicyConfig policyConfig = PolicyConfig.defaults();
         RuleBasedPolicyEngine policy = new RuleBasedPolicyEngine(policyConfig,
                 m -> m.equals(SHOP)
@@ -133,6 +137,11 @@ final class CrashHarness {
             ApprovalDecision d = p.approvalService().decide(alice(), INTENT, pending.get().token(), approve);
             if (d instanceof ApprovalDecision.Busy) {
                 throw new AssertionError("intent busy for the owner's own decision: " + d);
+            }
+            if (d instanceof ApprovalDecision.Approved || d instanceof ApprovalDecision.Rejected) {
+                decisions.add(new Observations.Decision(seq.incrementAndGet(), clock.instant(), INTENT,
+                        d instanceof ApprovalDecision.Approved, pending.get().snapshot(), pending.get().snapshotHash(),
+                        false));
             }
         }
     }
@@ -190,5 +199,19 @@ final class CrashHarness {
 
     Optional<PurchaseIntent> intent() {
         return stores.intents().findForSystem(INTENT);
+    }
+
+    /**
+     * What the run left behind, in the form {@link Invariants} reads (section 14, level 2): the merchant's own orders and
+     * log, the calls as they reached its front, the owner's accepted decisions, and the intent's stored state at the
+     * end. The one intent's basket is {@code TWO_SHIRTS}, as slot 0. Crashes are not listed: only the end-state checks
+     * (I1, I4, I5 drained, I7) are asked of a matrix run, and they do not use them.
+     */
+    Observations observations() {
+        List<Observations.Sample> samples = intent().map(i -> new Observations.Sample(seq.incrementAndGet(),
+                clock.instant(), INTENT, Observations.Phase.END, i.state(), i.sessionId(), Optional.empty())).stream()
+                .toList();
+        return new Observations(java.util.Map.of(0, INTENT), probe.calls(), merchant.log(), merchant.orders(), decisions,
+                List.of(), samples, List.of(), config, java.util.Map.of(0, TWO_SHIRTS));
     }
 }
