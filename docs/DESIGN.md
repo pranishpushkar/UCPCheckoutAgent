@@ -583,7 +583,8 @@ CREATE TABLE approval (
   status TEXT NOT NULL,                 -- PENDING, APPROVED, REJECTED, EXPIRED, CONSUMED
   decided_at TEXT,
   decided_by TEXT,
-  UNIQUE (intent_id, seq)
+  UNIQUE (intent_id, seq),
+  FOREIGN KEY (intent_id) REFERENCES purchase_intent(id)
 );
 
 CREATE INDEX ix_intent_user ON purchase_intent(user_id, created_at);

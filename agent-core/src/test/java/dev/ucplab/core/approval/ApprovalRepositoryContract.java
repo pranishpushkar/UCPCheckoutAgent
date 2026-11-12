@@ -35,8 +35,22 @@ public abstract class ApprovalRepositoryContract {
     /** A fresh, empty repository. */
     protected abstract ApprovalRepository create();
 
+    /** Stores the parent intent of an approval, owned by {@code owner}: an approval always belongs to an intent. */
+    protected abstract void storeIntent(IntentId id, UserId owner);
+
+    private final java.util.Set<IntentId> stored = new java.util.HashSet<>();
+
+    /** Inserts the approval, storing its parent intent first (once per intent). */
+    private void put(ApprovalRecord approval) {
+        if (stored.add(approval.intentId())) {
+            storeIntent(approval.intentId(), approval.owner());
+        }
+        repo.insert(approval);
+    }
+
     @BeforeEach
     void createRepository() {
+        stored.clear();
         repo = create();
     }
 
@@ -53,7 +67,7 @@ public abstract class ApprovalRepositoryContract {
     @Test
     void findLatest_returnsStoredRecord_forItsOwner() {
         ApprovalRecord a = approval("a1", I1, ALICE);
-        repo.insert(a);
+        put(a);
 
         assertThat(repo.findLatest(ALICE, I1)).contains(a);
         assertThat(repo.findLatestForSystem(I1)).contains(a);
@@ -62,7 +76,7 @@ public abstract class ApprovalRepositoryContract {
     // Covers: T6 (another user gets empty, the same as for an intent with no approval)
     @Test
     void findLatest_returnsEmpty_forAnotherUserAndForUnknownIntent() {
-        repo.insert(approval("a1", I1, ALICE));
+        put(approval("a1", I1, ALICE));
 
         assertThat(repo.findLatest(BOB, I1)).isEmpty();
         assertThat(repo.findLatest(ALICE, I2)).isEmpty();
@@ -75,9 +89,9 @@ public abstract class ApprovalRepositoryContract {
         ApprovalRecord first = approval("a1", I1, ALICE);
         ApprovalRecord other = approval("a2", I2, ALICE);
         ApprovalRecord second = approval("a3", I1, ALICE);
-        repo.insert(first);
-        repo.insert(other);
-        repo.insert(second);
+        put(first);
+        put(other);
+        put(second);
 
         assertThat(repo.listForSystem(I1)).containsExactly(first, second);
         assertThat(repo.findLatestForSystem(I1)).contains(second);
@@ -87,16 +101,16 @@ public abstract class ApprovalRepositoryContract {
     // Covers: 9.2 (an approval id is unique)
     @Test
     void insert_throws_whenIdRepeats() {
-        repo.insert(approval("a1", I1, ALICE));
+        put(approval("a1", I1, ALICE));
 
-        assertThatThrownBy(() -> repo.insert(approval("a1", I2, BOB))).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> put(approval("a1", I2, BOB))).isInstanceOf(IllegalArgumentException.class);
         assertThat(repo.listForSystem(I2)).isEmpty();
     }
 
     // Covers: 9.2, I10 (a decision records when and by whom)
     @Test
     void transition_movesStatusAndRecordsDecision_whenStatusMatches() {
-        repo.insert(approval("a1", I1, ALICE));
+        put(approval("a1", I1, ALICE));
 
         boolean moved = repo.transition("a1", ApprovalStatus.PENDING, ApprovalStatus.APPROVED, T0.plusSeconds(5),
                 Optional.of(ALICE));
@@ -112,7 +126,7 @@ public abstract class ApprovalRepositoryContract {
     @Test
     void transition_returnsFalseAndChangesNothing_whenStatusDiffers() {
         ApprovalRecord a = approval("a1", I1, ALICE);
-        repo.insert(a);
+        put(a);
 
         assertThat(repo.transition("a1", ApprovalStatus.APPROVED, ApprovalStatus.CONSUMED, T0, Optional.empty()))
                 .isFalse();
@@ -124,7 +138,7 @@ public abstract class ApprovalRepositoryContract {
     // Covers: 9.2, I10 (a system move, with no decider, keeps the decision already recorded)
     @Test
     void transition_keepsDecision_whenNoDeciderIsGiven() {
-        repo.insert(approval("a1", I1, ALICE));
+        put(approval("a1", I1, ALICE));
         repo.transition("a1", ApprovalStatus.PENDING, ApprovalStatus.APPROVED, T0.plusSeconds(5), Optional.of(ALICE));
 
         repo.transition("a1", ApprovalStatus.APPROVED, ApprovalStatus.CONSUMED, T0.plusSeconds(9), Optional.empty());
@@ -138,7 +152,7 @@ public abstract class ApprovalRepositoryContract {
     // Covers: 9.2 (single use: of many concurrent decisions on one pending approval, exactly one wins)
     @Test
     void transition_succeedsForExactlyOneCaller_whenRacing() throws Exception {
-        repo.insert(approval("a1", I1, ALICE));
+        put(approval("a1", I1, ALICE));
         int callers = 8;
         CountDownLatch start = new CountDownLatch(1);
         AtomicInteger wins = new AtomicInteger();
