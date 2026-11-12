@@ -84,6 +84,11 @@ public final class RecoveryWorker {
         return workerId;
     }
 
+    /** For tests: how many intents this worker has parked for a later pass. */
+    int parkedCount() {
+        return notBefore.size();
+    }
+
     /**
      * One pass. Returns the intents it started a driver for, in the order it picked them (oldest first, claimed ones
      * before those found by the scan). With a direct executor every driver has finished when this returns.
@@ -98,6 +103,7 @@ public final class RecoveryWorker {
             picked.add(intent.id());
         }
         int claimedCount = picked.size();
+        forgetDueUnclaimed(picked);
         for (IntentId id : due) {
             if (picked.size() < config.limit() && !picked.contains(id)) {
                 picked.add(id);
@@ -142,6 +148,9 @@ public final class RecoveryWorker {
      * would otherwise fill the pass limit pass after pass and keep other recoverable intents from being picked up. A
      * parked intent whose lease is gone is forgotten; the claim finds it again like any other. Due ones are not
      * returned: the claim takes them, and the pass drives them.
+     *
+     * <p>One write per parked intent per pass: fine for one SQLite instance, worth batching at M6/M7 scale. A database
+     * error in one renewal aborts the whole pass, which is harmless: nothing was claimed yet, and the next pass retries.
      */
     private Set<IntentId> renewParked() {
         Instant now = clock.instant();
@@ -157,6 +166,17 @@ public final class RecoveryWorker {
             }
         }
         return Set.copyOf(notDue);
+    }
+
+    /**
+     * Forgets every parked intent that is due but that the claim did not return: it has gone terminal, or another worker
+     * holds it. A due entry is never skipped, so forgetting it only means a later claim treats the intent like any other.
+     * A parked intent that stopped being recoverable before it was due is still renewed until then (renewLease does not
+     * look at the state, and a read per parked intent per pass is not worth it); it is dropped here once it is due.
+     */
+    private void forgetDueUnclaimed(List<IntentId> claimed) {
+        Instant now = clock.instant();
+        notBefore.entrySet().removeIf(e -> !now.isBefore(e.getValue()) && !claimed.contains(e.getKey()));
     }
 
     private void drive(IntentId id, boolean leased) {

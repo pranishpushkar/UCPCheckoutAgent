@@ -520,6 +520,8 @@ public final class SqlIntentRepository implements IntentRepository {
             s.executeUpdate();
         } catch (SQLException e) {
             if (SqlErrors.isUniqueViolation(e)) {
+                // Naming the id is right: under BEGIN IMMEDIATE no other writer can take (intent_id, seq) between the
+                // MAX and the insert, so a unique violation here means a repeated attempt id, a real bug, not a race.
                 throw new IllegalArgumentException("attempt id already exists: " + a.id());
             }
             throw e;

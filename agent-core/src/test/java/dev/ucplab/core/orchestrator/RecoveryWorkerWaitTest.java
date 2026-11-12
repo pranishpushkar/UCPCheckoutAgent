@@ -166,11 +166,12 @@ class RecoveryWorkerWaitTest {
         lab.clock.advance(lab.config.lease().plusSeconds(1));
         Lab.Worker w = lab.worker("worker-r");
         Duration shortLease = Duration.ofMillis(200);
+        // The worker never reads the period (only RecoveryLoop does); it is 100 ms only to satisfy the 7.6 rule.
         RecoveryWorker worker = new RecoveryWorker(lab.intents, lab.scan,
                 w.orchestrator(), lab.clock, d -> {
                     sleeps.add(d);
                     lab.clock.advance(d);
-                }, Runnable::run, new RecoveryConfig(Duration.ofSeconds(5), shortLease, 10, 500), "worker-r");
+                }, Runnable::run, new RecoveryConfig(Duration.ofMillis(100), shortLease, 10, 500), "worker-r");
 
         for (int pass = 0; pass < 40 && lab.intent(id).state() != COMPLETED; pass++) {
             worker.runOnce();
