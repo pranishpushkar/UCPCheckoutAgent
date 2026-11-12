@@ -107,15 +107,16 @@ public final class Scenarios {
             TWO_SHIRTS, PAY_DECLINE);
 
     /**
-     * S8: the outage begins after approval, so the quote is untouched and the first complete is answered 503 (the
-     * gateway makes that Uncertain, 8.2). Every UCP call fails for 20 s / k; discovery is outside the pattern and is
-     * cached anyway. The window is opened and closed through the proxy's admin API, since a rule has no time window
+     * S8: the outage begins once the quote is pending, just before the decision (the agent reads nothing from the
+     * merchant in between), so the quote is untouched and the first complete is answered 503 (the gateway makes that
+     * Uncertain, 8.2). A run whose first complete escaped the window is aborted ({@link RunScript}), never passed.
+     * Every UCP call fails for 20 s / k; discovery is outside the pattern and is cached anyway. The window is opened and closed through the proxy's admin API, since a rule has no time window
      * (§12). After it closes a read shows {@code ready_for_complete}, and the quiet period has passed, so the complete
      * is resent under the same key: COMPLETED, or ESCALATED if the deadline passed first.
      */
     public static final Scenario S8 = new Scenario("S8", "merchant returns 503 on every call for 20 s, then recovers",
-            "fail_before_forward {status 503} on every method of " + UCP_ALL + ", installed after approval and"
-                    + " cleared 20 s / k later through the admin API",
+            "fail_before_forward {status 503} on every method of " + UCP_ALL + ", installed just before the decision"
+                    + " and cleared 20 s / k later through the admin API",
             Set.of(IntentState.COMPLETED, IntentState.ESCALATED), List.of("I5"), (t, run) -> RuleSet.empty(),
             AutoApprover.Policy.APPROVE_ALL, Scenario.Driver.PROPOSE_ONCE, SHOP, TWO_SHIRTS, PAY_OK,
             Scenario.MerchantEvent.NONE, t -> Optional.of(new Scenario.AdminRules(S8_OUTAGE_RULES, t.s8Outage())));

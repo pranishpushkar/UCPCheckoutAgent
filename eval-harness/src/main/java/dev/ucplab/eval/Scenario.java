@@ -21,8 +21,10 @@ import java.util.Set;
  *     decides it (S5: the price, S6: the stock). Made before the decision rather than after it so the recovery loop
  *     cannot send the first complete ahead of it; the agent reads nothing from the merchant in between, so for the
  *     agent it is the same as a change after approval
- * @param afterApproval rules the harness installs through the proxy's admin API once the first quote is approved, and
- *     clears through it after a while (S8)
+ * @param faultWindow rules the harness installs through the proxy's admin API once the first quote is pending, just
+ *     before the approver decides it (before {@code beforeFirstDecision}), and clears through it after a while (S8).
+ *     Installed before the decision for the same reason as {@code beforeFirstDecision}: once the intent is approved the
+ *     recovery loop may send the first complete at any moment, and the window must already be in place
  */
 public record Scenario(
         String id,
@@ -37,7 +39,7 @@ public record Scenario(
         List<ProposedLine> basket,
         String paymentToken,
         MerchantEvent beforeFirstDecision,
-        AfterApproval afterApproval) {
+        FaultWindow faultWindow) {
 
     /** The proxy rules of one run, built for the run's time scale; some rows vary by run (S13). */
     @FunctionalInterface
@@ -66,8 +68,8 @@ public record Scenario(
 
     /** The fault window of a row, built for the run's time scale; most rows have none. */
     @FunctionalInterface
-    public interface AfterApproval {
-        AfterApproval NONE = t -> Optional.empty();
+    public interface FaultWindow {
+        FaultWindow NONE = t -> Optional.empty();
 
         Optional<AdminRules> build(TimeScale scale);
     }
@@ -104,18 +106,18 @@ public record Scenario(
         basket = List.copyOf(basket);
         Objects.requireNonNull(paymentToken, "paymentToken");
         Objects.requireNonNull(beforeFirstDecision, "beforeFirstDecision");
-        Objects.requireNonNull(afterApproval, "afterApproval");
+        Objects.requireNonNull(faultWindow, "faultWindow");
         if (expected.isEmpty() || expected.stream().anyMatch(s -> !s.isTerminal())) {
             throw new IllegalArgumentException(id + ": expected outcomes must be terminal states");
         }
     }
 
-    /** A row with no fault window after approval. */
+    /** A row with no fault window. */
     public Scenario(String id, String title, String fault, Set<IntentState> expected, List<String> requiredInvariants,
                     Rules rules, AutoApprover.Policy approver, Driver driver, MerchantId target,
                     List<ProposedLine> basket, String paymentToken, MerchantEvent beforeFirstDecision) {
         this(id, title, fault, expected, requiredInvariants, rules, approver, driver, target, basket, paymentToken,
-                beforeFirstDecision, AfterApproval.NONE);
+                beforeFirstDecision, FaultWindow.NONE);
     }
 
     /** A row with no change at the merchant during the run. */
@@ -123,6 +125,6 @@ public record Scenario(
                     Rules rules, AutoApprover.Policy approver, Driver driver, MerchantId target,
                     List<ProposedLine> basket, String paymentToken) {
         this(id, title, fault, expected, requiredInvariants, rules, approver, driver, target, basket, paymentToken,
-                MerchantEvent.NONE, AfterApproval.NONE);
+                MerchantEvent.NONE, FaultWindow.NONE);
     }
 }

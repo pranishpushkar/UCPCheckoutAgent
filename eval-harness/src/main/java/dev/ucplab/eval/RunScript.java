@@ -8,6 +8,8 @@ import dev.ucplab.core.intent.ProposalResult;
 import dev.ucplab.core.intent.PurchaseIntent;
 import dev.ucplab.core.intent.StepResult;
 import dev.ucplab.faultproxy.LogEntry;
+import dev.ucplab.faultproxy.PathPattern;
+import dev.ucplab.faultproxy.RuleSet;
 import java.io.IOException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -56,6 +58,8 @@ public final class RunScript {
     private final Consumer<String> tokenSeen;
     private final Consumer<List<RaceOutcome>> raceSeen;
     private final Semaphore childSlots;
+    /** Run by a fault window's clearer just before its DELETE; only a test sets it, to make a late clear late. */
+    private volatile Runnable beforeClear = () -> { };
 
     public RunScript(Lane lane, TimeScale scale) {
         this(lane, scale, t -> { }, r -> { }, new Semaphore(ChildProcess.MAX_CHILDREN));
@@ -134,8 +138,8 @@ public final class RunScript {
         Optional<Instant> terminalSeenAt = Optional.empty();
         List<RunEvidence.Persisted> persisted = new ArrayList<>();
         boolean race = scenario.driver() == Scenario.Driver.ADVANCE_RACE;
-        Optional<Scenario.AdminRules> window = scenario.afterApproval().build(scale);
-        Optional<Thread> clearer = Optional.empty();
+        Optional<Scenario.AdminRules> window = scenario.faultWindow().build(scale);
+        AtomicReference<Thread> clearer = new AtomicReference<>();
         AtomicReference<String> windowFailed = new AtomicReference<>();
         List<AgentStack.Racer> racers = new ArrayList<>();
         Children children = new Children(name, seed);
@@ -144,8 +148,13 @@ public final class RunScript {
                 race || killPoint.isPresent() ? AgentStack.DECISION_ONLY : scale.orchestrator().lease())) {
             Supplier<AuthContext> auth = () -> new AuthContext(user, user.value() + "@eval.example",
                     stack.clock.instant(), "eval-session-" + name);
+            // The window opens before the decision, as the merchant changes do: after it the loop may send the first
+            // complete at any moment. The clear timer starts when the rules are installed.
             AutoApprover approver = new AutoApprover(stack.approvalService, scenario.approver(), auth, stack.clock,
-                    tokenSeen, () -> scenario.beforeFirstDecision().apply(lane.merchant(), scale));
+                    tokenSeen, () -> {
+                        window.ifPresent(w -> clearer.set(openWindow(w, windowFailed)));
+                        scenario.beforeFirstDecision().apply(lane.merchant(), scale);
+                    });
             try {
                 if (killPoint.isPresent()) {
                     // The agent child is the worker; it is running before the intent exists.
@@ -166,9 +175,6 @@ public final class RunScript {
                 while (true) {
                     for (IntentId id : ids) {
                         if (approver.tick(id)) {
-                            if (window.isPresent() && clearer.isEmpty()) {
-                                clearer = Optional.of(openWindow(window.get(), windowFailed));
-                            }
                             if (killPoint.isPresent()) {
                                 // The child's next pass takes the APPROVED intent.
                             } else if (race && !racers.isEmpty()) {
@@ -207,7 +213,7 @@ public final class RunScript {
                 }
                 aborted = aborted.or(children::stop);
                 stack.loop.close();
-                if (clearer.isPresent() && !closeWindow(clearer.get(), window.get())) {
+                if (clearer.get() != null && !closeWindow(clearer.get(), window.get())) {
                     aborted = aborted.or(() -> Optional.of("the fault window was not cleared"));
                 }
                 if (windowFailed.get() != null) {
@@ -215,6 +221,9 @@ public final class RunScript {
                 }
                 if (!awaitSettled(startSeq)) {
                     aborted = aborted.or(() -> Optional.of("the proxy did not settle within " + settleLimit()));
+                }
+                if (window.isPresent()) {
+                    aborted = aborted.or(() -> windowMissed(window.get(), lane.proxy().log(startSeq)));
                 }
                 for (IntentId id : ids) {
                     stack.intents.findForSystem(id).ifPresent(i -> persisted.add(new RunEvidence.Persisted(i,
@@ -229,7 +238,16 @@ public final class RunScript {
                 aborted = Optional.of("agent child: " + e.getMessage());
             } finally {
                 racers.forEach(AgentStack.Racer::close);
-                clearer.ifPresent(Thread::interrupt);
+                // A window still open (an aborted run) is cleared now, and the run does not end before the clear has
+                // landed: a late DELETE would wipe the rules of the lane's next run.
+                Thread c = clearer.get();
+                if (c != null) {
+                    c.interrupt();
+                    if (!joined(c, settleLimit())) {
+                        aborted = aborted.or(() -> Optional.of("the fault window's clear was still pending after "
+                                + settleLimit()));
+                    }
+                }
                 children.close();
             }
             decisions = approver.log();
@@ -349,8 +367,8 @@ public final class RunScript {
                                    Supplier<AuthContext> auth) throws InterruptedException {
         String rationale = "scripted run: " + scenario.id();
         return switch (scenario.driver()) {
-            case PROPOSE_ONCE, ADVANCE_RACE, KILL_AND_RESTART -> List.of(stack.orchestrator.propose(auth.get(), scenario.target(), scenario.basket(),
-                    rationale).intentId());
+            case PROPOSE_ONCE, ADVANCE_RACE, KILL_AND_RESTART -> List.of(stack.orchestrator.propose(auth.get(),
+                    scenario.target(), scenario.basket(), rationale).intentId());
             case PROPOSE_TWICE -> {
                 if (run % 2 == 0) {
                     List<IntentId> ids = new ArrayList<>();
@@ -454,11 +472,47 @@ public final class RunScript {
                 // Cleared below all the same.
             }
             try {
+                beforeClear.run();
                 admin("DELETE", "");
             } catch (RuntimeException e) {
                 failed.set("could not clear the fault window: " + e.getMessage());
             }
         });
+    }
+
+    /** Waits up to {@code limit} for {@code t} to end; false if it is still running (or this thread is interrupted). */
+    private static boolean joined(Thread t, Duration limit) {
+        try {
+            return t.join(limit);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return !t.isAlive();
+        }
+    }
+
+    /** Test seam: {@code r} runs on the clearer thread just before it clears a fault window. */
+    void beforeClear(Runnable r) {
+        beforeClear = Objects.requireNonNull(r, "r");
+    }
+
+    /**
+     * The row's own claim (S8): its first complete on the wire was caught by a rule of the window. If it was not, the
+     * run never tested the outage, and it is aborted rather than counted as a pass.
+     */
+    static Optional<String> windowMissed(Scenario.AdminRules window, List<LogEntry> log) {
+        PathPattern complete = new PathPattern(Scenarios.COMPLETE);
+        Set<String> ids = new java.util.TreeSet<>();
+        RuleSet.parse(window.rulesJson()).rules().forEach(r -> ids.add(r.id()));
+        Optional<LogEntry> first = log.stream().filter(l -> l.method().equals("POST") && complete.matches(l.path()))
+                .findFirst();
+        if (first.isEmpty()) {
+            return Optional.of("no complete reached the proxy, so the outage " + ids + " was never tested");
+        }
+        if (first.get().ruleId().filter(ids::contains).isEmpty()) {
+            return Optional.of("the first complete on the wire was not caught by the outage " + ids
+                    + ", so the run never tested it");
+        }
+        return Optional.empty();
     }
 
     /** Waits for the window to end (or ends it now, if the run is over first). True once it was cleared. */
