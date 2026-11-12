@@ -19,7 +19,9 @@ jobs:
           cache: maven
       - run: ./mvnw -B -ntp verify -Peval-full
       # The report and the evidence of failed runs (redacted, I8); uploaded on failure too.
-      - uses: actions/upload-artifact@v4
+      # v7 (v7.0.2 latest, checked on github.com/actions/upload-artifact/releases on 2026-11-13; v6 and later run on
+      # Node 24 and need runner 2.327.1 or newer, which GitHub-hosted runners have).
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: eval-full-report
