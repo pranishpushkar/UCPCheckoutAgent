@@ -7,6 +7,7 @@ import dev.ucplab.eval.GroundTruth;
 import dev.ucplab.eval.RunEvidence;
 import dev.ucplab.faultproxy.LogEntry;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -17,9 +18,10 @@ import java.util.Optional;
  * own GET of its session (13.1, M4 note).
  *
  * <p>The snapshot an order is held to is the last approval the approver logged before the first {@code complete}
- * under the order's key. The order's key is the key of the first forwarded {@code complete} on the order's session
- * that the merchant answered 2xx, or, when no answer was seen (a dropped or failed upstream read), the last forwarded
- * one.
+ * under the order's key. The order's key is the highest complete revision forwarded on the order's session: the
+ * merchant answers every complete 200, a {@code price_changed} one included, so a 2xx does not show which complete
+ * made the order, and an earlier revision is superseded by the re-quote that issued the next key (7.4). A forwarded
+ * complete under a key that is no intent's (the last such, if no key is) is reported as such.
  */
 public final class I2OrderMatchesApproval implements InvariantCheck {
 
@@ -50,7 +52,7 @@ public final class I2OrderMatchesApproval implements InvariantCheck {
         List<LogEntry> completes = Wire.completes(e);
         for (GroundTruth.Order order : e.orders()) {
             String where = "order " + order.id() + " on " + order.checkoutId();
-            Optional<String> key = orderKey(completes, order.checkoutId());
+            Optional<String> key = orderKey(completes, order.checkoutId(), owners);
             if (key.isEmpty()) {
                 v.add(new Violation(id(), where + ": no complete for that session reached the merchant"));
                 continue;
@@ -103,15 +105,15 @@ public final class I2OrderMatchesApproval implements InvariantCheck {
         return v;
     }
 
-    private static Optional<String> orderKey(List<LogEntry> completes, String session) {
-        List<LogEntry> forwarded = completes.stream()
-                .filter(l -> l.forwarded() && Wire.session(l.path()).equals(Optional.of(session))
-                        && l.idempotencyKey().isPresent())
+    private static Optional<String> orderKey(List<LogEntry> completes, String session,
+                                             Map<String, Wire.KeyOwner> owners) {
+        List<String> forwarded = completes.stream()
+                .filter(l -> l.forwarded() && Wire.session(l.path()).equals(Optional.of(session)))
+                .flatMap(l -> l.idempotencyKey().stream())
                 .toList();
-        return forwarded.stream()
-                .filter(l -> l.merchantStatus().isPresent() && l.merchantStatus().getAsInt() / 100 == 2)
-                .findFirst()
-                .or(() -> forwarded.isEmpty() ? Optional.empty() : Optional.of(forwarded.getLast()))
-                .flatMap(LogEntry::idempotencyKey);
+        Optional<String> highest = forwarded.stream()
+                .filter(k -> owners.containsKey(k) && owners.get(k).op() == MutatingOp.COMPLETE)
+                .max(Comparator.comparingInt(k -> owners.get(k).revision()));
+        return highest.or(() -> forwarded.isEmpty() ? Optional.empty() : Optional.of(forwarded.getLast()));
     }
 }

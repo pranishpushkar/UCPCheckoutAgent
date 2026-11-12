@@ -156,6 +156,36 @@ class ChecksTest {
         assertFires("I2", f, "the user approved nothing before");
     }
 
+    /**
+     * S5a's shape: complete rev 0 is answered 200 with price_changed (the merchant answers every complete 200), the
+     * user approves the re-quote, and complete rev 1 makes the order at the new price.
+     */
+    private static CheckFixture requoted(long orderAmount) {
+        CheckFixture f = new CheckFixture();
+        ApprovalSnapshot second = snapshot(SESSION, 5200, 5200);
+        f.approvals.add(decision(2, second, true, 1_000));
+        f.approvalRows.set(0, row("ap-1", f.snapshot, ApprovalStatus.CONSUMED, Optional.of(CheckFixture.OWNER)));
+        f.approvalRows.add(row("ap-2", second, ApprovalStatus.CONSUMED, Optional.of(CheckFixture.OWNER)));
+        f.log.add(complete(4, 1_100, SESSION, 1, COMPLETE_BODY, 200));
+        f.attempts.add(attempt("at-3", AttemptOp.COMPLETE, 1, key(MutatingOp.COMPLETE, 1), COMPLETE_BODY, 1_095));
+        f.orders.set(0, order(ORDER, SESSION, orderAmount));
+        f.sessions.put(SESSION, new dev.ucplab.eval.GroundTruth.Session(SESSION, "completed", "USD",
+                List.of(new dev.ucplab.eval.GroundTruth.SessionLine("item_123", 2, 2600)), 5200, Optional.of(ORDER)));
+        return f;
+    }
+
+    // Covers: I2, S5a (after a re-quote the order is held to the approval of the key that made it, not the first)
+    @Test
+    void i2_orderAfterARequote_isHeldToTheNewApproval() {
+        assertThat(fire("I2", requoted(5200))).isEmpty();
+    }
+
+    // Covers: I2, S5a (an order above the re-approved maximum still fires)
+    @Test
+    void i2_orderAfterARequoteAboveTheNewMaximum_fires() {
+        assertFires("I2", requoted(5300), "amount 5300 is above the approved maximum 5200");
+    }
+
     // Covers: I2 (an order no complete on the wire could have made)
     @Test
     void i2_orderWithNoCompleteOnTheWire_fires() {
