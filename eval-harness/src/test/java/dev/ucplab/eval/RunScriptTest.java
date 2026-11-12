@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import dev.ucplab.core.intent.IntentState;
 import dev.ucplab.core.intent.PurchaseIntent;
+import dev.ucplab.eval.check.CheckContext;
+import dev.ucplab.eval.check.Checks;
 import dev.ucplab.faultproxy.Action;
 import dev.ucplab.faultproxy.LogEntry;
 import dev.ucplab.faultproxy.Match;
@@ -38,6 +40,7 @@ class RunScriptTest {
 
     private Lane lane;
     private RunScript script;
+    private CheckContext checks;
 
     @BeforeAll
     void startLane(@TempDir Path dir) throws Exception {
@@ -45,6 +48,7 @@ class RunScriptTest {
         new SecureRandom().nextBytes(key);
         lane = Lane.start(0, key, dir);
         script = new RunScript(lane, TimeScale.of(4));
+        checks = CheckContext.of(TimeScale.of(4), key, Scenarios.SHOP, RunScript.POLL);
     }
 
     @AfterAll
@@ -61,8 +65,8 @@ class RunScriptTest {
         return e.intents().getFirst().intent();
     }
 
-    // Covers: S0, FR2-FR5, 13.1, I1 (no fault: COMPLETED with one order, read from the merchant; the evidence holds
-    // O, G, L, A and D)
+    // Covers: S0, FR2-FR5, 13.1, I1, I2, I3, I4, I5, I7 (no fault: COMPLETED with one order, read from the merchant;
+    // the evidence holds O, G, L, A and D, and the real run's evidence passes every check of m4-plan section 5)
     @Test
     void s0_threeRuns_completeWithOneOrderEach() {
         for (int run = 0; run < 3; run++) {
@@ -90,10 +94,11 @@ class RunScriptTest {
         // The profile fetch (/.well-known/ucp) is outside the pattern; every UCP request was refused.
         assertThat(down.proxyLog()).filteredOn(l -> UCP.matches(l.path())).isNotEmpty()
                 .allSatisfy(l -> assertThat(l.forwarded()).isFalse());
+        assertPassesEveryCheck(down);
         assertCleanS0(script.run(Scenarios.S0, 2, 4002), 2);
     }
 
-    private static void assertCleanS0(RunEvidence e, int run) {
+    private void assertCleanS0(RunEvidence e, int run) {
         assertThat(e.aborted()).as("run %d", run).isEmpty();
         PurchaseIntent intent = onlyIntent(e);
         assertThat(intent.state()).isEqualTo(IntentState.COMPLETED);
@@ -120,6 +125,12 @@ class RunScriptTest {
         assertThat(e.intents().getFirst().events()).isNotEmpty();
         assertThat(e.intents().getFirst().approvalRows()).hasSize(1);
         assertThat(e.timeToTerminal()).isPresent();
+        assertPassesEveryCheck(e);
+    }
+
+    /** Every check of m4-plan section 5 on the run's own evidence. */
+    private void assertPassesEveryCheck(RunEvidence e) {
+        assertThat(Checks.run(e, checks).all()).as("%s run %d", e.scenarioId(), e.run()).isEmpty();
     }
 
     // Covers: S4, I1, FR3 (the same proposal twice, one after the other and then concurrently: one intent, one create
@@ -136,6 +147,7 @@ class RunScriptTest {
             assertThat(onlyIntent(e).state()).isEqualTo(IntentState.COMPLETED);
             assertThat(e.orders()).hasSize(1);
             assertThat(requests(e, "POST", CREATE)).extracting(l -> l.idempotencyKey().orElseThrow()).hasSize(1);
+            assertPassesEveryCheck(e);
         }
     }
 
@@ -152,5 +164,6 @@ class RunScriptTest {
         assertThat(e.proxyLog()).noneMatch(l -> UNDER_SESSIONS.matches(l.path()) || CREATE.matches(l.path()));
         assertThat(e.orders()).isEmpty();
         assertThat(e.approvals()).isEmpty();
+        assertPassesEveryCheck(e);
     }
 }

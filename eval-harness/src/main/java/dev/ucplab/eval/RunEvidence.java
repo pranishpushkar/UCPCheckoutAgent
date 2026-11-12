@@ -1,6 +1,7 @@
 package dev.ucplab.eval;
 
 import dev.ucplab.core.approval.ApprovalRecord;
+import dev.ucplab.core.identity.UserId;
 import dev.ucplab.core.intent.IntentEvent;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.MerchantAttempt;
@@ -19,6 +20,7 @@ import java.util.Optional;
  * front of it; A ({@link #approvals}) is the approver's own log; D ({@link #intents}) is what the agent persisted, used
  * only for the expected state, attribution and I4.
  *
+ * @param owner the user the harness signed in as for this run: the only user who may decide its approvals (I3, I10)
  * @param proposed the intent id each {@code propose} call returned, in call order
  * @param aborted why the run was aborted, if it was; an aborted run fails every check
  */
@@ -27,6 +29,7 @@ public record RunEvidence(
         int run,
         long seed,
         int lane,
+        UserId owner,
         Optional<String> aborted,
         List<IntentId> proposed,
         List<Persisted> intents,
@@ -50,6 +53,7 @@ public record RunEvidence(
 
     public RunEvidence {
         Objects.requireNonNull(scenarioId, "scenarioId");
+        Objects.requireNonNull(owner, "owner");
         Objects.requireNonNull(aborted, "aborted");
         proposed = List.copyOf(proposed);
         intents = List.copyOf(intents);

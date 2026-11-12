@@ -128,7 +128,7 @@ public final class RunScript {
         }
         List<LogEntry> log = lane.proxy().log(startSeq);
         lane.proxyLogMark();
-        return new RunEvidence(scenario.id(), run, seed, lane.index(), aborted, proposed, persisted, orders, sessions,
+        return new RunEvidence(scenario.id(), run, seed, lane.index(), user, aborted, proposed, persisted, orders, sessions,
                 log, decisions, startedAt, terminalSeenAt);
     }
 
