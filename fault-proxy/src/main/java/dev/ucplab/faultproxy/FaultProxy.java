@@ -240,9 +240,27 @@ public final class FaultProxy implements AutoCloseable {
                 : Optional.empty();
         long seq = log.open(method, rawPath, header(ex, "Request-Id"), header(ex, "Idempotency-Key"), bodyHmac(body),
                 fired.map(r -> r.action().type()), fired.map(Rule::id)).seq();
-        HttpRequest request = upstreamRequest(ex, method, rawPath, rawQuery, body);
-        // Every path that returns without sending a reply leaves handle() to close the exchange, which the client sees
-        // as the connection ending with no answer (§12 implementation note).
+        try {
+            act(ex, seq, fired, upstreamRequest(ex, method, rawPath, rawQuery, body));
+        } catch (RuntimeException e) {
+            // A bug in the proxy must not look like a fault the rules asked for: answer 500 if nothing was sent yet.
+            if (ex.getResponseCode() == -1) {
+                try {
+                    respond(ex, 500, "{\"error\":\"proxy_error\"}");
+                } catch (IOException gone) {
+                    log.update(seq, LogEntry::withClientGone);
+                }
+            }
+        } finally {
+            // The last thing the proxy does for this request: close the exchange (with no reply, if none was sent,
+            // which the client sees as the connection ending with no answer), then mark the entry settled.
+            ex.close();
+            log.update(seq, LogEntry::withSettled);
+        }
+    }
+
+    /** Runs the fired rule's action, or plain forwarding when no rule fired. */
+    private void act(HttpExchange ex, long seq, Optional<Rule> fired, HttpRequest request) {
         try {
             if (fired.isEmpty()) {
                 sendReply(ex, seq, forward(seq, request, true));

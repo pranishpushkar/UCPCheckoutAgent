@@ -30,7 +30,7 @@ final class RequestLog {
                   Optional<String> bodyHmac, Optional<String> action, Optional<String> ruleId) {
         long n = seq.incrementAndGet();
         LogEntry entry = new LogEntry(n, clock.instant(), method, path, requestId, idempotencyKey, bodyHmac, 0,
-                OptionalInt.empty(), action, ruleId, false, false);
+                OptionalInt.empty(), action, ruleId, false, false, false);
         entries.put(n, entry);
         entries.remove(n - CAPACITY);
         return entry;

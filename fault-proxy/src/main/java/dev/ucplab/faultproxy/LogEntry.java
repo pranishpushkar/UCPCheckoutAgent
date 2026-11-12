@@ -15,11 +15,14 @@ import java.util.OptionalInt;
  * <p>{@code forwards} counts the copies the proxy sent to the merchant (0, 1, or 2 for {@code duplicate_request}), and
  * {@code forwarded} is {@code forwards > 0}. A copy counts once it is handed to the HTTP client, so a copy that could
  * not reach the merchant is counted and also flagged {@code upstreamError}.
+ *
+ * <p>{@code settled} turns true exactly once, after the last thing the proxy does for the request (§12): until then
+ * the request may still reach the merchant or the client.
  */
 public record LogEntry(long seq, Instant at, String method, String path, Optional<String> requestId,
                        Optional<String> idempotencyKey, Optional<String> bodyHmac, int forwards,
                        OptionalInt merchantStatus, Optional<String> action, Optional<String> ruleId,
-                       boolean upstreamError, boolean clientGone) {
+                       boolean upstreamError, boolean clientGone, boolean settled) {
 
     public LogEntry {
         Objects.requireNonNull(at, "at");
@@ -42,22 +45,30 @@ public record LogEntry(long seq, Instant at, String method, String path, Optiona
 
     LogEntry withForward() {
         return new LogEntry(seq, at, method, path, requestId, idempotencyKey, bodyHmac, forwards + 1, merchantStatus,
-                action, ruleId, upstreamError, clientGone);
+                action, ruleId, upstreamError, clientGone, settled);
     }
 
     LogEntry withMerchantStatus(int status) {
         return new LogEntry(seq, at, method, path, requestId, idempotencyKey, bodyHmac, forwards,
-                OptionalInt.of(status), action, ruleId, upstreamError, clientGone);
+                OptionalInt.of(status), action, ruleId, upstreamError, clientGone, settled);
     }
 
     LogEntry withUpstreamError() {
         return new LogEntry(seq, at, method, path, requestId, idempotencyKey, bodyHmac, forwards, merchantStatus,
-                action, ruleId, true, clientGone);
+                action, ruleId, true, clientGone, settled);
     }
 
     LogEntry withClientGone() {
         return new LogEntry(seq, at, method, path, requestId, idempotencyKey, bodyHmac, forwards, merchantStatus,
-                action, ruleId, upstreamError, true);
+                action, ruleId, upstreamError, true, settled);
+    }
+
+    LogEntry withSettled() {
+        if (settled) {
+            throw new IllegalStateException("entry " + seq + " is already settled");
+        }
+        return new LogEntry(seq, at, method, path, requestId, idempotencyKey, bodyHmac, forwards, merchantStatus,
+                action, ruleId, upstreamError, clientGone, true);
     }
 
     /** The JSON form served by {@code GET /_proxy/log}; absent values are JSON {@code null}. */
@@ -77,6 +88,7 @@ public record LogEntry(long seq, Instant at, String method, String path, Optiona
         m.put("ruleId", orNull(ruleId));
         m.put("upstreamError", upstreamError);
         m.put("clientGone", clientGone);
+        m.put("settled", settled);
         return m;
     }
 

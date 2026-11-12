@@ -265,7 +265,8 @@ class FaultProxyTest extends ProxyTestBase {
         Map<String, Object> entry = (Map<String, Object>) ((List<?>) parsed).getFirst();
         assertThat(entry.keySet()).containsExactly("seq", "at", "method", "path", "requestId", "idempotencyKey",
                 "bodyHmac", "forwarded", "forwards", "merchantStatus", "action", "ruleId", "upstreamError",
-                "clientGone");
+                "clientGone", "settled");
+        assertThat(entry.get("settled")).isEqualTo(true);
         assertThat(entry.get("seq")).isEqualTo(1L);
         assertThat(entry.get("bodyHmac")).isEqualTo(Json.NULL);
         assertThat(entry.get("merchantStatus")).isEqualTo(200L);
