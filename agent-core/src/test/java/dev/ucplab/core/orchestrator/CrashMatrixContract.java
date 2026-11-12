@@ -108,7 +108,7 @@ abstract class CrashMatrixContract {
     }
 
     /** I1, I3, I4, I5, I7 and the cancel rule of 7.6, read from the merchant's records and the stores. */
-    void assertInvariants(CrashHarness h, PurchaseIntent intent) {
+    static void assertInvariants(CrashHarness h, PurchaseIntent intent) {
         // The shared checks of the property tests (14, level 2), over the merchant's own records: I1 one order, I4 no
         // create or other session after the first complete, I5 the intent drained to a terminal state, I7 one key and
         // one body per approval. The checks below read the stores as well.
