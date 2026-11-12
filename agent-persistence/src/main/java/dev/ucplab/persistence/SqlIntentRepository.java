@@ -35,6 +35,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -347,9 +348,11 @@ public final class SqlIntentRepository implements IntentRepository {
     }
 
     @Override
-    public List<PurchaseIntent> claimRecoverable(String owner, Duration lease, int limit) {
+    public List<PurchaseIntent> claimRecoverable(
+            String owner, Duration lease, int limit, Set<IntentId> exclude) {
         Objects.requireNonNull(owner, "owner");
         Objects.requireNonNull(lease, "lease");
+        Objects.requireNonNull(exclude, "exclude");
         if (limit < 1) {
             throw new IllegalArgumentException("limit must be at least 1: " + limit);
         }
@@ -358,12 +361,20 @@ public final class SqlIntentRepository implements IntentRepository {
             String nowText = SqlTimes.format(now);
             String untilText = SqlTimes.format(now.plus(lease));
             List<String> ids = new ArrayList<>();
+            List<String> excluded = exclude.stream().map(IntentId::value).toList();
+            // Excluded intents are left out in the SQL, so they do not count against the limit.
+            String notExcluded = excluded.isEmpty() ? ""
+                    : " AND id NOT IN (" + String.join(", ", java.util.Collections.nCopies(excluded.size(), "?")) + ")";
             try (PreparedStatement s = c.prepareStatement(
-                    "SELECT id FROM purchase_intent WHERE (" + RECOVERABLE_FILTER + ") AND " + LEASE_FREE
+                    "SELECT id FROM purchase_intent WHERE (" + RECOVERABLE_FILTER + ") AND " + LEASE_FREE + notExcluded
                             + " ORDER BY created_at, id LIMIT ?")) {
-                s.setString(1, owner);
-                s.setString(2, nowText);
-                s.setInt(3, limit);
+                int n = 1;
+                s.setString(n++, owner);
+                s.setString(n++, nowText);
+                for (String id : excluded) {
+                    s.setString(n++, id);
+                }
+                s.setInt(n, limit);
                 try (ResultSet r = s.executeQuery()) {
                     while (r.next()) {
                         ids.add(r.getString(1));

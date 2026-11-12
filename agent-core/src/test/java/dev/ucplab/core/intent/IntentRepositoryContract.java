@@ -563,6 +563,26 @@ public abstract class IntentRepositoryContract {
         assertThat(repo.claimRecoverable(W2, LEASE, 10)).isEmpty();
     }
 
+    // Covers: 7.6 (excluded ids are left out of a claim and do not count against its limit; their lease is untouched)
+    @Test
+    void claimRecoverable_leavesOutExcludedIntents_withoutCountingThemAgainstTheLimit() {
+        for (int i = 1; i <= 3; i++) {
+            repo.insert(proposed("i" + i, ALICE, "d" + i).withState(IntentState.QUOTING, clock.instant()));
+            clock.advance(Duration.ofSeconds(1));
+        }
+        PurchaseIntent first = repo.claimRecoverable(W1, LEASE, 1).get(0);
+        assertThat(first.id().value()).isEqualTo("i1");
+        clock.advance(Duration.ofSeconds(5));
+
+        List<PurchaseIntent> second = repo.claimRecoverable(W1, LEASE, 1, java.util.Set.of(new IntentId("i1")));
+
+        assertThat(second).extracting(i -> i.id().value()).containsExactly("i2");
+        PurchaseIntent excluded = repo.findForSystem(new IntentId("i1")).orElseThrow();
+        assertThat(excluded.leaseUntil()).as("not renewed by the claim").isEqualTo(first.leaseUntil());
+        assertThat(repo.claimRecoverable(W1, LEASE, 5, java.util.Set.of(new IntentId("i1"), new IntentId("i2"))))
+                .extracting(i -> i.id().value()).containsExactly("i3");
+    }
+
     // Covers: 7.6 (the limit caps a claim, oldest first)
     @Test
     void claimRecoverable_respectsLimit_oldestFirst() {

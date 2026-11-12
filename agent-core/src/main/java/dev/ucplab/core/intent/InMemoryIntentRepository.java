@@ -245,8 +245,10 @@ public final class InMemoryIntentRepository implements IntentRepository {
     }
 
     @Override
-    public List<PurchaseIntent> claimRecoverable(String owner, Duration lease, int limit) {
+    public List<PurchaseIntent> claimRecoverable(
+            String owner, Duration lease, int limit, Set<IntentId> exclude) {
         Objects.requireNonNull(owner, "owner");
+        Objects.requireNonNull(exclude, "exclude");
         Objects.requireNonNull(lease, "lease");
         if (limit < 1) {
             throw new IllegalArgumentException("limit must be at least 1: " + limit);
@@ -256,6 +258,7 @@ public final class InMemoryIntentRepository implements IntentRepository {
             Instant now = clock.instant();
             Instant until = now.plus(lease);
             List<PurchaseIntent> candidates = intents.values().stream()
+                    .filter(i -> !exclude.contains(i.id()))
                     .filter(i -> RECOVERABLE.contains(i.state()) || i.cancelPending())
                     .filter(i -> i.leaseOwner().equals(Optional.of(owner))
                             || i.leaseUntil().map(t -> t.isBefore(now)).orElse(true))

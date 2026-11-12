@@ -43,6 +43,8 @@ class RecoveryWorkerWaitTest {
     /** Answers every advance with a not-idle step due at a scripted time, and counts the calls. */
     private final class Scripted implements Orchestrator {
         int advances;
+        final List<IntentId> advanced = new ArrayList<>();
+        final java.util.Set<IntentId> finishAtOnce = new java.util.HashSet<>();
         Optional<Instant> next = Optional.empty();
         boolean idle;
         int idleAfter = Integer.MAX_VALUE;
@@ -55,7 +57,8 @@ class RecoveryWorkerWaitTest {
         @Override
         public StepResult advance(IntentId id) {
             advances++;
-            boolean done = idle || advances > idleAfter;
+            advanced.add(id);
+            boolean done = idle || advances > idleAfter || finishAtOnce.contains(id);
             return new StepResult(id, RECONCILING, RECONCILING, done, done ? Optional.empty() : next);
         }
 
@@ -177,5 +180,59 @@ class RecoveryWorkerWaitTest {
         assertThat(lab.intent(id).state()).isEqualTo(COMPLETED);
         assertThat(lab.merchant.orders()).hasSize(1);
         assertThat(sleeps).allSatisfy(d -> assertThat(d).isLessThanOrEqualTo(shortLease.dividedBy(2)));
+    }
+
+    private IntentId insertReconciling(String id, Instant createdAt) {
+        lab.intents.insert(PurchaseIntent.proposed(new IntentId(id), ALICE, SHOP, "dedupe-" + id,
+                List.of(new ProposedLine("item_123", 1)), "alice@example.com", createdAt).withState(RECONCILING, createdAt));
+        return new IntentId(id);
+    }
+
+    // Covers: 7.6 (parked intents that are not due cannot fill the pass limit: with more parked intents than the limit,
+    // a new recoverable intent is still advanced in the pass it appears in)
+    @Test
+    void parkedIntents_doNotStarveANewRecoverableIntent() {
+        Scripted orchestrator = new Scripted();
+        orchestrator.next = Optional.of(T0.plusSeconds(25));
+        RecoveryWorker worker = new RecoveryWorker(lab.intents, new InMemoryRecoveryScan(lab.intents, lab.approvals),
+                orchestrator, lab.clock, d -> {
+                    sleeps.add(d);
+                    lab.clock.advance(d);
+                }, Runnable::run, new RecoveryConfig(Duration.ofSeconds(5), LEASE, 2, 500), "worker-r");
+        IntentId r1 = insertReconciling("r-1", T0);
+        IntentId r2 = insertReconciling("r-2", T0.plusMillis(1));
+        IntentId r3 = insertReconciling("r-3", T0.plusMillis(2));
+        worker.runOnce();
+        lab.clock.advance(Duration.ofSeconds(1));
+        worker.runOnce();
+        assertThat(orchestrator.advanced).as("three parked, limit two").containsExactly(r1, r2, r3);
+
+        IntentId fresh = insertReconciling("r-4", lab.clock.instant());
+        orchestrator.finishAtOnce.add(fresh);
+        lab.clock.advance(Duration.ofSeconds(1));
+        worker.runOnce();
+
+        assertThat(orchestrator.advanced).as("the new intent went through in its own pass")
+                .containsExactly(r1, r2, r3, fresh);
+        assertThat(sleeps).isEmpty();
+    }
+
+    // Covers: 7.6 (a parked intent keeps its lease while it is left out of the claim)
+    @Test
+    void parkedIntents_stillHaveTheirLeaseRenewed_whileExcludedFromTheClaim() {
+        Scripted orchestrator = new Scripted();
+        orchestrator.next = Optional.of(T0.plusSeconds(100));
+        IntentId id = insertReconciling("r-1", T0);
+        RecoveryWorker worker = worker(orchestrator, LEASE);
+        worker.runOnce();
+
+        for (int i = 0; i < 12; i++) {
+            lab.clock.advance(Duration.ofSeconds(5));
+            worker.runOnce();
+        }
+
+        assertThat(lab.intent(id).leaseOwner()).contains("worker-r");
+        assertThat(lab.intent(id).leaseUntil()).hasValueSatisfying(t -> assertThat(t).isAfter(lab.clock.instant()));
+        assertThat(orchestrator.advances).isEqualTo(1);
     }
 }

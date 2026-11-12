@@ -91,7 +91,8 @@ public final class RecoveryWorker {
     public List<IntentId> runOnce() {
         // The scan takes no lease, so it goes first: a failure there strands nothing that was claimed.
         List<IntentId> due = scan.approvalsDue(clock.instant(), config.limit());
-        List<PurchaseIntent> claimed = intents.claimRecoverable(workerId, config.lease(), config.limit());
+        Set<IntentId> parked = renewParked();
+        List<PurchaseIntent> claimed = intents.claimRecoverable(workerId, config.lease(), config.limit(), parked);
         List<IntentId> picked = new ArrayList<>();
         for (PurchaseIntent intent : claimed) {
             picked.add(intent.id());
@@ -102,7 +103,6 @@ public final class RecoveryWorker {
                 picked.add(id);
             }
         }
-        notBefore.keySet().retainAll(picked);
         Instant now = clock.instant();
         List<IntentId> started = new ArrayList<>();
         for (int i = 0; i < picked.size(); i++) {
@@ -135,6 +135,28 @@ public final class RecoveryWorker {
             }
         }
         return List.copyOf(started);
+    }
+
+    /**
+     * Renews the lease of each parked intent that is not due and returns them, so the claim can leave them out: they
+     * would otherwise fill the pass limit pass after pass and keep other recoverable intents from being picked up. A
+     * parked intent whose lease is gone is forgotten; the claim finds it again like any other. Due ones are not
+     * returned: the claim takes them, and the pass drives them.
+     */
+    private Set<IntentId> renewParked() {
+        Instant now = clock.instant();
+        Set<IntentId> notDue = new java.util.HashSet<>();
+        for (Map.Entry<IntentId, Instant> e : notBefore.entrySet()) {
+            if (!now.isBefore(e.getValue())) {
+                continue;
+            }
+            if (intents.renewLease(e.getKey(), workerId, config.lease())) {
+                notDue.add(e.getKey());
+            } else {
+                notBefore.remove(e.getKey(), e.getValue());
+            }
+        }
+        return Set.copyOf(notDue);
     }
 
     private void drive(IntentId id, boolean leased) {

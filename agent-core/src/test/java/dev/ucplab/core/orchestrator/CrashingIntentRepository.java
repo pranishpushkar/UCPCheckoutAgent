@@ -115,8 +115,9 @@ final class CrashingIntentRepository implements IntentRepository {
     }
 
     @Override
-    public List<PurchaseIntent> claimRecoverable(String owner, Duration lease, int limit) {
-        return call(Op.CLAIM_RECOVERABLE, () -> delegate.claimRecoverable(owner, lease, limit));
+    public List<PurchaseIntent> claimRecoverable(
+            String owner, Duration lease, int limit, java.util.Set<IntentId> exclude) {
+        return call(Op.CLAIM_RECOVERABLE, () -> delegate.claimRecoverable(owner, lease, limit, exclude));
     }
 
     @Override

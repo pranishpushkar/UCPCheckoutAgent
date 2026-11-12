@@ -4,6 +4,7 @@ import dev.ucplab.core.identity.UserId;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Storage port for intents, events and merchant attempts (Appendix B [CONTRACT], sections 7.3, 7.6, 7.8, 18.1).
@@ -89,7 +90,16 @@ public interface IntentRepository {
      * how a worker that parked an intent for a long wait (7.5) renews it on the next pass. The intents are those in QUOTING,
      * APPROVED, COMPLETING or RECONCILING, and any intent with {@code cancel_pending} set. AWAITING_APPROVAL intents with an expired approval are found by {@link RecoveryScan}.
      */
-    List<PurchaseIntent> claimRecoverable(String owner, Duration lease, int limit);
+    default List<PurchaseIntent> claimRecoverable(String owner, Duration lease, int limit) {
+        return claimRecoverable(owner, lease, limit, Set.of());
+    }
+
+    /**
+     * {@link #claimRecoverable(String, Duration, int)} leaving out the intents in {@code exclude}: they are neither
+     * claimed nor renewed nor counted against {@code limit}. A worker passes the intents it has parked until a later
+     * time (7.5), so intents that are not due cannot fill the limit and keep others from being picked up.
+     */
+    List<PurchaseIntent> claimRecoverable(String owner, Duration lease, int limit, Set<IntentId> exclude);
 
     /** False means the lease is lost and the caller must stop working on the intent (7.6). */
     boolean renewLease(IntentId id, String owner, Duration lease);

@@ -109,8 +109,9 @@ final class SkewingIntentRepository implements IntentRepository {
     }
 
     @Override
-    public List<PurchaseIntent> claimRecoverable(String owner, Duration lease, int limit) {
-        return delegate.claimRecoverable(owner, lease, limit);
+    public List<PurchaseIntent> claimRecoverable(
+            String owner, Duration lease, int limit, java.util.Set<IntentId> exclude) {
+        return delegate.claimRecoverable(owner, lease, limit, exclude);
     }
 
     @Override
