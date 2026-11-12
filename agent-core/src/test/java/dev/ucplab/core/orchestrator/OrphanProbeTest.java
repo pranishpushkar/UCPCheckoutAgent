@@ -144,7 +144,7 @@ class OrphanProbeTest {
         assertThat(lab.merchant.log()).isEmpty();
         assertThat(attempts(base.id(), AttemptOp.CREATE)).hasSize(1);
         assertThat(lab.intent(base.id()).cancelPending()).isFalse();
-        assertThat(lab.intents.events(base.id())).anyMatch(e -> e.type().equals("orphan_probe_body_mismatch"));
+        assertThat(lab.events(base.id())).anyMatch(e -> e.type().equals("orphan_probe_body_mismatch"));
     }
 
     // Covers: 7.6 (at most 3 probe attempts, then stop with an operator event; no complete, orders stay 0)
@@ -159,7 +159,7 @@ class OrphanProbeTest {
         assertThat(calls(MerchantCall.CREATE)).isEqualTo(4);
         assertThat(lab.intent(id).cancelPending()).isFalse();
         assertThat(lab.intent(id).sessionId()).isEmpty();
-        assertThat(lab.intents.events(id)).anyMatch(e -> e.type().equals("orphan_probe_gave_up"));
+        assertThat(lab.events(id)).anyMatch(e -> e.type().equals("orphan_probe_gave_up"));
         assertThat(lab.drive(w, id)).isEqualTo(FAILED_NOT_CHARGED);
         assertThat(calls(MerchantCall.CREATE)).isEqualTo(4);
         assertThat(attempts(id, AttemptOp.CANCEL)).isEmpty();
@@ -249,7 +249,7 @@ class OrphanProbeTest {
                 .containsExactly(AttemptStatus.UNCERTAIN, AttemptStatus.RESPONDED);
         assertThat(lab.intent(id).cancelPending()).isFalse();
         assertThat(lab.intent(id).sessionId()).isEmpty();
-        assertThat(lab.intents.events(id)).anyMatch(e -> e.type().equals("orphan_probe_no_session"))
+        assertThat(lab.events(id)).anyMatch(e -> e.type().equals("orphan_probe_no_session"))
                 .noneMatch(e -> e.type().equals("orphan_probe_gave_up"));
         assertThat(attempts(id, AttemptOp.CANCEL)).isEmpty();
     }

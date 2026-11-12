@@ -16,6 +16,8 @@ import dev.ucplab.core.identity.UserId;
 import dev.ucplab.core.intent.InMemoryIntentRepository;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentRepository;
+import dev.ucplab.core.intent.InMemoryRecoveryScan;
+import dev.ucplab.core.intent.RecoveryScan;
 import dev.ucplab.core.intent.IntentState;
 import dev.ucplab.core.intent.ProposalResult;
 import dev.ucplab.core.intent.ProposedLine;
@@ -63,8 +65,9 @@ final class Lab {
     };
 
     final MutableClock clock = new MutableClock(T0);
-    final InMemoryIntentRepository intents = new InMemoryIntentRepository(clock);
-    final InMemoryApprovalRepository approvals = new InMemoryApprovalRepository();
+    final IntentRepository intents;
+    final ApprovalRepository approvals;
+    final RecoveryScan scan;
     final FaultyMerchantModel merchant;
     final SequentialIdGenerator ids = new SequentialIdGenerator("id");
     final OrchestratorConfig config;
@@ -80,6 +83,26 @@ final class Lab {
 
     /** A lab whose merchant runs in {@code mode} (14.1 "Merchant strictness"). */
     Lab(OrchestratorConfig config, FaultyMerchantModel.Mode mode) {
+        this(config, mode, Lab::inMemoryStores);
+    }
+
+    /** The in-memory store: what every Lab used before an adapter could be plugged in. */
+    static CrashHarness.Stores inMemoryStores(MutableClock clock) {
+        InMemoryIntentRepository intents = new InMemoryIntentRepository(clock);
+        InMemoryApprovalRepository approvals = new InMemoryApprovalRepository();
+        return new CrashHarness.Stores(intents, approvals, new InMemoryRecoveryScan(intents, approvals));
+    }
+
+    /**
+     * A lab over any adapter: {@code storeFactory} builds the repositories and the recovery scan over this lab's clock
+     * (the SQL property tests pass a SQLite store).
+     */
+    Lab(OrchestratorConfig config, FaultyMerchantModel.Mode mode,
+            java.util.function.Function<MutableClock, CrashHarness.Stores> storeFactory) {
+        CrashHarness.Stores stores = storeFactory.apply(clock);
+        this.intents = stores.intents();
+        this.approvals = stores.approvals();
+        this.scan = stores.scan();
         this.config = config;
         this.merchant = new FaultyMerchantModel(SHOP, mode, clock, new SequentialIdGenerator("m"));
     }
@@ -169,6 +192,14 @@ final class Lab {
     void waitUntilNextAttempt(StepResult r) {
         r.nextAttemptAt().filter(t -> t.isAfter(clock.instant()))
                 .ifPresent(t -> clock.advance(Duration.between(clock.instant(), t)));
+    }
+
+    /** The intent's event log: only the in-memory repository exposes it. */
+    List<dev.ucplab.core.intent.IntentEvent> events(IntentId id) {
+        if (intents instanceof InMemoryIntentRepository memory) {
+            return memory.events(id);
+        }
+        throw new UnsupportedOperationException("events are read through the in-memory repository only");
     }
 
     PurchaseIntent intent(IntentId id) {

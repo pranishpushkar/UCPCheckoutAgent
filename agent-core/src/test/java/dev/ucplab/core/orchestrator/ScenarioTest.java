@@ -87,7 +87,7 @@ class ScenarioTest {
         assertThat(order.totalMinor()).isEqualTo(5400);
         assertThat(lab.intent(id).orderId()).contains(order.orderId());
         assertThat(lab.approvals.findLatestForSystem(id).orElseThrow().status()).isEqualTo(ApprovalStatus.CONSUMED);
-        assertThat(lab.intents.events(id)).filteredOn(e -> e.type().equals("transition"))
+        assertThat(lab.events(id)).filteredOn(e -> e.type().equals("transition"))
                 .extracting(e -> e.payloadJson().replaceAll(".*\"to\":\"([A-Z_]+)\".*", "$1"))
                 .containsSubsequence("QUOTING", "AWAITING_APPROVAL", "APPROVED", "COMPLETING", "COMPLETED");
     }
@@ -136,7 +136,7 @@ class ScenarioTest {
         lab.assertOrderMatchesLatestApproval(id);
         assertThat(lab.merchant.delivered(MerchantCall.COMPLETE)).isEqualTo(1);
         assertThat(completes(id)).hasSize(1);
-        assertThat(lab.intents.events(id)).anySatisfy(e -> assertThat(e.payloadJson())
+        assertThat(lab.events(id)).anySatisfy(e -> assertThat(e.payloadJson())
                 .contains("\"event\":\"OBSERVED_COMPLETE_IN_PROGRESS\""));
     }
 
@@ -343,7 +343,7 @@ class ScenarioTest {
             step = worker.orchestrator().advance(id);
             assertThat(completes(id)).as("complete attempts at %s", lab.clock.instant()).hasSize(1);
             assertThat(step.after()).isNotEqualTo(COMPLETING);
-            sawReadyForComplete |= lab.intents.events(id).stream()
+            sawReadyForComplete |= lab.events(id).stream()
                     .anyMatch(e -> e.payloadJson().contains("\"guard\":\"QUIET_PERIOD_NOT_ELAPSED\""));
         }
 

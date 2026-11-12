@@ -35,7 +35,7 @@ class ApprovalCheckBeforeSendTest {
         assertThat(lab.intents.attempts(id)).noneMatch(a -> a.op() == AttemptOp.COMPLETE);
         assertThat(lab.merchant.log()).noneMatch(c -> c.call() == MerchantCall.COMPLETE);
         assertThat(lab.merchant.orders()).isEmpty();
-        assertThat(lab.intents.events(id)).anyMatch(e -> e.type().equals("approval_invalid"));
+        assertThat(lab.events(id)).anyMatch(e -> e.type().equals("approval_invalid"));
     }
 
     // Covers: I3, I5, 7.2 (an EXPIRED approval under an APPROVED intent: no attempt, no merchant call, ESCALATED)

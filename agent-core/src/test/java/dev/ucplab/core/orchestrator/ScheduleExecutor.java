@@ -67,11 +67,19 @@ final class ScheduleExecutor {
 
     private final WorkerFactory factory;
     private final FaultyMerchantModel.Mode mode;
+    private final java.util.function.Function<dev.ucplab.core.MutableClock, CrashHarness.Stores> storeFactory;
 
     /** Runs schedules against a merchant in {@code mode} (14.1: every property runs in both modes). */
     ScheduleExecutor(WorkerFactory factory, FaultyMerchantModel.Mode mode) {
+        this(factory, mode, Lab::inMemoryStores);
+    }
+
+    /** The same over the store {@code storeFactory} builds for each schedule's clock (the SQL adapter, M3). */
+    ScheduleExecutor(WorkerFactory factory, FaultyMerchantModel.Mode mode,
+            java.util.function.Function<dev.ucplab.core.MutableClock, CrashHarness.Stores> storeFactory) {
         this.factory = factory;
         this.mode = mode;
+        this.storeFactory = storeFactory;
     }
 
     Observations run(Schedule schedule) {
@@ -88,7 +96,7 @@ final class ScheduleExecutor {
     }
 
     private final class Execution {
-        private final Lab lab = new Lab(OrchestratorConfig.defaults(), mode);
+        private final Lab lab = new Lab(OrchestratorConfig.defaults(), mode, storeFactory);
         private final AtomicInteger seq = new AtomicInteger();
         private final ProbeGateway probe = new ProbeGateway(lab.merchant, lab.clock, seq);
         private final Map<Integer, IntentId> slots = new HashMap<>();

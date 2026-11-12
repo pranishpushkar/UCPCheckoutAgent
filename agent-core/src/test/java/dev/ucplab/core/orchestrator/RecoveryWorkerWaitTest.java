@@ -69,7 +69,7 @@ class RecoveryWorkerWaitTest {
     }
 
     private RecoveryWorker worker(Orchestrator orchestrator, Duration lease) {
-        return new RecoveryWorker(lab.intents, new InMemoryRecoveryScan(lab.intents, lab.approvals), orchestrator,
+        return new RecoveryWorker(lab.intents, lab.scan, orchestrator,
                 lab.clock, d -> {
                     sleeps.add(d);
                     lab.clock.advance(d);
@@ -166,7 +166,7 @@ class RecoveryWorkerWaitTest {
         lab.clock.advance(lab.config.lease().plusSeconds(1));
         Lab.Worker w = lab.worker("worker-r");
         Duration shortLease = Duration.ofMillis(200);
-        RecoveryWorker worker = new RecoveryWorker(lab.intents, new InMemoryRecoveryScan(lab.intents, lab.approvals),
+        RecoveryWorker worker = new RecoveryWorker(lab.intents, lab.scan,
                 w.orchestrator(), lab.clock, d -> {
                     sleeps.add(d);
                     lab.clock.advance(d);
@@ -194,7 +194,7 @@ class RecoveryWorkerWaitTest {
     void parkedIntents_doNotStarveANewRecoverableIntent() {
         Scripted orchestrator = new Scripted();
         orchestrator.next = Optional.of(T0.plusSeconds(25));
-        RecoveryWorker worker = new RecoveryWorker(lab.intents, new InMemoryRecoveryScan(lab.intents, lab.approvals),
+        RecoveryWorker worker = new RecoveryWorker(lab.intents, lab.scan,
                 orchestrator, lab.clock, d -> {
                     sleeps.add(d);
                     lab.clock.advance(d);

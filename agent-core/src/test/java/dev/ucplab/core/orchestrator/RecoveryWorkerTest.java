@@ -106,7 +106,7 @@ class RecoveryWorkerTest {
             String id, MerchantGateway gateway, java.util.concurrent.Executor executor, RecoveryConfig config,
             Tracker own) {
         Lab.Worker w = lab.worker(id, gateway);
-        return new RecoveryWorker(lab.intents, new InMemoryRecoveryScan(lab.intents, lab.approvals),
+        return new RecoveryWorker(lab.intents, lab.scan,
                 new Counting(w.orchestrator(), own), lab.clock, d -> {
                     sleeps.add(d);
                     lab.clock.advance(d);
