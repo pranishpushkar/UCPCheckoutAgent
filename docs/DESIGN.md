@@ -574,6 +574,7 @@ CREATE TABLE merchant_attempt (
 CREATE TABLE approval (
   id TEXT PRIMARY KEY,
   intent_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,                 -- order of insertion within the intent, assigned as MAX(seq) + 1 inside the writing transaction; the newest approval has the highest seq
   user_id TEXT NOT NULL,                -- must equal the intent's owner (I10)
   snapshot_json TEXT NOT NULL,
   snapshot_hash TEXT NOT NULL,
@@ -581,7 +582,8 @@ CREATE TABLE approval (
   expires_at TEXT NOT NULL,
   status TEXT NOT NULL,                 -- PENDING, APPROVED, REJECTED, EXPIRED, CONSUMED
   decided_at TEXT,
-  decided_by TEXT
+  decided_by TEXT,
+  UNIQUE (intent_id, seq)
 );
 
 CREATE INDEX ix_intent_user ON purchase_intent(user_id, created_at);
