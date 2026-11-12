@@ -17,6 +17,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -153,5 +154,25 @@ class ReportGoldenTest {
         assertThat(r.requireFullProblems()).containsExactly("time scale 4, not 1",
                 "S0 has 1 runs, fewer than 200", "the commit is unknown", "the working tree has uncommitted changes");
         assertThat(r.reduced()).isTrue();
+    }
+
+    // Covers: 13.5, m4-plan section 4 (a reduced report whose rows ran different numbers of times names the rows with
+    // fewer runs in its first line and in its configuration)
+    @Test
+    void reducedBanner_rowsWithFewerRuns_namesThem() {
+        List<RunResult> three = new ArrayList<>();
+        for (int run = 0; run < 3; run++) {
+            three.add(clean("S0", run, IntentState.COMPLETED, 9));
+        }
+        Report r = new Report(AT, COMMIT, new EvalConfig(3, TimeScale.of(4), 2, 42, Map.of("S9", 1)), "2026-08-25",
+                RUNTIME, List.of(new ScenarioSummary(Scenarios.S0, three),
+                        new ScenarioSummary(Scenarios.S9, List.of(clean("S9", 0, IntentState.COMPLETED, 9)))));
+
+        assertThat(r.reducedBanner()).isEqualTo("REDUCED: 3 runs per scenario (S9 1), time scale 4 — not an acceptance"
+                + " report");
+        assertThat(ReportMarkdown.write(r).lines().findFirst()).hasValueSatisfying(
+                l -> assertThat(l).contains(r.reducedBanner()));
+        assertThat(ReportMarkdown.write(r)).contains("3 (fewer: S9 1)");
+        assertThat(ReportJson.write(r)).contains("\"fewerRuns\": {").contains("\"S9\": 1");
     }
 }

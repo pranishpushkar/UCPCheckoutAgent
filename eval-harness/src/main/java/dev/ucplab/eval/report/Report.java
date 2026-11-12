@@ -43,7 +43,11 @@ public record Report(Instant generatedAt, CommitInfo commit, EvalConfig config, 
     /** The first line of a reduced report (13.5: a reduced report says so in its first line). */
     public String reducedBanner() {
         int fewest = scenarios.stream().mapToInt(ScenarioSummary::n).min().orElse(0);
-        return "REDUCED: " + fewest + " runs per scenario, time scale " + config.timeScale().k()
+        int most = scenarios.stream().mapToInt(ScenarioSummary::n).max().orElse(0);
+        String fewer = scenarios.stream().filter(s -> s.n() < most).map(s -> s.scenario().id() + " " + s.n())
+                .collect(java.util.stream.Collectors.joining(", "));
+        return "REDUCED: " + (fewest == most ? fewest + " runs per scenario"
+                : most + " runs per scenario (" + fewer + ")") + ", time scale " + config.timeScale().k()
                 + " — not an acceptance report";
     }
 

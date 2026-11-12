@@ -28,7 +28,8 @@ public final class ReportMarkdown {
         line(sb, "Commit", "`" + r.commit().sha() + "` on " + r.commit().branch()
                 + (r.commit().dirty() ? " (dirty: uncommitted changes)" : "") + ", from " + r.commit().source());
         line(sb, "Generated", r.generatedAt().toString());
-        line(sb, "Runs per scenario", Integer.toString(r.config().runsPerScenario()));
+        line(sb, "Runs per scenario", r.config().runsPerScenario() + (r.config().fewerRuns().isEmpty() ? ""
+                : " (fewer: " + r.config().fewerRunsText() + ")"));
         line(sb, "Time scale k", Integer.toString(r.config().timeScale().k()));
         line(sb, "Lanes", Integer.toString(r.config().lanes()));
         line(sb, "Base seed", Long.toString(r.config().baseSeed()));

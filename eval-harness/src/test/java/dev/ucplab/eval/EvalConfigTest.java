@@ -44,4 +44,22 @@ class EvalConfigTest {
         assertThat(Scenarios.seedIndex(Scenarios.S11)).isEqualTo(22);
         assertThat(Scenarios.all()).extracting(Scenarios::seedIndex).doesNotHaveDuplicates();
     }
+
+    // Covers: 13.5, m4-plan section 4 (the reduced run gives S9 and S28 fewer runs; their seeds are the same as in a
+    // full run, and such a configuration is never the acceptance one)
+    @Test
+    void fewerRuns_namedRowsGetTheirCount_andTheConfigIsNotFull() {
+        EvalConfig c = new EvalConfig(200, TimeScale.of(1), 16, 42, java.util.Map.of("S9", 6, "S28", 2));
+
+        assertThat(c.runsOf("S9")).isEqualTo(6);
+        assertThat(c.runsOf("S28")).isEqualTo(2);
+        assertThat(c.runsOf("S0")).isEqualTo(200);
+        assertThat(c.fewerRunsText()).isEqualTo("S28 2, S9 6");
+        assertThat(c.seed(18, 5)).isEqualTo(new EvalConfig(200, TimeScale.of(1), 16, 42).seed(18, 5));
+        assertThat(c.full()).isFalse();
+        assertThatThrownBy(() -> new EvalConfig(20, TimeScale.of(4), 8, 42, java.util.Map.of("S9", 21)))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("S9");
+        assertThatThrownBy(() -> new EvalConfig(20, TimeScale.of(4), 8, 42, java.util.Map.of("S9", 0)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }

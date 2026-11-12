@@ -59,6 +59,9 @@ public final class ReportJson {
     static Map<String, Object> config(Report r) {
         Map<String, Object> c = new LinkedHashMap<>();
         c.put("runsPerScenario", r.config().runsPerScenario());
+        if (!r.config().fewerRuns().isEmpty()) {
+            c.put("fewerRuns", new java.util.TreeMap<String, Object>(r.config().fewerRuns()));
+        }
         c.put("timeScale", r.config().timeScale().k());
         c.put("lanes", r.config().lanes());
         c.put("baseSeed", r.config().baseSeed());

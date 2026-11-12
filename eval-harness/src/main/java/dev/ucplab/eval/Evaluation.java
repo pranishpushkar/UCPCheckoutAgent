@@ -112,7 +112,7 @@ public final class Evaluation {
             if (onlyRun.isPresent()) {
                 tasks.add(new Task(s, onlyRun.getAsInt(), config.seed(index, onlyRun.getAsInt())));
             } else {
-                for (int r = 0; r < config.runsPerScenario(); r++) {
+                for (int r = 0; r < config.runsOf(s.id()); r++) {
                     tasks.add(new Task(s, r, config.seed(index, r)));
                 }
             }
