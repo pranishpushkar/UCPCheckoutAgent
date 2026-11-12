@@ -161,12 +161,12 @@ These are the properties the evaluation checks. Each must be enforced in code an
 | Module | Responsibility | May depend on |
 | --- | --- | --- |
 | `agent-core` | Domain model, state machine, policy, approval, ports | JDK only |
-| `agent-ucp` | `MerchantGateway` over HTTP, failure classification, retries | core. Test scope only: `merchant`, for contract tests. `java.net.http` and core's `CanonicalJson` for HTTP and JSON; no Jackson |
+| `agent-ucp` | `MerchantGateway` over HTTP, failure classification, retries | core. Test scope only: `merchant` and `fault-proxy`, for contract tests. `java.net.http` and core's `CanonicalJson` for HTTP and JSON; no Jackson |
 | `agent-persistence` | SQL repositories, migrations | core |
 | `agent-adk` | LLM runtime, tool definitions, prompts, `ScriptedModel` | core |
 | `agent-service` | Spring Boot wiring, REST API, CLI | all agent modules |
 | `fault-proxy` | Scenario-driven HTTP proxy | JDK only |
-| `eval-harness` | Scenario runner, invariant checks, report | JDK, client libraries |
+| `eval-harness` | Scenario runner, invariant checks, report | JDK, client libraries, `fault-proxy`. Until M6 (no REST API) it embeds the agent: `agent-core`, `agent-ucp`, `agent-persistence`, and `merchant` to start lab merchants in process. Never `agent-adk` or ADK types |
 | `merchant` | System under test | JDK only |
 
 An ArchUnit test must fail the build if `agent-core` imports anything outside `java.*` or `javax.crypto.*`, or if any module other than `agent-adk` imports an ADK type.
@@ -379,7 +379,7 @@ Each crash adds at most one lease period plus one worker period (30 s + 5 s = 35
 
 Lease rules \[CONTRACT\]:
 
-- **Bounded steps.** One `advance` makes at most one merchant request, so it lasts at most the longest request timeout (10 s, section 8.3) plus persistence. Configuration validation fails at startup unless `lease` is at least 2 × the longest request timeout + 5 s (defaults: 30 s against 25 s).
+- **Bounded steps.** One `advance` makes at most one merchant request, so it lasts at most the longest request timeout (10 s, section 8.3) plus persistence. Configuration validation fails at startup unless `lease` is at least 2 × the longest request timeout + 5 s (defaults: 30 s against 25 s). Configuration validation also fails unless the worker period is at most half the lease (defaults: 5 s against 30 s).
 - **Renewal.** Before each `advance`, the worker calls `renewLease`, a conditional UPDATE `WHERE id = ? AND lease_owner = ?`. If no row matches, the worker has lost the lease and stops working on that intent.
 - **Worker id.** The lease owner id is unique per process start and comes from `IdGenerator`; it is never a configured, stable name. With a stable name, a paused process and its restarted successor would share an owner and fencing could not tell them apart.
 - **Fencing.** Every write inside `advance` (attempt row, event, state change) is conditional on both `version` and `lease_owner`. Settling attempts (recording what reconciliation or a same-key answer established) is a fenced write too: `resolveAttempts` takes `expectedVersion` and `leaseOwner` (Appendix B). A worker that paused past its lease, for example in a long GC pause, fails its next write with `StaleVersionException` or `LeaseLostException` and abandons the step.
@@ -684,6 +684,16 @@ A reverse proxy between the agent and the merchant that breaks specific requests
 
 **Admin API:** `POST /_proxy/rules` (replace), `DELETE /_proxy/rules`, `GET /_proxy/log` (list of `{seq, method, path, requestId, forwarded, merchantStatus, action}`).
 
+`GET /_proxy/log?after=<seq>` returns only entries with a larger `seq`. Each entry also carries `at` (arrival time, ISO-8601 UTC), `idempotencyKey` (or null), `bodyHmac` (or null), `forwards` (0, 1 or 2), `ruleId` (or null), and the flags `upstreamError` and `clientGone`. An entry exists from the moment the request arrives and is updated as it is forwarded and answered. Request and response bodies, and every other header, are never logged (I8).
+
+**Body hash \[CONTRACT\].** `bodyHmac` is the hex HMAC-SHA256 of the raw request body under a random 32-byte key generated for each evaluation run (the harness generates it and passes it to every proxy it starts; a standalone proxy generates its own at start-up). The key is held only in memory: it is never logged, written to disk, returned by the admin API or accepted through it. A plain SHA-256 is never used, because mock payment tokens are guessable and an unkeyed hash of a `complete` body would reveal the token. Equal `bodyHmac` values under one key mean byte-identical bodies, which is what I7 needs.
+
+**Matching \[CONTRACT\].** Rules are tried in order. A rule matches when `method` (absent: any) and `pathPattern` (absent: any; `*` matches one path segment, `**` any number of segments) fit the request. Each match increments that rule's counter k. The rule fires when `nth` is absent or equals k, and `probability` is absent or a draw seeded by (seed, rule index, k) is below it, and it has fired fewer than `times` times (absent: unlimited). The first rule that fires decides the request. Replacing the rule set resets every counter; requests already in flight keep the rule set they started with. Because the draw depends only on (seed, rule index, k), the same seed gives the same decision for the k-th match of each rule, whatever the thread timing.
+
+**Action parameters.** `delay {ms}`; `fail_before_forward {status?, close?, retryAfterSeconds?}` (exactly one of `status` or `close`); `forward_then_drop_response {}`; `forward_then_delay_response {ms}`; `duplicate_request {mode: "parallel" | "sequential"}` (default `parallel`: both copies in flight together; `sequential`: the second is sent after the first is answered); `corrupt_response {kind: "truncate" | "garble"}` (`truncate`: the first half of the body with a matching `Content-Length`; `garble`: every `"` replaced by `'`, same length).
+
+**Safety.** The upstream is fixed at start-up and must be a loopback address. Only origin-form requests are forwarded; `CONNECT` and absolute-form targets are refused, and `Host` is never used for routing. `/_proxy/*` is never forwarded, and `/_lab/*` is refused with 404, so ground truth is always read from the merchant directly. The proxy refuses to start if the system property `jdk.httpclient.enableAllMethodRetry` is true, because the JDK would then re-send a POST to the merchant by itself without the log showing it. The body of `GET /.well-known/ucp` is rewritten to name the proxy's authority, because the gateway requires the checkout endpoint on its own host and port (8.5). No `synchronized` and no lock is held across network I/O (7.8).
+
 **Determinism:** a rule fires on the nth match or with a seeded probability. The same seed always produces the same fault sequence.
 
 **Implementation note:** build it on the JDK `HttpServer` and `java.net.http.HttpClient`. To drop a response, call `exchange.close()` before sending headers. The client then sees an EOF, which it must classify as `Uncertain`.
@@ -696,12 +706,14 @@ Each run: reset the merchant (`POST /_lab/reset`), install proxy rules, start an
 
 Two modes. **Scripted** uses `ScriptedModel`: deterministic, free, used in CI, 200 runs per fault scenario. **Live** uses Gemini: used for the headline numbers, 30 runs per scenario, with a budget cap. The report labels every number with its mode.
 
+**M4, before the agent runtime.** A scripted run calls `Orchestrator.propose` with the scenario's fixed basket instead of starting an agent run; an automatic approver acts through `ApprovalService`; `RecoveryWorker` drives the intent. The harness runs on real time throughout (an injected virtual clock cannot be compared with time spent on a real socket). Durations may be divided by one time scale k, at most 5, chosen so that every ordering in 7.5 and 7.6 still holds (quiet period ≥ complete timeout, lease ≥ 2 × complete timeout + 5 s, deadline > resends × quiet period, a held response longer than the client timeout, a takeover inside the deadline); the report records k. S5 is reported as two rows, S5a (the approver approves the re-quote) and S5b (the approver declines it). Model calls, tokens, cost and traces read n/a until M5. Evidence is `/_lab/orders`; the merchant's own GET of each order's session, because the orders list carries no line items or currency, so I2 joins the two; the proxy log; the approver's own log; and the persisted intent, attempt and event rows, used only for attribution, the expected terminal state and I4.
+
 ### 13.2 Scenario catalogue \[CONTRACT\]
 
 | ID | Fault | Expected outcome | Invariants | Mode |
 | --- | --- | --- | --- | --- |
 | S0 | none | COMPLETED | I1, I2, I3 | both |
-| S1 | connection refused on the first 2 create attempts | COMPLETED after retries | I1, I4 | scripted |
+| S1 | the connection is closed before forwarding on the first 2 create attempts (classified Uncertain, as a refusal is, 8.1) | COMPLETED after retries | I1, I4 | scripted |
 | S2 | complete response dropped after the merchant processed it | COMPLETED with one order | I1, I4, I7 | scripted and live |
 | S3 | complete response delayed past the client timeout | COMPLETED with one order | I1, I7 | scripted |
 | S4 | the same proposal submitted twice | one intent, one order | I1 | both |
@@ -714,7 +726,7 @@ Two modes. **Scripted** uses `ScriptedModel`: deterministic, free, used in CI, 2
 | S11 | merchant host not on the allowlist | REJECTED by P1 | I3 | scripted |
 | S12 | ambiguous request | `ask_user` is called and no intent exists before the answer | none | live |
 | S13 | `duplicate_request` on complete | one order | I1 | scripted |
-| S14 | 24 concurrent complete calls for one session | one order | I1 | scripted |
+| S14 | 24 workers call advance concurrently on one APPROVED intent | one complete on the wire, one order | I1 | scripted |
 | S15 | two workers on one intent: worker A pauses past its lease during RECONCILING, worker B takes over, then A resumes | A's next write fails with LeaseLostException; COMPLETED with one order | I1, I5, I7 | scripted |
 | S16 | price changes before every complete; the approver approves each new quote | REJECTED with price\_unstable after 2 re-quotes; no order; exactly 3 approvals requested | I1, I2, I3, I5 | scripted |
 | S17 | complete held at the proxy (forward delayed 12 s: longer than the 10 s complete timeout, shorter than the 20 s quiet period); the client times out and a GET shows ready\_for\_complete | no resend inside the quiet period; COMPLETED with one order | I1, I7 | scripted |
@@ -728,6 +740,7 @@ Two modes. **Scripted** uses `ScriptedModel`: deterministic, free, used in CI, 2
 | S25 | callback with a reused state, a wrong nonce, a wrong audience, an expired token, and a missing auth\_time | every case refused; no session created | I9 | scripted |
 | S26 | logout, then reuse the old cookie | 401 on every API call; in-flight intents still reach a terminal state | I5, I9 | scripted |
 | S27 | login with return\_to set to an external URL or //evil.example | redirect goes to / instead | none | scripted |
+| S28 | agent process killed late in RECONCILING, so the takeover comes after the reconciliation deadline | ESCALATED; at most one order | I1, I4, I5 | scripted |
 
 ### 13.3 Metrics
 
@@ -741,7 +754,7 @@ Per scenario: runs; terminal-state distribution; invariant violations; time to t
 
 ### 13.5 Report \[CONTRACT\]
 
-`eval-harness` writes `report.json` and `report.md`: a table per scenario, an invariants table, a failure-analysis section, and the exact commit and configuration. Any invariant violation makes the harness exit non-zero.
+`eval-harness` writes `report.json` and `report.md`: a table per scenario, an invariants table, a failure-analysis section, and the exact commit and configuration. Any invariant violation makes the harness exit non-zero. So does an aborted run (exit 1), an unexpected terminal state (exit 2), or, with `--require-full`, a report with fewer than 200 runs per scenario, a time scale other than 1, or an unknown or dirty commit (exit 3). A reduced report says so in its first line.
 
 ## 14. Testing strategy
 
@@ -798,7 +811,7 @@ ucp-checkout-lab/
 
 **Commands.** `./mvnw verify` builds and runs all tests. `./scripts/run-merchant.sh` starts the merchant. `./scripts/eval.sh --mode scripted --runs 200` runs the evaluation.
 
-**CI (GitHub Actions).** On every push: build, unit, property, component, contract and ArchUnit tests. On pull requests: a reduced scripted evaluation. Live evaluation is manual and uses a repository secret.
+**CI (GitHub Actions).** On every push: build, unit, property, component, contract and ArchUnit tests. On every push, which includes pull requests: a reduced scripted evaluation (20 runs per scenario, time scale 4, labelled REDUCED). On demand (`workflow_dispatch`): the full scripted evaluation, `./mvnw verify -Peval-full` (200 runs per scenario at time scale 1); it is run once for each milestone that needs a report, and that report is committed under `docs/results/`. A scheduled run at time scale 4 is optional. Live evaluation is manual and uses a repository secret.
 
 **Configuration (environment variables).** `GEMINI_API_KEY` (live mode only), `APPROVAL_SECRET`, `MERCHANTS_FILE, OIDC_ISSUER, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET`, OIDC\_REDIRECT\_URI, DATABASE\_URL, AGENT\_PROFILE (local, demo or prod), `POLICY_FILE`. Never commit secrets. Provide `.env.example`.
 
@@ -812,7 +825,7 @@ Effort figures are estimates in hours.
 | M1 Core | Domain model, state machine, policy, approval, ports, in-memory repositories, `FaultyMerchantModel`, property tests | Every row of 7.2 tested. Property tests pass for at least 10,000 generated schedules. I1, I3, I4, I5, I7 hold | 12 to 15 |
 | M2 UCP client and conformance | HTTP gateway, classification, retries, breaker. Catalog search, including one additive merchant commit that serves the UCP catalog endpoints (`/catalog/search`, `/catalog/lookup`, `/catalog/product`) and advertises the capability, with new SelfTest checks and the original 46 unchanged. Conformance run against the merchant | Contract tests green. Unit tests for each row of 8.1 and 8.2. Conformance gaps documented | 12 to 15 |
 | M3 Persistence and recovery | SQL adapter, migrations, `RecoveryWorker`, leases | Crash-injection tests at every boundary pass. S9 passes | 8 to 10 |
-| M4 Fault proxy and scripted evaluation | Proxy, eval harness, scenarios S0 to S9, S11, S13, S14 | Scripted report with 200 runs per fault scenario shows zero violations | 12 to 15 |
+| M4 Fault proxy and scripted evaluation | Proxy, eval harness, scenarios S0 to S9, S11, S13, S14 | Scripted report (`-Peval-full`, time scale 1) with 200 runs per scenario shows zero violations; committed under `docs/results/` | 12 to 15 |
 | M5 Agent runtime | ADK adapter, tools, prompts, `ScriptedModel`, budgets, injection tests | Tool-list test passes (I6). S10 and S12 pass in live mode over 30 runs. Budget enforcement tested | 12 to 15 |
 | M6 Service and packaging | Spring Boot REST API (section 23), lab console (section 24) and CLI for runs and approvals, Docker Compose stack (section 25), README, architecture diagram, 90-second demo, results section | Quick start works from a clean clone. README links the report | 8 to 10 |
 | M6a Multiple merchants | Merchant registry, discovery check, per-merchant breaker and rate limit, fan-out search, catalog file option for the merchant, three merchants in Compose | S20, S21, S22 pass. I11 enforced in the repository | 8 to 10 |
