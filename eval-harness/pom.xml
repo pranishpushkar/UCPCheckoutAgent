@@ -12,4 +12,29 @@
 
     <artifactId>eval-harness</artifactId>
     <name>Evaluation harness</name>
+
+    <!-- Section 5.2 (D2): until M6 there is no REST API, so the harness embeds the agent and starts lab merchants in
+         process. Never agent-adk or ADK types. -->
+    <dependencies>
+        <dependency>
+            <groupId>dev.ucplab</groupId>
+            <artifactId>agent-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>dev.ucplab</groupId>
+            <artifactId>agent-ucp</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>dev.ucplab</groupId>
+            <artifactId>agent-persistence</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>dev.ucplab</groupId>
+            <artifactId>fault-proxy</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>dev.ucplab</groupId>
+            <artifactId>merchant</artifactId>
+        </dependency>
+    </dependencies>
 </project>
