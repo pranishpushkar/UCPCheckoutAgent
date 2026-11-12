@@ -4,6 +4,7 @@ import dev.ucplab.core.identity.UserId;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Storage port for intents, events and merchant attempts (Appendix B [CONTRACT], sections 7.3, 7.6, 7.8, 18.1).
@@ -63,16 +64,42 @@ public interface IntentRepository {
             PurchaseIntent intent, long expectedVersion, String leaseOwner);
 
     /**
+     * Settles several attempts of one intent at once, under the same fencing as {@link #update} (7.6): the stored lease
+     * owner must be {@code leaseOwner}, then the stored version must be {@code expectedVersion}. It writes only the
+     * attempts: the intent and its version are unchanged, so the caller's own fenced write that follows still carries
+     * {@code expectedVersion}. All or none: when it throws, no attempt has changed.
+     *
+     * @throws LeaseLostException the stored lease owner differs
+     * @throws StaleVersionException the stored version differs
+     * @throws IntentNotFoundException the intent or one of the attempts does not exist
+     * @throws IllegalArgumentException an attempt belongs to another intent
+     */
+    void resolveAttempts(
+            IntentId intentId, List<AttemptId> ids, AttemptStatus status, Optional<Integer> httpStatus,
+            Optional<String> responseJson, long expectedVersion, String leaseOwner);
+
+    /**
      * Takes or renews the lease on one intent when it is free, expired or already held by {@code owner}, setting it
      * to now + {@code lease} (7.6). Empty when another worker holds a live lease or the intent does not exist.
      */
     Optional<PurchaseIntent> claim(IntentId id, String owner, Duration lease);
 
     /**
-     * Claims up to {@code limit} intents in QUOTING, COMPLETING or RECONCILING whose lease is empty or expired,
-     * setting the lease owner and expiry to now + {@code lease} (7.6).
+     * Claims up to {@code limit} intents that need a worker whose lease is empty, expired or already held by
+     * {@code owner}, setting the lease owner and expiry to now + {@code lease} (7.6). Taking back its own live lease is
+     * how a worker that parked an intent for a long wait (7.5) renews it on the next pass. The intents are those in QUOTING,
+     * APPROVED, COMPLETING or RECONCILING, and any intent with {@code cancel_pending} set. AWAITING_APPROVAL intents with an expired approval are found by {@link RecoveryScan}.
      */
-    List<PurchaseIntent> claimRecoverable(String owner, Duration lease, int limit);
+    default List<PurchaseIntent> claimRecoverable(String owner, Duration lease, int limit) {
+        return claimRecoverable(owner, lease, limit, Set.of());
+    }
+
+    /**
+     * {@link #claimRecoverable(String, Duration, int)} leaving out the intents in {@code exclude}: they are neither
+     * claimed nor renewed nor counted against {@code limit}. A worker passes the intents it has parked until a later
+     * time (7.5), so intents that are not due cannot fill the limit and keep others from being picked up.
+     */
+    List<PurchaseIntent> claimRecoverable(String owner, Duration lease, int limit, Set<IntentId> exclude);
 
     /** False means the lease is lost and the caller must stop working on the intent (7.6). */
     boolean renewLease(IntentId id, String owner, Duration lease);

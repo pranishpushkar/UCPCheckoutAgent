@@ -28,7 +28,7 @@ import java.util.concurrent.locks.ReentrantLock;
 public final class InMemoryIntentRepository implements IntentRepository {
 
     private static final Set<IntentState> RECOVERABLE =
-            EnumSet.of(IntentState.QUOTING, IntentState.COMPLETING, IntentState.RECONCILING);
+            EnumSet.of(IntentState.QUOTING, IntentState.APPROVED, IntentState.COMPLETING, IntentState.RECONCILING);
 
     private final Clock clock;
     private final ReentrantLock lock = new ReentrantLock();
@@ -189,6 +189,37 @@ public final class InMemoryIntentRepository implements IntentRepository {
     }
 
     @Override
+    public void resolveAttempts(
+            IntentId intentId, List<AttemptId> ids, AttemptStatus status, Optional<Integer> httpStatus,
+            Optional<String> responseJson, long expectedVersion, String leaseOwner) {
+        Objects.requireNonNull(intentId, "intentId");
+        Objects.requireNonNull(ids, "ids");
+        Objects.requireNonNull(status, "status");
+        Objects.requireNonNull(httpStatus, "httpStatus");
+        Objects.requireNonNull(responseJson, "responseJson");
+        lock.lock();
+        try {
+            // Every check comes before the first write, so a failure leaves nothing behind (7.6).
+            fenced(intentId, expectedVersion, leaseOwner);
+            for (AttemptId id : ids) {
+                MerchantAttempt attempt = attempts.get(id);
+                if (attempt == null) {
+                    throw new IntentNotFoundException("no such attempt: " + id);
+                }
+                if (!attempt.intentId().equals(intentId)) {
+                    throw new IllegalArgumentException("attempt " + id + " belongs to another intent");
+                }
+            }
+            Instant now = clock.instant();
+            for (AttemptId id : ids) {
+                attempts.put(id, attempts.get(id).resolved(status, httpStatus, responseJson, now));
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
     public Optional<PurchaseIntent> claim(IntentId id, String owner, Duration lease) {
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(owner, "owner");
@@ -214,8 +245,10 @@ public final class InMemoryIntentRepository implements IntentRepository {
     }
 
     @Override
-    public List<PurchaseIntent> claimRecoverable(String owner, Duration lease, int limit) {
+    public List<PurchaseIntent> claimRecoverable(
+            String owner, Duration lease, int limit, Set<IntentId> exclude) {
         Objects.requireNonNull(owner, "owner");
+        Objects.requireNonNull(exclude, "exclude");
         Objects.requireNonNull(lease, "lease");
         if (limit < 1) {
             throw new IllegalArgumentException("limit must be at least 1: " + limit);
@@ -225,8 +258,10 @@ public final class InMemoryIntentRepository implements IntentRepository {
             Instant now = clock.instant();
             Instant until = now.plus(lease);
             List<PurchaseIntent> candidates = intents.values().stream()
-                    .filter(i -> RECOVERABLE.contains(i.state()))
-                    .filter(i -> i.leaseUntil().map(t -> t.isBefore(now)).orElse(true))
+                    .filter(i -> !exclude.contains(i.id()))
+                    .filter(i -> RECOVERABLE.contains(i.state()) || i.cancelPending())
+                    .filter(i -> i.leaseOwner().equals(Optional.of(owner))
+                            || i.leaseUntil().map(t -> t.isBefore(now)).orElse(true))
                     .sorted(Comparator.comparing(PurchaseIntent::createdAt).thenComparing(i -> i.id().value()))
                     .limit(limit)
                     .toList();
@@ -255,6 +290,18 @@ public final class InMemoryIntentRepository implements IntentRepository {
             }
             intents.put(id, stored.withLease(stored.leaseOwner(), Optional.of(clock.instant().plus(lease))));
             return true;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** System view for {@link InMemoryRecoveryScan}: the intents in {@code state}, oldest first. */
+    List<PurchaseIntent> inState(IntentState state) {
+        lock.lock();
+        try {
+            return intents.values().stream().filter(i -> i.state() == state)
+                    .sorted(Comparator.comparing(PurchaseIntent::createdAt).thenComparing(i -> i.id().value()))
+                    .toList();
         } finally {
             lock.unlock();
         }
@@ -314,6 +361,6 @@ public final class InMemoryIntentRepository implements IntentRepository {
                 stored.id(), stored.owner(), stored.merchantId(), stored.dedupeKey(), stored.lines(),
                 stored.buyerEmail(), update.state(), newVersion, update.sessionId(), update.approvedSnapshotHash(),
                 update.requoteCount(), update.orderId(), update.failureReason(), update.uncertainSince(),
-                stored.leaseOwner(), stored.leaseUntil(), stored.createdAt(), update.updatedAt());
+                update.cancelPending(), stored.leaseOwner(), stored.leaseUntil(), stored.createdAt(), update.updatedAt());
     }
 }

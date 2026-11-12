@@ -221,6 +221,27 @@ class DefaultOrchestratorTest {
         assertThat(lab.merchant.orders()).isEmpty();
     }
 
+    // Covers: I5, FR3, 7.6 (expiry writes the intent before the approval, so a crash between the two writes cannot
+    // leave an AWAITING_APPROVAL intent whose approval is already EXPIRED and therefore never picked up again)
+    @Test
+    void advance_rejectsExpiredIntent_whenProcessDiesAfterApprovalWrite() {
+        ProposalResult r = lab.propose(w, TWO_SHIRTS);
+        lab.clock.advance(Duration.ofMinutes(10));
+        CrashingApprovalRepository crashing = new CrashingApprovalRepository(lab.approvals);
+        crashing.crashAfterNext(CrashingApprovalRepository.Op.TRANSITION);
+        Lab.Worker dying = lab.worker("worker-b", lab.merchant, crashing);
+
+        assertThatThrownBy(() -> dying.orchestrator().advance(r.intentId()))
+                .isInstanceOf(InterceptingGateway.SimulatedCrash.class);
+        lab.clock.advance(lab.config.lease().plusSeconds(1)); // a lease ends strictly after lease_until
+        Lab.Worker restarted = lab.worker("worker-c");
+
+        assertThat(lab.drive(restarted, r.intentId())).isEqualTo(REJECTED);
+        assertThat(lab.intent(r.intentId()).failureReason()).contains(DefaultOrchestrator.APPROVAL_EXPIRED);
+        assertThat(lab.merchant.session(r.quote().get().id()).orElseThrow().status())
+                .isEqualTo(CheckoutStatus.CANCELED);
+    }
+
     // Covers: FR3, 7.2 (AWAITING_APPROVAL rejected -> REJECTED; the cancel is the orchestrator's next call)
     @Test
     void reject_movesToRejected_andNextAdvanceCancelsSession() {
@@ -324,7 +345,7 @@ class DefaultOrchestratorTest {
             assertThat(a.status()).isEqualTo(AttemptStatus.UNCERTAIN);
             assertThat(a.httpStatus()).contains(status);
         });
-        assertThat(lab.intents.events(id)).filteredOn(e -> e.type().equals("transition"))
+        assertThat(lab.events(id)).filteredOn(e -> e.type().equals("transition"))
                 .extracting(e -> e.payloadJson())
                 .anySatisfy(p -> assertThat(p).contains("\"from\":\"COMPLETING\"")
                         .contains("\"event\":\"PROTOCOL_ERROR\"").contains("\"to\":\"RECONCILING\""));
@@ -442,7 +463,7 @@ class DefaultOrchestratorTest {
         assertThat(attempts(id, AttemptOp.UPDATE)).singleElement()
                 .satisfies(a -> assertThat(a.status()).isEqualTo(AttemptStatus.RESPONDED));
         assertThat(lab.intent(id).uncertainSince()).isPresent();
-        assertThat(lab.intents.events(id)).filteredOn(e -> e.type().equals("transition"))
+        assertThat(lab.events(id)).filteredOn(e -> e.type().equals("transition"))
                 .extracting(e -> e.payloadJson())
                 .anySatisfy(p -> assertThat(p).contains("\"from\":\"QUOTING\"").contains("\"event\":\"OBSERVED_COMPLETED\"")
                         .contains("\"to\":\"RECONCILING\""));
@@ -480,7 +501,7 @@ class DefaultOrchestratorTest {
                 .satisfies(a -> assertThat(a.status()).isEqualTo(AttemptStatus.RESPONDED));
         assertThat(lab.intent(id).uncertainSince()).isPresent();
         assertThat(w.orchestrator().advance(id).after()).isEqualTo(RECONCILING);
-        assertThat(lab.intents.events(id)).filteredOn(e -> e.type().equals("transition"))
+        assertThat(lab.events(id)).filteredOn(e -> e.type().equals("transition"))
                 .extracting(e -> e.payloadJson())
                 .anySatisfy(p -> assertThat(p).contains("\"from\":\"QUOTING\"")
                         .contains("\"event\":\"OBSERVED_COMPLETE_IN_PROGRESS\"").contains("\"to\":\"RECONCILING\""))
@@ -514,7 +535,7 @@ class DefaultOrchestratorTest {
 
         assertThat(lab.intent(id).uncertainSince()).contains(since);
         assertThat(lab.intent(id).failureReason()).contains(DefaultOrchestrator.OUTCOME_UNKNOWN);
-        assertThat(lab.intents.events(id)).anySatisfy(e -> assertThat(e.type()).isEqualTo("escalated"));
+        assertThat(lab.events(id)).anySatisfy(e -> assertThat(e.type()).isEqualTo("escalated"));
     }
 
     // Covers: 7.5 (maxCompleteResends), I5 (with resends left over before a longer deadline, the cap stops further
@@ -534,7 +555,7 @@ class DefaultOrchestratorTest {
 
         assertThat(long120.intents.attempts(id)).filteredOn(a -> a.op() == AttemptOp.COMPLETE)
                 .hasSize(1 + d.maxCompleteResends());
-        Instant exhaustedAt = long120.intents.events(id).stream()
+        Instant exhaustedAt = long120.events(id).stream()
                 .filter(e -> e.payloadJson().contains("resends_exhausted")).findFirst().orElseThrow().at();
         List<CallRecord> afterCap = long120.merchant.log().stream().filter(c -> !c.at().isBefore(exhaustedAt)).toList();
         assertThat(afterCap).isNotEmpty().allSatisfy(c -> assertThat(c.call()).isEqualTo(MerchantCall.GET));
@@ -563,7 +584,7 @@ class DefaultOrchestratorTest {
             assertThat(Duration.between(completes.get(i - 1).sentAt(), completes.get(i).sentAt()))
                     .isGreaterThanOrEqualTo(lab.config.resendQuietPeriod());
         }
-        assertThat(lab.intents.events(id)).filteredOn(e -> e.type().equals("reconcile_read"))
+        assertThat(lab.events(id)).filteredOn(e -> e.type().equals("reconcile_read"))
                 .allSatisfy(e -> assertThat(e.payloadJson()).contains("\"status\":\"ready_for_complete\""));
         // The third resend would fall due at the deadline itself, so the deadline escalates first.
         Instant deadline = lab.intent(id).uncertainSince().orElseThrow().plus(lab.config.reconcileDeadline());
@@ -595,6 +616,57 @@ class DefaultOrchestratorTest {
         assertThat(lab.drive(b, id)).isEqualTo(COMPLETED);
         assertThat(lab.merchant.orders()).hasSize(1);
         assertThat(a.orchestrator().advance(id).idle()).isTrue();
+    }
+
+    // Covers: 7.6 fencing, S15, I1 (a paused worker whose lease was taken cannot settle attempts after its read:
+    // the settle is a fenced write, so the attempt stays UNCERTAIN for the worker that holds the lease)
+    @Test
+    void reconcile_leavesAttemptsUnsettled_whenLeaseIsTakenDuringRead() {
+        InterceptingGateway gateway = new InterceptingGateway(lab.merchant);
+        Lab.Worker a = lab.worker("worker-a", gateway);
+        Lab.Worker b = lab.worker("worker-b");
+        IntentId id = lab.propose(a, TWO_SHIRTS).intentId();
+        lab.decide(a, id, true);
+        lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 1, new Fault.CommitThenDrop()));
+        assertThat(a.orchestrator().advance(id).after()).isEqualTo(RECONCILING);
+        gateway.duringNext(MerchantCall.GET, () -> {
+            lab.clock.advance(lab.config.lease().plusSeconds(1));
+            assertThat(lab.intents.claim(id, "worker-b", lab.config.lease())).isPresent();
+        });
+
+        assertThatThrownBy(() -> a.orchestrator().advance(id)).isInstanceOf(LeaseLostException.class);
+
+        assertThat(attempts(id, AttemptOp.COMPLETE)).singleElement()
+                .satisfies(x -> assertThat(x.status()).isEqualTo(AttemptStatus.UNCERTAIN));
+        assertThat(lab.drive(b, id)).isEqualTo(COMPLETED);
+        assertThat(attempts(id, AttemptOp.COMPLETE)).singleElement()
+                .satisfies(x -> assertThat(x.status()).isEqualTo(AttemptStatus.RESPONDED));
+        assertThat(lab.merchant.orders()).hasSize(1);
+    }
+
+    // Covers: 7.6 fencing, S15, 7.4 (the same for the earlier attempts under a key that a resend's answer settles)
+    @Test
+    void resend_leavesEarlierAttemptsUnsettled_whenLeaseIsTakenDuringCall() {
+        InterceptingGateway gateway = new InterceptingGateway(lab.merchant);
+        Lab.Worker a = lab.worker("worker-a", gateway);
+        Lab.Worker b = lab.worker("worker-b");
+        IntentId id = lab.propose(a, TWO_SHIRTS).intentId();
+        lab.decide(a, id, true);
+        lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 1, new Fault.NotSent()));
+        assertThat(a.orchestrator().advance(id).after()).isEqualTo(RECONCILING);
+        lab.clock.advance(lab.config.resendQuietPeriod());
+        assertThat(a.orchestrator().advance(id).after()).isEqualTo(COMPLETING);
+        gateway.duringNext(MerchantCall.COMPLETE, () -> {
+            lab.clock.advance(lab.config.lease().plusSeconds(1));
+            assertThat(lab.intents.claim(id, "worker-b", lab.config.lease())).isPresent();
+        });
+
+        assertThatThrownBy(() -> a.orchestrator().advance(id)).isInstanceOf(LeaseLostException.class);
+
+        assertThat(attempts(id, AttemptOp.COMPLETE)).hasSize(2);
+        assertThat(attempts(id, AttemptOp.COMPLETE).get(0).status()).isEqualTo(AttemptStatus.UNCERTAIN);
+        assertThat(lab.drive(b, id)).isEqualTo(COMPLETED);
+        assertThat(lab.merchant.orders()).hasSize(1);
     }
 
     // Covers: 7.5 "Who waits" (advance never sleeps; it returns when to poll, backed off from uncertain_since,

@@ -29,7 +29,8 @@ public final class TransitionTable {
             row(QUOTING, TransitionEvent.OUT_OF_STOCK, TransitionGuard.NONE, FAILED_NOT_CHARGED, SideEffect.CANCEL_SESSION_BEST_EFFORT),
             row(QUOTING, TransitionEvent.NOT_SENT, TransitionGuard.RETRIES_LEFT, QUOTING, SideEffect.RESEND_SAME_KEY),
             row(QUOTING, TransitionEvent.UNCERTAIN, TransitionGuard.RETRIES_LEFT, QUOTING, SideEffect.RESEND_SAME_KEY),
-            row(QUOTING, TransitionEvent.RETRIES_EXHAUSTED, TransitionGuard.NONE, FAILED_NOT_CHARGED, SideEffect.NONE),
+            // Cancel when a session id is known (Transition.owesCancel + PurchaseIntent.moved set cancel_pending then).
+            row(QUOTING, TransitionEvent.RETRIES_EXHAUSTED, TransitionGuard.NONE, FAILED_NOT_CHARGED, SideEffect.CANCEL_SESSION_BEST_EFFORT),
             row(AWAITING_APPROVAL, TransitionEvent.APPROVED, TransitionGuard.APPROVAL_VALID, APPROVED, SideEffect.CONSUME_APPROVAL),
             row(AWAITING_APPROVAL, TransitionEvent.REJECTED, TransitionGuard.NONE, IntentState.REJECTED, SideEffect.CANCEL_SESSION),
             row(AWAITING_APPROVAL, TransitionEvent.EXPIRED, TransitionGuard.NONE, IntentState.REJECTED, SideEffect.CANCEL_SESSION),
@@ -55,7 +56,9 @@ public final class TransitionTable {
             // A create with every item unavailable has no session: nothing to cancel.
             row(QUOTING, TransitionEvent.CREATE_REJECTED, TransitionGuard.NONE, FAILED_NOT_CHARGED, SideEffect.NONE),
             // A ProtocolError on complete does not settle the outcome: reconcile, never FAILED_NOT_CHARGED.
-            row(COMPLETING, TransitionEvent.PROTOCOL_ERROR, TransitionGuard.NONE, RECONCILING, SideEffect.NONE));
+            row(COMPLETING, TransitionEvent.PROTOCOL_ERROR, TransitionGuard.NONE, RECONCILING, SideEffect.NONE),
+            // The approval behind an APPROVED intent is not usable (I3): nothing is sent, a human must look.
+            row(APPROVED, TransitionEvent.APPROVAL_INVALID, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT));
 
     private TransitionTable() {
     }

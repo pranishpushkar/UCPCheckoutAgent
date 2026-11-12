@@ -25,7 +25,7 @@ class TransitionTableTest {
             row(4, "QUOTING", "OUT_OF_STOCK", "NONE", "FAILED_NOT_CHARGED", "CANCEL_SESSION_BEST_EFFORT"),
             row(5, "QUOTING", "NOT_SENT", "RETRIES_LEFT", "QUOTING", "RESEND_SAME_KEY"),
             row(5, "QUOTING", "UNCERTAIN", "RETRIES_LEFT", "QUOTING", "RESEND_SAME_KEY"),
-            row(6, "QUOTING", "RETRIES_EXHAUSTED", "NONE", "FAILED_NOT_CHARGED", "NONE"),
+            row(6, "QUOTING", "RETRIES_EXHAUSTED", "NONE", "FAILED_NOT_CHARGED", "CANCEL_SESSION_BEST_EFFORT"),
             row(7, "AWAITING_APPROVAL", "APPROVED", "APPROVAL_VALID", "APPROVED", "CONSUME_APPROVAL"),
             row(8, "AWAITING_APPROVAL", "REJECTED", "NONE", "REJECTED", "CANCEL_SESSION"),
             row(8, "AWAITING_APPROVAL", "EXPIRED", "NONE", "REJECTED", "CANCEL_SESSION"),
@@ -48,7 +48,9 @@ class TransitionTableTest {
             row(22, "QUOTING", "OBSERVED_COMPLETED", "NONE", "RECONCILING", "NONE"),
             row(22, "QUOTING", "OBSERVED_COMPLETE_IN_PROGRESS", "NONE", "RECONCILING", "NONE"),
             row(23, "QUOTING", "CREATE_REJECTED", "NONE", "FAILED_NOT_CHARGED", "NONE"),
-            row(24, "COMPLETING", "PROTOCOL_ERROR", "NONE", "RECONCILING", "NONE"));
+            row(24, "COMPLETING", "PROTOCOL_ERROR", "NONE", "RECONCILING", "NONE"),
+            // Added in M3: the approval behind an APPROVED intent is not usable, so nothing is sent (I3).
+            row(25, "APPROVED", "APPROVAL_INVALID", "NONE", "ESCALATED", "ESCALATION_EVENT"));
 
     static Stream<Arguments> expectedRows() {
         return EXPECTED.stream();

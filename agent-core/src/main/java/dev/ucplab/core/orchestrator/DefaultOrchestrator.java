@@ -65,6 +65,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 import java.util.random.RandomGenerator;
@@ -81,7 +82,10 @@ import java.util.stream.Collectors;
  * <p><b>Reading the attempt log after a crash.</b> In COMPLETING, the newest {@code complete} attempt under the
  * current key tells the step what happened: SENT means the outcome of a call is unknown (crash between 7.3 steps 3 and
  * 5), so the intent goes to RECONCILING; UNCERTAIN means reconciliation approved a resend (table 7.2, RECONCILING
- * observed ready_for_complete), which this step now makes with the stored key and body (I7). The two cannot be
+ * observed ready_for_complete). Only the process that made that observation makes the resend, with the stored key and
+ * body (I7): it remembers the approval in memory, keyed by the intent's version. A step that finds COMPLETING with an
+ * UNCERTAIN attempt and no such memory (a restart, or a worker that took over) sends nothing and goes back to
+ * RECONCILING, so a resend always follows a read that process made itself (7.6). The two attempt states cannot be
  * confused because an uncertain outcome is written together with the move to RECONCILING.
  *
  * <p><b>Keys.</b> create and cancel use revision 0; the update for re-quote n uses revision n-1, and the
@@ -114,14 +118,21 @@ public final class DefaultOrchestrator implements Orchestrator {
     static final String APPROVAL_EXPIRED = "approval_expired";
     static final String CANCELED_BY_MERCHANT = "canceled_by_merchant";
     static final String OUTCOME_UNKNOWN = "outcome_unknown";
+    static final String APPROVAL_INVALID = "approval_invalid";
     static final String POLICY_PREFIX = "policy_";
     static final String MERCHANT_ERROR_PREFIX = "merchant_error_";
     static final String COMPLETE_ERROR_PREFIX = "complete_error:";
 
-    /** failure_reason values whose table 7.2 row includes a session cancel. */
+    /** failure_reason values that name a table 7.2 cancel row; used to give a COMPLETING error code its reason. */
     private static final Set<String> CANCEL_OWED = Set.of(OUT_OF_STOCK, ITEM_UNAVAILABLE, QUANTITY_ADJUSTED,
             QUOTE_LINES_DIFFER, PAYMENT_DECLINED,
             RequotePolicy.PRICE_UNSTABLE, DefaultApprovalService.APPROVAL_REJECTED, APPROVAL_EXPIRED);
+
+    /** Cancel attempts for one intent before the worker gives up (7.6). */
+    static final int MAX_CANCEL_ATTEMPTS = 3;
+
+    /** Probe creates for one orphaned session before the worker gives up (7.6 M3 note). */
+    static final int MAX_PROBE_ATTEMPTS = 3;
 
     private static final int MAX_RATIONALE = 300;
 
@@ -138,6 +149,12 @@ public final class DefaultOrchestrator implements Orchestrator {
     private final String workerId;
     private final RandomGenerator jitter;
     private final ReentrantLock jitterLock = new ReentrantLock();
+    /**
+     * Resends this process approved after a {@code get} showed ready_for_complete (7.5), by intent: the version the
+     * intent has once the approving write is stored. Only the process that observed the status continues to the resend;
+     * after a restart or a takeover the map is empty, so the new worker reads again first (7.6).
+     */
+    private final Map<IntentId, Long> approvedResends = new ConcurrentHashMap<>();
 
     /**
      * @param payment the instrument put in every frozen {@code complete} body (7.4); one mock card in M1
@@ -323,7 +340,11 @@ public final class DefaultOrchestrator implements Orchestrator {
         boolean tried = attempts.stream().anyMatch(a -> a.op() == op && a.revision() == revision);
         if (tried) {
             Move m = move(intent, TransitionEvent.RETRIES_EXHAUSTED);
-            PurchaseIntent next = m.next().withFailureReason(QUOTE_RETRIES_EXHAUSTED);
+            // A create left SENT may have made a session the intent never learned of: the probe finds it (7.6 M3 note).
+            boolean orphanPossible = create && attempts.stream()
+                    .anyMatch(a -> a.op() == AttemptOp.CREATE && a.revision() == 0 && mayHaveCreatedSession(a));
+            PurchaseIntent next = m.next().withFailureReason(QUOTE_RETRIES_EXHAUSTED)
+                    .withCancelPending(m.next().cancelPending() || (orphanPossible && intent.sessionId().isEmpty()));
             intents.update(next, intent.version(), workerId);
             transitionEvent(intent.id(), m.transition());
             return moved(intent, next);
@@ -424,8 +445,26 @@ public final class DefaultOrchestrator implements Orchestrator {
             }
             case CallOutcome.NotSent<CheckoutView> n -> exhaustQuoting(written, attempt, AttemptStatus.UNCERTAIN,
                     Optional.empty(), Optional.of(describe(n)));
-            case CallOutcome.Uncertain<CheckoutView> u -> exhaustQuoting(written, attempt, AttemptStatus.UNCERTAIN,
-                    Optional.empty(), Optional.of(describe(u)));
+            case CallOutcome.Uncertain<CheckoutView> u -> create && written.sessionId().isEmpty()
+                    // The request may have reached the merchant and made a session: owe the probe (7.6 M3 note).
+                    ? finish(written, attempt, AttemptStatus.UNCERTAIN, Optional.empty(), Optional.of(describe(u)),
+                            move(written, TransitionEvent.RETRIES_EXHAUSTED), QUOTE_RETRIES_EXHAUSTED, true)
+                    : exhaustQuoting(written, attempt, AttemptStatus.UNCERTAIN, Optional.empty(),
+                            Optional.of(describe(u)));
+        };
+    }
+
+    /**
+     * Whether a create attempt may have left a session at the merchant: it is still SENT (a crash), or it is UNCERTAIN
+     * after an answer other than NotSent, so the request may have left. A NotSent answer proves it never did (8.1), and
+     * a RESPONDED attempt was answered, so neither can have left a session the intent does not know.
+     */
+    private static boolean mayHaveCreatedSession(MerchantAttempt create) {
+        return switch (create.status()) {
+            case SENT -> true;
+            case UNCERTAIN -> create.responseJson()
+                    .map(r -> !"not_sent".equals(CanonicalJson.readObject(r).get("outcome"))).orElse(true);
+            case RESPONDED -> false;
         };
     }
 
@@ -473,7 +512,15 @@ public final class DefaultOrchestrator implements Orchestrator {
     private Step finish(
             PurchaseIntent base, MerchantAttempt attempt, AttemptStatus status, Optional<Integer> http,
             Optional<String> response, Move m, String failureReason) {
+        return finish(base, attempt, status, http, response, m, failureReason, false);
+    }
+
+    /** As above; {@code cancelOwed} also sets cancel_pending, in the same write, for a session that may exist unseen. */
+    private Step finish(
+            PurchaseIntent base, MerchantAttempt attempt, AttemptStatus status, Optional<Integer> http,
+            Optional<String> response, Move m, String failureReason, boolean cancelOwed) {
         PurchaseIntent next = m.next().withFailureReason(failureReason);
+        next = cancelOwed ? next.withCancelPending(true) : next;
         resolve(attempt, status, http, response, next, base.version());
         transitionEvent(base.id(), m.transition());
         return moved(base, next);
@@ -481,21 +528,29 @@ public final class DefaultOrchestrator implements Orchestrator {
 
     // ---------------------------------------------------------------- AWAITING_APPROVAL
 
-    /** Approve and reject are decided by ApprovalService (9.2); a step here only expires a stale approval. */
+    /**
+     * Approve and reject are decided by ApprovalService (9.2); a step here only expires a stale approval. The intent is
+     * written first (fenced by version and lease, like {@code decide}) and the approval second, so a crash between the
+     * two leaves a terminal intent with a PENDING approval, never an AWAITING_APPROVAL intent that no worker would pick
+     * up again (I5, 7.6). An approval already EXPIRED with the intent still AWAITING_APPROVAL, which only an earlier
+     * write order could leave behind, is finished the same way.
+     */
     private Step expireApproval(PurchaseIntent intent) {
         Instant now = clock.instant();
         Optional<ApprovalRecord> latest = approvals.findLatestForSystem(intent.id());
-        if (latest.isEmpty() || latest.get().status() != ApprovalStatus.PENDING
-                || now.isBefore(latest.get().expiresAt())) {
+        if (latest.isEmpty()) {
             return idle(intent);
         }
-        if (!approvals.transition(latest.get().id(), ApprovalStatus.PENDING, ApprovalStatus.EXPIRED, now,
-                Optional.empty())) {
+        ApprovalStatus status = latest.get().status();
+        boolean due = status == ApprovalStatus.EXPIRED
+                || (status == ApprovalStatus.PENDING && !now.isBefore(latest.get().expiresAt()));
+        if (!due) {
             return idle(intent);
         }
         Move m = move(intent, TransitionEvent.EXPIRED);
         PurchaseIntent next = m.next().withFailureReason(APPROVAL_EXPIRED);
         intents.update(next, intent.version(), workerId);
+        approvals.transition(latest.get().id(), ApprovalStatus.PENDING, ApprovalStatus.EXPIRED, now, Optional.empty());
         transitionEvent(intent.id(), m.transition());
         return moved(intent, next);
     }
@@ -503,18 +558,21 @@ public final class DefaultOrchestrator implements Orchestrator {
     // ---------------------------------------------------------------- APPROVED -> COMPLETING
 
     private Step sendComplete(PurchaseIntent intent, List<MerchantAttempt> attempts) {
-        String hash = intent.approvedSnapshotHash()
-                .orElseThrow(() -> new IllegalStateException("I3: APPROVED without a snapshot hash: " + intent.id()));
-        // PENDING is accepted for the case where decide moved the intent and crashed before recording the decision.
-        ApprovalRecord approval = approvals.findLatestForSystem(intent.id())
-                .filter(a -> a.snapshotHash().equals(hash))
+        // I3, checked before the write-ahead so a refusal leaves no attempt behind. PENDING is accepted for the case
+        // where decide moved the intent and crashed before recording the decision.
+        Optional<String> hash = intent.approvedSnapshotHash();
+        Optional<ApprovalRecord> latest = approvals.findLatestForSystem(intent.id());
+        Optional<ApprovalRecord> usable = latest
+                .filter(a -> hash.isPresent() && a.snapshotHash().equals(hash.get()))
+                // I3, I4: the approved snapshot is for this intent's session.
+                .filter(a -> intent.sessionId().equals(Optional.of(a.snapshot().sessionId())))
                 .filter(a -> Set.of(ApprovalStatus.PENDING, ApprovalStatus.APPROVED, ApprovalStatus.CONSUMED)
-                        .contains(a.status()))
-                .orElseThrow(() -> new IllegalStateException("I3: no approval matches the approved hash: " + intent.id()));
-        SessionId session = requireSession(intent);
-        if (!approval.snapshot().sessionId().equals(session)) {
-            throw new IllegalStateException("I3, I4: the approved snapshot is for another session: " + intent.id());
+                        .contains(a.status()));
+        if (usable.isEmpty()) {
+            return escalateInvalidApproval(intent, attempts, latest, hash);
         }
+        ApprovalRecord approval = usable.get();
+        SessionId session = requireSession(intent);
         int revision = intent.requoteCount();
         List<MerchantAttempt> completes = completes(attempts);
         if (completes.stream().anyMatch(a -> a.revision() >= revision)) {
@@ -531,8 +589,16 @@ public final class DefaultOrchestrator implements Orchestrator {
         Move m = move(intent, TransitionEvent.SEND_COMPLETE, TransitionGuard.ATTEMPT_PERSISTED);
         // A new key starts a fresh reconciliation deadline (7.5 rule 1); cleared in the same write as the attempt.
         PurchaseIntent written = writeAhead(intent, attempt, m.next().withoutUncertainSince());
+        // Both approval writes come after the fenced write-ahead and before the request leaves (7.6): only the worker
+        // that holds the lease repairs the approval. A PENDING approval under an APPROVED intent means a crash inside
+        // decide; the decision was the owner's, because only the owner can approve (I10).
+        if (approval.status() == ApprovalStatus.PENDING) {
+            approvals.transition(approval.id(), ApprovalStatus.PENDING, ApprovalStatus.APPROVED, clock.instant(),
+                    Optional.of(intent.owner()));
+            event(intent.id(), "approval_decision_recovered", Map.of("approval_id", approval.id()));
+        }
         if (approval.status() != ApprovalStatus.CONSUMED) {
-            approvals.transition(approval.id(), approval.status(), ApprovalStatus.CONSUMED, clock.instant(),
+            approvals.transition(approval.id(), ApprovalStatus.APPROVED, ApprovalStatus.CONSUMED, clock.instant(),
                     Optional.empty());
         }
         transitionEvent(intent.id(), m.transition());
@@ -548,7 +614,7 @@ public final class DefaultOrchestrator implements Orchestrator {
             if (view.status() == CheckoutStatus.COMPLETED && view.order().isPresent()) {
                 Move m = move(written, TransitionEvent.MERCHANT_COMPLETED);
                 PurchaseIntent next = m.next().withOrderId(view.order().get().id());
-                settleSiblings(attempt, "completed");
+                settleSiblings(written, attempt, "completed");
                 resolve(attempt, AttemptStatus.RESPONDED, http, summary, next, written.version());
                 transitionEvent(written.id(), m.transition());
                 return moved(written, next);
@@ -560,7 +626,7 @@ public final class DefaultOrchestrator implements Orchestrator {
                         ? TransitionEvent.PRICE_CHANGED
                         : TransitionEvent.CHECKOUT_INCOMPLETE;
                 Move m = requote(written, event);
-                settleSiblings(attempt, "incomplete");
+                settleSiblings(written, attempt, "incomplete");
                 resolve(attempt, AttemptStatus.RESPONDED, http, summary, m.next(), written.version());
                 requoteEvents(written, m);
                 return moved(written, m.next());
@@ -569,7 +635,7 @@ public final class DefaultOrchestrator implements Orchestrator {
                     && (codes.contains(PAYMENT_DECLINED) || codes.contains(PAYMENT_INVALID))) {
                 Move m = move(written, TransitionEvent.PAYMENT_DECLINED);
                 PurchaseIntent next = m.next().withFailureReason(PAYMENT_DECLINED);
-                settleSiblings(attempt, "payment_declined");
+                settleSiblings(written, attempt, "payment_declined");
                 resolve(attempt, AttemptStatus.RESPONDED, http, summary, next, written.version());
                 transitionEvent(written.id(), m.transition());
                 return moved(written, next);
@@ -584,7 +650,7 @@ public final class DefaultOrchestrator implements Orchestrator {
                 Move m = move(written, TransitionEvent.PAYMENT_DECLINED);
                 PurchaseIntent next = m.next().withFailureReason(
                         CANCEL_OWED.contains(code) ? code : COMPLETE_ERROR_PREFIX + code);
-                settleSiblings(attempt, "not_charged");
+                settleSiblings(written, attempt, "not_charged");
                 resolve(attempt, AttemptStatus.RESPONDED, http, summary, next, written.version());
                 transitionEvent(written.id(), m.transition());
                 return moved(written, next);
@@ -636,7 +702,22 @@ public final class DefaultOrchestrator implements Orchestrator {
                 transitionEvent(intent.id(), m.transition());
                 yield moved(intent, next);
             }
-            case UNCERTAIN -> resend(intent, sameKey);
+            case UNCERTAIN -> {
+                // Reconciliation approved a resend and left this marker (see reconcile). Only the process that read
+                // ready_for_complete continues to it; after a restart or takeover nothing is sent and the next step
+                // reads again (7.6).
+                Long approvedAt = approvedResends.remove(intent.id());
+                if (approvedAt != null && approvedAt == intent.version()) {
+                    yield resend(intent, sameKey);
+                }
+                // A takeover never moves the deadline: the persisted uncertain_since is kept (7.5 rule 1).
+                Move m = move(intent, TransitionEvent.UNCERTAIN);
+                PurchaseIntent next = withUncertainSince(m.next());
+                intents.update(next, intent.version(), workerId);
+                event(intent.id(), "resend_not_approved_here", Map.of("attempt_id", latest.id().value()));
+                transitionEvent(intent.id(), m.transition());
+                yield moved(intent, next);
+            }
             case RESPONDED -> throw new IllegalStateException(
                     "COMPLETING with a resolved complete attempt: " + intent.id());
         };
@@ -678,7 +759,7 @@ public final class DefaultOrchestrator implements Orchestrator {
                 if (view.order().isEmpty()) {
                     yield pastDeadline ? escalate(intent, attempts) : waiting(intent, "completed_without_order");
                 }
-                settle(sameKey, "reconciliation", "completed");
+                settle(intent, sameKey, "reconciliation", "completed");
                 Move m = move(intent, TransitionEvent.OBSERVED_COMPLETED);
                 PurchaseIntent next = m.next().withOrderId(view.order().get().id());
                 intents.update(next, intent.version(), workerId);
@@ -686,7 +767,7 @@ public final class DefaultOrchestrator implements Orchestrator {
                 yield moved(intent, next);
             }
             case CANCELED -> {
-                settle(sameKey, "reconciliation", "canceled");
+                settle(intent, sameKey, "reconciliation", "canceled");
                 Move m = move(intent, TransitionEvent.OBSERVED_CANCELED);
                 PurchaseIntent next = m.next().withFailureReason(CANCELED_BY_MERCHANT);
                 intents.update(next, intent.version(), workerId);
@@ -720,6 +801,10 @@ public final class DefaultOrchestrator implements Orchestrator {
                 } else {
                     intents.update(m.next(), intent.version(), workerId);
                 }
+                // The version the write actually stored, read back: both branches above are repository writes, and
+                // the port does not promise expected + 1.
+                approvedResends.put(intent.id(), intents.findForSystem(intent.id())
+                        .orElseThrow(() -> new IntentNotFoundException("no such intent: " + intent.id())).version());
                 transitionEvent(intent.id(), m.transition());
                 yield moved(intent, m.next());
             }
@@ -730,7 +815,7 @@ public final class DefaultOrchestrator implements Orchestrator {
                     // session and charge an unapproved total. Wait out the quiet period first, as for a resend.
                     yield pastDeadline ? escalate(intent, attempts) : waiting(intent, "incomplete_within_quiet_period");
                 }
-                settle(sameKey, "reconciliation", "incomplete");
+                settle(intent, sameKey, "reconciliation", "incomplete");
                 Move m = requote(intent, TransitionEvent.OBSERVED_INCOMPLETE);
                 intents.update(m.next(), intent.version(), workerId);
                 requoteEvents(intent, m);
@@ -743,6 +828,28 @@ public final class DefaultOrchestrator implements Orchestrator {
         Move m = move(intent, TransitionEvent.DEADLINE_REACHED);
         PurchaseIntent next = m.next().withFailureReason(OUTCOME_UNKNOWN);
         intents.update(next, intent.version(), workerId);
+        event(intent.id(), "escalated", Map.of("attempts", attempts.stream().map(a -> Map.of(
+                "attempt_id", a.id().value(), "op", a.op().name(), "revision", a.revision(),
+                "status", a.status().name(), "sent_at", a.sentAt().toString())).toList()));
+        transitionEvent(intent.id(), m.transition());
+        return moved(intent, next);
+    }
+
+    /**
+     * I3: the newest approval is missing, decided against, expired, or for another snapshot or another session than the
+     * intent was approved with. Nothing is sent and no attempt is written; the intent goes to ESCALATED with a reason, so a human
+     * looks at it instead of the worker retrying forever.
+     */
+    private Step escalateInvalidApproval(
+            PurchaseIntent intent, List<MerchantAttempt> attempts, Optional<ApprovalRecord> latest,
+            Optional<String> approvedHash) {
+        Move m = move(intent, TransitionEvent.APPROVAL_INVALID);
+        PurchaseIntent next = m.next().withFailureReason(APPROVAL_INVALID);
+        intents.update(next, intent.version(), workerId);
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("approval_status", latest.map(a -> a.status().name()).orElse("NONE"));
+        payload.put("hash_matches", latest.isPresent() && approvedHash.equals(latest.map(ApprovalRecord::snapshotHash)));
+        event(intent.id(), "approval_invalid", payload);
         event(intent.id(), "escalated", Map.of("attempts", attempts.stream().map(a -> Map.of(
                 "attempt_id", a.id().value(), "op", a.op().name(), "revision", a.revision(),
                 "status", a.status().name(), "sent_at", a.sentAt().toString())).toList()));
@@ -763,14 +870,21 @@ public final class DefaultOrchestrator implements Orchestrator {
         return new Step(intent.state(), intent.state(), false, Optional.empty());
     }
 
-    /** Records what was established for attempts whose own response was lost (the 7.4 guard reads it). */
-    private void settle(List<MerchantAttempt> sameKey, String resolvedBy, String observed) {
-        for (MerchantAttempt a : sameKey) {
-            if (a.status() != AttemptStatus.RESPONDED) {
-                intents.resolveAttempt(a.id(), AttemptStatus.RESPONDED, Optional.empty(), Optional.of(
-                        CanonicalJson.write(Map.of("resolved_by", resolvedBy, "observed", observed))));
-            }
+    /**
+     * Records what was established for attempts whose own response was lost (the 7.4 guard reads it). A fenced write
+     * (7.6): a worker whose lease was taken, or whose copy is stale, fails here and settles nothing. The intent is
+     * written by the caller's own fenced write that follows, at the same {@code expectedVersion}.
+     */
+    private void settle(
+            PurchaseIntent intent, List<MerchantAttempt> sameKey, String resolvedBy, String observed) {
+        List<AttemptId> unresolved = sameKey.stream().filter(a -> a.status() != AttemptStatus.RESPONDED)
+                .map(MerchantAttempt::id).toList();
+        if (unresolved.isEmpty()) {
+            return;
         }
+        intents.resolveAttempts(intent.id(), unresolved, AttemptStatus.RESPONDED, Optional.empty(),
+                Optional.of(CanonicalJson.write(Map.of("resolved_by", resolvedBy, "observed", observed))),
+                intent.version(), workerId);
     }
 
     /**
@@ -778,8 +892,8 @@ public final class DefaultOrchestrator implements Orchestrator {
      * also settles the earlier attempts under that key; a late arrival of any of them replays the same result.
      * Written before the fenced outcome write, so a crash in between cannot leave them unresolved (7.4 guard).
      */
-    private void settleSiblings(MerchantAttempt answered, String observed) {
-        settle(completesUnder(intents.attempts(answered.intentId()), answered.revision()).stream()
+    private void settleSiblings(PurchaseIntent written, MerchantAttempt answered, String observed) {
+        settle(written, completesUnder(intents.attempts(answered.intentId()), answered.revision()).stream()
                 .filter(a -> !a.id().equals(answered.id())).toList(), "same_key_answer", observed);
     }
 
@@ -801,18 +915,37 @@ public final class DefaultOrchestrator implements Orchestrator {
 
     // ---------------------------------------------------------------- owed cancel
 
+    /**
+     * The owed cancel (7.6): sent under the key cancel/0 while {@code cancel_pending} is set. A definitive answer clears
+     * the flag; so does the third unanswered attempt, which gives up. The intent's state never changes. An attempt a
+     * crash left SENT counts as one of the three.
+     */
     private Step cancelIfOwed(PurchaseIntent intent, List<MerchantAttempt> attempts) {
-        String reason = intent.failureReason().orElse("");
-        boolean owed = CANCEL_OWED.contains(reason) || reason.startsWith(POLICY_PREFIX)
-                || reason.startsWith(COMPLETE_ERROR_PREFIX);
-        if (!owed || intent.sessionId().isEmpty() || attempts.stream().anyMatch(a -> a.op() == AttemptOp.CANCEL)) {
+        if (!intent.cancelPending()) {
             return idle(intent);
+        }
+        if (intent.sessionId().isEmpty()) {
+            return probeOrphanSession(intent, attempts);
+        }
+        long tried = attempts.stream().filter(a -> a.op() == AttemptOp.CANCEL).count();
+        if (tried >= MAX_CANCEL_ATTEMPTS) {
+            PurchaseIntent next = intent.withCancelPending(false).withState(intent.state(), clock.instant());
+            intents.update(next, intent.version(), workerId);
+            event(intent.id(), "cancel_gave_up", Map.of("attempts", tried));
+            return moved(intent, next);
         }
         IdempotencyKey key = IdempotencyKey.derive(intent.id(), MutatingOp.CANCEL, 0);
         MerchantAttempt attempt = newAttempt(intent.id(), AttemptOp.CANCEL, 0, key, Optional.empty());
         PurchaseIntent written = writeAhead(intent, attempt, intent.withState(intent.state(), clock.instant()));
         CallOutcome<CheckoutView> outcome = merchant.cancel(requireSession(intent), key);
-        boolean answered = outcome instanceof CallOutcome.Ok<CheckoutView>;
+        boolean definitive = switch (outcome) {
+            case CallOutcome.Ok<CheckoutView> ok -> true;
+            case CallOutcome.Rejected<CheckoutView> r -> true;
+            case CallOutcome.ProtocolError<CheckoutView> e -> !isRetryable(e);
+            case CallOutcome.NotSent<CheckoutView> n -> false;
+            case CallOutcome.Uncertain<CheckoutView> u -> false;
+        };
+        boolean givingUp = !definitive && tried + 1 >= MAX_CANCEL_ATTEMPTS;
         Optional<Integer> http = switch (outcome) {
             case CallOutcome.Ok<CheckoutView> ok -> Optional.of(ok.httpStatus());
             case CallOutcome.ProtocolError<CheckoutView> e -> Optional.of(e.httpStatus());
@@ -821,10 +954,91 @@ public final class DefaultOrchestrator implements Orchestrator {
         Optional<String> response = outcome instanceof CallOutcome.Ok<CheckoutView> ok
                 ? Optional.of(CheckoutWire.responseSummary(ok.value()))
                 : Optional.of(describe(outcome));
-        resolve(attempt, answered ? AttemptStatus.RESPONDED : AttemptStatus.UNCERTAIN, http, response,
-                written.withState(written.state(), clock.instant()), written.version());
-        event(intent.id(), "cancel_sent", Map.of("outcome", answered ? "ok" : kind(outcome)));
+        PurchaseIntent next = written.withCancelPending(!(definitive || givingUp))
+                .withState(written.state(), clock.instant());
+        resolve(attempt, definitive ? AttemptStatus.RESPONDED : AttemptStatus.UNCERTAIN, http, response, next,
+                written.version());
+        event(intent.id(), "cancel_sent", Map.of("outcome", kind(outcome),
+                "attempt", tried + 1));
+        if (givingUp) {
+            event(intent.id(), "cancel_gave_up", Map.of("attempts", tried + 1));
+        }
         return new Step(intent.state(), intent.state(), false, Optional.empty());
+    }
+
+    /**
+     * The orphan-session probe (7.6 M3 note). A create that may have made a session the intent never learned of left
+     * {@code cancel_pending} set with no session id. One step re-sends that create under its own key, only when the body
+     * rebuilt from the intent is byte-identical to the frozen one (else nothing is sent), to learn the session id from the
+     * merchant's stored result; the next step cancels it. It never completes: the intent is terminal. At most
+     * {@link #MAX_PROBE_ATTEMPTS} probes; a Rejected answer ends the probe (no session exists), any other answer that is not Ok
+     * counts, and the last one gives up with an event.
+     */
+    private Step probeOrphanSession(PurchaseIntent intent, List<MerchantAttempt> attempts) {
+        List<MerchantAttempt> creates = attempts.stream()
+                .filter(a -> a.op() == AttemptOp.CREATE && a.revision() == 0).toList();
+        if (creates.isEmpty()) {
+            return stopProbing(intent, "orphan_probe_no_create", Map.of());
+        }
+        int probes = creates.size() - 1;
+        if (probes >= MAX_PROBE_ATTEMPTS) {
+            return stopProbing(intent, "orphan_probe_gave_up", Map.of("probes", probes));
+        }
+        MerchantAttempt original = creates.get(0);
+        CreateCheckout request = new CreateCheckout(intent.lines(), Optional.of(intent.buyerEmail()));
+        FrozenBody frozen = original.requestBody().orElse(null);
+        IdempotencyKey key = original.idempotencyKey().orElse(null);
+        if (frozen == null || key == null || !frozen.json().equals(CheckoutWire.createBody(request))) {
+            return stopProbing(intent, "orphan_probe_body_mismatch", Map.of("attempt_id", original.id().value()));
+        }
+
+        // An attempt left SENT by a crash is settled as uncertain first, fenced like every write here; it counts as a probe.
+        List<AttemptId> unresolved = creates.stream().filter(a -> a.status() == AttemptStatus.SENT)
+                .map(MerchantAttempt::id).toList();
+        if (!unresolved.isEmpty()) {
+            intents.resolveAttempts(intent.id(), unresolved, AttemptStatus.UNCERTAIN, Optional.empty(),
+                    Optional.of(CanonicalJson.write(Map.of("resolved_by", "recovery"))), intent.version(), workerId);
+        }
+        MerchantAttempt attempt = newAttempt(intent.id(), AttemptOp.CREATE, 0, key, Optional.of(frozen));
+        PurchaseIntent written = writeAhead(intent, attempt, intent.withState(intent.state(), clock.instant()));
+        CallOutcome<CheckoutView> outcome = merchant.create(request, key);
+
+        if (outcome instanceof CallOutcome.Ok<CheckoutView> ok) {
+            PurchaseIntent next = written.withSessionId(ok.value().id()).withState(written.state(), clock.instant());
+            resolve(attempt, AttemptStatus.RESPONDED, Optional.of(ok.httpStatus()),
+                    Optional.of(CheckoutWire.responseSummary(ok.value())), next, written.version());
+            event(intent.id(), "orphan_session_found", Map.of("probe", probes + 1));
+            return new Step(intent.state(), intent.state(), false, Optional.empty());
+        }
+        if (outcome instanceof CallOutcome.Rejected<CheckoutView> r) {
+            // The merchant answered the create with no session: it holds none for this key, so there is nothing to cancel.
+            PurchaseIntent next = written.withCancelPending(false).withState(written.state(), clock.instant());
+            resolve(attempt, AttemptStatus.RESPONDED, Optional.of(r.httpStatus()), Optional.of(describe(r)), next,
+                    written.version());
+            event(intent.id(), "orphan_probe_no_session", Map.of("probe", probes + 1));
+            return new Step(intent.state(), intent.state(), false, Optional.empty());
+        }
+        boolean answered = outcome instanceof CallOutcome.ProtocolError<CheckoutView>;
+        Optional<Integer> http = outcome instanceof CallOutcome.ProtocolError<CheckoutView> e
+                ? Optional.of(e.httpStatus())
+                : Optional.empty();
+        boolean last = probes + 1 >= MAX_PROBE_ATTEMPTS;
+        PurchaseIntent next = written.withCancelPending(!last).withState(written.state(), clock.instant());
+        resolve(attempt, answered ? AttemptStatus.RESPONDED : AttemptStatus.UNCERTAIN, http,
+                Optional.of(describe(outcome)), next, written.version());
+        event(intent.id(), "orphan_probe_sent", Map.of("outcome", kind(outcome), "probe", probes + 1));
+        if (last) {
+            event(intent.id(), "orphan_probe_gave_up", Map.of("probes", probes + 1));
+        }
+        return new Step(intent.state(), intent.state(), false, Optional.empty());
+    }
+
+    /** Clears the owed cancel without sending anything, and leaves an event for the operator. */
+    private Step stopProbing(PurchaseIntent intent, String eventType, Map<String, ?> payload) {
+        PurchaseIntent next = intent.withCancelPending(false).withState(intent.state(), clock.instant());
+        intents.update(next, intent.version(), workerId);
+        event(intent.id(), eventType, payload);
+        return moved(intent, next);
     }
 
     // ---------------------------------------------------------------- helpers
@@ -837,7 +1051,7 @@ public final class DefaultOrchestrator implements Orchestrator {
 
     private Move move(PurchaseIntent intent, TransitionEvent event, TransitionGuard... guards) {
         Transition t = TransitionTable.resolve(intent.state(), event, Set.of(guards));
-        return new Move(intent.withState(t.to(), clock.instant()), t);
+        return new Move(intent.moved(t, clock.instant()), t);
     }
 
     private MerchantAttempt newAttempt(

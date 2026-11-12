@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import dev.ucplab.core.MutableClock;
 import dev.ucplab.core.approval.ApprovalDecision;
+import dev.ucplab.core.approval.ApprovalRepository;
 import dev.ucplab.core.approval.ApprovalSecret;
 import dev.ucplab.core.approval.ApprovalTokens;
 import dev.ucplab.core.approval.DefaultApprovalService;
@@ -14,6 +15,9 @@ import dev.ucplab.core.identity.AuthContext;
 import dev.ucplab.core.identity.UserId;
 import dev.ucplab.core.intent.InMemoryIntentRepository;
 import dev.ucplab.core.intent.IntentId;
+import dev.ucplab.core.intent.IntentRepository;
+import dev.ucplab.core.intent.InMemoryRecoveryScan;
+import dev.ucplab.core.intent.RecoveryScan;
 import dev.ucplab.core.intent.IntentState;
 import dev.ucplab.core.intent.ProposalResult;
 import dev.ucplab.core.intent.ProposedLine;
@@ -61,8 +65,9 @@ final class Lab {
     };
 
     final MutableClock clock = new MutableClock(T0);
-    final InMemoryIntentRepository intents = new InMemoryIntentRepository(clock);
-    final InMemoryApprovalRepository approvals = new InMemoryApprovalRepository();
+    final IntentRepository intents;
+    final ApprovalRepository approvals;
+    final RecoveryScan scan;
     final FaultyMerchantModel merchant;
     final SequentialIdGenerator ids = new SequentialIdGenerator("id");
     final OrchestratorConfig config;
@@ -78,6 +83,26 @@ final class Lab {
 
     /** A lab whose merchant runs in {@code mode} (14.1 "Merchant strictness"). */
     Lab(OrchestratorConfig config, FaultyMerchantModel.Mode mode) {
+        this(config, mode, Lab::inMemoryStores);
+    }
+
+    /** The in-memory store: what every Lab used before an adapter could be plugged in. */
+    static CrashHarness.Stores inMemoryStores(MutableClock clock) {
+        InMemoryIntentRepository intents = new InMemoryIntentRepository(clock);
+        InMemoryApprovalRepository approvals = new InMemoryApprovalRepository();
+        return new CrashHarness.Stores(intents, approvals, new InMemoryRecoveryScan(intents, approvals));
+    }
+
+    /**
+     * A lab over any adapter: {@code storeFactory} builds the repositories and the recovery scan over this lab's clock
+     * (the SQL property tests pass a SQLite store).
+     */
+    Lab(OrchestratorConfig config, FaultyMerchantModel.Mode mode,
+            java.util.function.Function<MutableClock, CrashHarness.Stores> storeFactory) {
+        CrashHarness.Stores stores = storeFactory.apply(clock);
+        this.intents = stores.intents();
+        this.approvals = stores.approvals();
+        this.scan = stores.scan();
         this.config = config;
         this.merchant = new FaultyMerchantModel(SHOP, mode, clock, new SequentialIdGenerator("m"));
     }
@@ -94,16 +119,28 @@ final class Lab {
     }
 
     Worker worker(String workerId, MerchantGateway gateway) {
+        return worker(workerId, gateway, approvals);
+    }
+
+    /** A worker whose approval repository is {@code approvalRepository}, for tests that crash its writes. */
+    Worker worker(String workerId, MerchantGateway gateway, ApprovalRepository approvalRepository) {
+        return worker(workerId, gateway, approvalRepository, intents);
+    }
+
+    /** A worker over {@code intentRepository}, for tests that decorate the intent store (it must wrap {@link #intents}). */
+    Worker worker(
+            String workerId, MerchantGateway gateway, ApprovalRepository approvalRepository,
+            IntentRepository intentRepository) {
         PolicyConfig policyConfig = PolicyConfig.defaults();
         RuleBasedPolicyEngine policy = new RuleBasedPolicyEngine(policyConfig,
                 m -> m.equals(SHOP)
                         ? Optional.of(new MerchantEntry(SHOP, URI.create("http://127.0.0.1:8081"), "Shop", MerchantStatus.ACTIVE))
                         : Optional.empty(),
                 NO_USAGE, clock);
-        DefaultApprovalService approvalService = new DefaultApprovalService(intents, approvals,
+        DefaultApprovalService approvalService = new DefaultApprovalService(intentRepository, approvalRepository,
                 new ApprovalTokens(SECRET), clock, ids, workerId, config.lease(), DefaultApprovalService.DEFAULT_TTL,
                 DefaultApprovalService.DEFAULT_MAX_AUTH_AGE);
-        DefaultOrchestrator orchestrator = new DefaultOrchestrator(intents, approvals, approvalService, gateway, policy,
+        DefaultOrchestrator orchestrator = new DefaultOrchestrator(intentRepository, approvalRepository, approvalService, gateway, policy,
                 new RequotePolicy(policyConfig), payment, config, clock, ids, workerId, new SplittableRandom(42));
         return new Worker(workerId, orchestrator, approvalService);
     }
@@ -155,6 +192,14 @@ final class Lab {
     void waitUntilNextAttempt(StepResult r) {
         r.nextAttemptAt().filter(t -> t.isAfter(clock.instant()))
                 .ifPresent(t -> clock.advance(Duration.between(clock.instant(), t)));
+    }
+
+    /** The intent's event log: only the in-memory repository exposes it. */
+    List<dev.ucplab.core.intent.IntentEvent> events(IntentId id) {
+        if (intents instanceof InMemoryIntentRepository memory) {
+            return memory.events(id);
+        }
+        throw new UnsupportedOperationException("events are read through the in-memory repository only");
     }
 
     PurchaseIntent intent(IntentId id) {

@@ -12,4 +12,21 @@
 
     <artifactId>agent-core</artifactId>
     <name>Agent core</name>
+
+    <build>
+        <plugins>
+            <!-- M3: agent-persistence runs the repository contract suites and the crash matrix against SQL. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>test-jar</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
 </project>

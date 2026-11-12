@@ -13,4 +13,12 @@ public record Transition(
         Objects.requireNonNull(to, "to");
         Objects.requireNonNull(sideEffect, "sideEffect");
     }
+
+    /** Whether this row ends with a session cancel: the intent then carries cancel_pending (7.6). */
+    public boolean owesCancel() {
+        return switch (sideEffect) {
+            case CANCEL_SESSION, CANCEL_SESSION_BEST_EFFORT, REJECT_PRICE_UNSTABLE -> true;
+            default -> false;
+        };
+    }
 }

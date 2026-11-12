@@ -275,7 +275,7 @@ Any event that is not in this table for the current state is a programming error
 | QUOTING | quote\_ready | policy allows the quoted items and total | AWAITING\_APPROVAL | create approval and snapshot hash |
 | QUOTING | item\_unavailable or out\_of\_stock | none | FAILED\_NOT\_CHARGED | cancel session, best effort |
 | QUOTING | not\_sent or uncertain | retries left | QUOTING | resend with the same key (safe) |
-| QUOTING | retries exhausted | none | FAILED\_NOT\_CHARGED | no money has moved |
+| QUOTING | retries exhausted | none | FAILED\_NOT\_CHARGED | no money has moved; if the intent has a session id, set cancel\_pending in the same write (best-effort cancel, 7.6); with no session id and a create that may have reached the merchant, the orphan probe applies (7.6 M3 note) |
 | AWAITING\_APPROVAL | approved | token valid, hash matches, unexpired, unconsumed | APPROVED | consume the approval |
 | AWAITING\_APPROVAL | rejected or expired | none | REJECTED | cancel session |
 | APPROVED | send\_complete | attempt row persisted first | COMPLETING | POST complete |
@@ -289,6 +289,7 @@ Any event that is not in this table for the current state is a programming error
 | RECONCILING | observed canceled | none | FAILED\_NOT\_CHARGED | none |
 | RECONCILING | observed incomplete | none | QUOTING | re-quote on the same session, requote\_count + 1. Only while requote\_count is below the P8 cap |
 | RECONCILING | deadline reached | none | ESCALATED | event listing all attempts |
+| APPROVED | approval\_invalid | the newest approval is not PENDING, APPROVED or CONSUMED, or its snapshot hash differs from the intent's approved snapshot (I3) | ESCALATED | failure\_reason approval\_invalid; send nothing and write no attempt. Checked before the write-ahead of `complete` |
 | COMPLETING or RECONCILING | price\_changed, checkout incomplete or observed incomplete | requote\_count has reached the P8 cap | REJECTED | failure\_reason price\_unstable, cancel session. Not ESCALATED: no money has moved and the outcome is known |
 | RECONCILING | observed ready\_for\_complete | quiet period (7.5) not yet elapsed | RECONCILING | poll again; do not resend |
 | QUOTING | an update or GET shows the session completed or complete_in_progress | none | RECONCILING | send nothing new; reconciliation records the order. Defensive: a correct orchestrator should never reach this, but it must never throw here |
@@ -359,9 +360,10 @@ A `RecoveryWorker` runs every 5 s and once at startup. It selects intents in `QU
 
 **What the worker picks up \[CONTRACT\].** Besides `QUOTING`, `COMPLETING` and `RECONCILING`, each pass also handles:
 
-- `APPROVED`: calls `advance`, which sends `complete`. Without this, a crash between approval and the first `complete` would leave the intent stuck.
-- `AWAITING_APPROVAL` past the approval's `expires_at`: marks the approval `EXPIRED` and moves the intent to `REJECTED` with reason `approval_expired`.
-- Any intent with `cancel_pending` set, which happens when `REJECTED` or `FAILED_NOT_CHARGED` owes a best-effort cancel: sends `cancel` with its usual key, clears the flag on any definitive answer, and gives up after 3 attempts. A failed cancel never changes the intent's state.
+- `APPROVED`: calls `advance`, which sends `complete`. Without this, a crash between approval and the first `complete` would leave the intent stuck. An `APPROVED` intent whose approval is still `PENDING` (a crash inside `ApprovalService.decide`, after the intent write and before the approval write) has its approval moved to `APPROVED` by a fenced write before `complete` is sent.
+- `AWAITING_APPROVAL` past the approval's `expires_at`: moves the intent to `REJECTED` with reason `approval_expired` in a fenced write, then marks the approval `EXPIRED`. The intent is written first, so a crash between the two writes leaves a terminal intent, never an `AWAITING_APPROVAL` intent with an expired approval. Expiry acts only on intents still in `AWAITING_APPROVAL` (`RecoveryScan.approvalsDue`, Appendix B).
+- Any intent with `cancel_pending` set, which happens when `REJECTED` or `FAILED_NOT_CHARGED` owes a best-effort cancel: sends `cancel` under the key `cancel/0` (7.4), clears the flag on any definitive answer, and gives up after 3 attempts. `cancel_pending` is a persisted field of the intent, set in the same write as the move to the terminal state. A failed cancel never changes the intent's state.
+- `COMPLETING` with a `complete` attempt left `SENT` or `UNCERTAIN` goes to `RECONCILING` and sends nothing. `complete` is resent only after a `get` shows `ready_for_complete` and the quiet period (7.5) has elapsed. A resend that reconciliation approved is continued only by the process that made that `get`; a worker that takes over or restarts reads again first.
 
 **Liveness bounds for I5 \[CONTRACT\].**
 
@@ -373,14 +375,16 @@ A `RecoveryWorker` runs every 5 s and once at startup. It selects intents in `QU
 
 Each crash adds at most one lease period plus one worker period (30 s + 5 s = 35 s) before another worker takes over.
 
-**M3 note, a crash in QUOTING.** The orchestrator does not resend a QUOTING call after a crash (7.2): an intent whose create attempt was left `SENT` ends FAILED\_NOT\_CHARGED, and the merchant may hold a session for it that no order will ever use. `RecoveryWorker` handles this: it re-sends the create under the same idempotency key and the same frozen body only to learn the session id (the merchant returns the stored result), and then cancels that session. It never completes it.
+**M3 note, a crash in QUOTING.** The orchestrator does not resend a QUOTING call after a crash (7.2): an intent whose create attempt was left `SENT`, or `UNCERTAIN` after an answer that was not `NotSent`, ends FAILED\_NOT\_CHARGED, and the merchant may hold a session for it that no order will ever use. `RecoveryWorker` handles this: it re-sends the create under the same idempotency key and the same frozen body only to learn the session id (the merchant returns the stored result), and then cancels that session. It never completes it.
 
 Lease rules \[CONTRACT\]:
 
 - **Bounded steps.** One `advance` makes at most one merchant request, so it lasts at most the longest request timeout (10 s, section 8.3) plus persistence. Configuration validation fails at startup unless `lease` is at least 2 × the longest request timeout + 5 s (defaults: 30 s against 25 s).
 - **Renewal.** Before each `advance`, the worker calls `renewLease`, a conditional UPDATE `WHERE id = ? AND lease_owner = ?`. If no row matches, the worker has lost the lease and stops working on that intent.
-- **Fencing.** Every write inside `advance` (attempt row, event, state change) is conditional on both `version` and `lease_owner`. A worker that paused past its lease, for example in a long GC pause, fails its next write with `StaleVersionException` or `LeaseLostException` and abandons the step.
+- **Worker id.** The lease owner id is unique per process start and comes from `IdGenerator`; it is never a configured, stable name. With a stable name, a paused process and its restarted successor would share an owner and fencing could not tell them apart.
+- **Fencing.** Every write inside `advance` (attempt row, event, state change) is conditional on both `version` and `lease_owner`. Settling attempts (recording what reconciliation or a same-key answer established) is a fenced write too: `resolveAttempts` takes `expectedVersion` and `leaseOwner` (Appendix B). A worker that paused past its lease, for example in a long GC pause, fails its next write with `StaleVersionException` or `LeaseLostException` and abandons the step.
 - **Why overlap is still safe.** The paused worker's merchant call may already have happened. Duplicate GETs are reads, and a duplicate `complete` resend reuses the same key and byte-identical body (I7), so no second order can result. Fencing makes this hold by construction rather than by timing.
+- **Long waits.** `RecoveryWorker` sleeps for a wait of at most half the lease. A longer wait (a poll delayed by `Retry-After`, up to the deadline) is not slept: the worker parks the intent until it is due, claims it again on each pass (renewing the lease, since a worker may claim an intent whose lease it already holds) and skips it, then advances it at the due time.
 - **Deadline.** The reconciliation deadline comes from the persisted `uncertain_since`, so a change of worker never resets it (7.5).
 
 ### 7.7 De-duplication of proposals
@@ -515,7 +519,7 @@ Configuration file `policy.yaml`. `PolicyEngine.evaluateProposal(...)` and `eval
 
 ## 10. Data model
 
-Portable SQL (SQLite first, Postgres compatible). Migrations are managed with Flyway. Times are ISO-8601 UTC text.
+Portable SQL (SQLite first, Postgres compatible). Migrations are managed with Flyway. Times are ISO-8601 UTC text in one fixed width: nine fractional digits and a `Z`, for example `2026-01-01T00:00:00.000000000Z`. `Instant.toString()` varies in width, and `lease_until` is compared as text, so a variable width would order `...:00Z` after `...:00.250Z`. The key columns avoid SQLite-only syntax such as `AUTOINCREMENT`.
 
 ```sql
 CREATE TABLE purchase_intent (
@@ -523,6 +527,8 @@ CREATE TABLE purchase_intent (
   user_id TEXT NOT NULL,
   merchant_id TEXT NOT NULL,
   dedupe_key TEXT NOT NULL,
+  lines_json TEXT NOT NULL,             -- the proposal's lines, fixed at creation; a create or update resent after a crash is rebuilt byte for byte from them
+  buyer_email TEXT NOT NULL,            -- from AuthContext, never from the model (18.1)
   state TEXT NOT NULL,
   version INTEGER NOT NULL,
   session_id TEXT,                      -- merchant checkout id; immutable once a complete attempt exists (I4)
@@ -541,18 +547,18 @@ CREATE UNIQUE INDEX ux_intent_active_dedupe ON purchase_intent(dedupe_key)
   WHERE state NOT IN ('COMPLETED','REJECTED','FAILED_NOT_CHARGED','ESCALATED');
 
 CREATE TABLE intent_event (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
   intent_id TEXT NOT NULL,
-  seq INTEGER NOT NULL,
+  seq INTEGER NOT NULL,                 -- assigned as MAX(seq) + 1 inside the writing transaction
   type TEXT NOT NULL,
   payload_json TEXT NOT NULL,
   at TEXT NOT NULL,
-  UNIQUE (intent_id, seq)
+  PRIMARY KEY (intent_id, seq)
 );
 
 CREATE TABLE merchant_attempt (
   id TEXT PRIMARY KEY,
   intent_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,                 -- order of recording within the intent, assigned inside the writing transaction
   op TEXT NOT NULL,                     -- create, update, complete, cancel, get
   revision INTEGER NOT NULL,
   idempotency_key TEXT,
@@ -562,12 +568,14 @@ CREATE TABLE merchant_attempt (
   http_status INTEGER,
   response_json TEXT,
   sent_at TEXT NOT NULL,
-  responded_at TEXT
+  responded_at TEXT,
+  UNIQUE (intent_id, seq)
 );
 
 CREATE TABLE approval (
   id TEXT PRIMARY KEY,
   intent_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,                 -- order of insertion within the intent, assigned as MAX(seq) + 1 inside the writing transaction; the newest approval has the highest seq
   user_id TEXT NOT NULL,                -- must equal the intent's owner (I10)
   snapshot_json TEXT NOT NULL,
   snapshot_hash TEXT NOT NULL,
@@ -575,7 +583,9 @@ CREATE TABLE approval (
   expires_at TEXT NOT NULL,
   status TEXT NOT NULL,                 -- PENDING, APPROVED, REJECTED, EXPIRED, CONSUMED
   decided_at TEXT,
-  decided_by TEXT
+  decided_by TEXT,
+  UNIQUE (intent_id, seq),
+  FOREIGN KEY (intent_id) REFERENCES purchase_intent(id)
 );
 
 CREATE INDEX ix_intent_user ON purchase_intent(user_id, created_at);
@@ -632,6 +642,8 @@ CREATE TABLE agent_run (
   output_tokens INTEGER
 );
 ```
+
+**Guards in the schema (M3, migration V4).** The tables above carry `CHECK`s on `state`, `op` and `status` (the values of the Java enums, tested), `cancel_pending IN (0, 1)` and non-negative counters, plus `CHECK (state <> 'COMPLETED' OR order_id IS NOT NULL)` and `UNIQUE (merchant_id, order_id) WHERE order_id IS NOT NULL`. They do not make at-most-one-order by themselves: a resend legitimately writes several `COMPLETE` attempt rows under one key, and the merchant owns order creation (7.4, 7.5). There is deliberately no `UNIQUE (intent_id) WHERE status = 'SENT'`: a crash leaves a `SENT` row that recovery must be free to supersede. Indexes serve `claimRecoverable` and `RecoveryScan.approvalsDue` (7.6).
 
 ## 11. Observability
 
@@ -1013,8 +1025,8 @@ docker compose up
 ### 21.3 Running several agent instances \[CONTRACT\]
 
 - Postgres is required; SQLite is single-instance only.
-- Lease checks use the database clock (`now()` in SQL), never an instance's clock.
-- `RecoveryWorker` claims intents with `SELECT … FOR UPDATE SKIP LOCKED`.
+- Lease checks use the database clock (`now()` in SQL), never an instance's clock. Single-instance SQLite (M3) is the exception: it binds the injected `Clock` as a parameter, which keeps every lease test deterministic. The database `now()` arrives with Postgres (M7).
+- `RecoveryWorker` claims intents with `SELECT … FOR UPDATE SKIP LOCKED` on Postgres (M7). SQLite claims with a conditional `UPDATE` inside an immediate transaction.
 - Spend-cap and rate-limit counters (P3, P5) are checked and updated in the same transaction as the intent insert.
 - Circuit breakers are per instance. This is acceptable because they protect availability, not correctness.
 - Model conversations live in instance memory with session affinity. Losing one is safe: nothing is bought before `propose_purchase`, and intents are persisted.
@@ -1086,7 +1098,7 @@ In `prod` these routes do not exist (404).
 
 ### 23.5 Errors and limits
 
-Errors use one shape: `{code, message, request_id}`. Codes: `unauthenticated` (401), `reauth_required` (401), `csrf_failed` (403), `not_found` (404), `approval_not_pending` (409), `intent_busy` (409, with Retry-After set to the remaining lease time; returned when another worker still holds the intent's lease, for example for up to 30 s after a crash), `validation_failed` (422), `rate_limited` (429, with `Retry-After`), `internal` (500, no internals in the message). `POST /api/runs` is limited per user by P5 and returns 429 when exceeded.
+Errors use one shape: `{code, message, request_id}`. Codes: `unauthenticated` (401), `reauth_required` (401), `csrf_failed` (403), `not_found` (404), `approval_not_pending` (409), `intent_busy` (409, with Retry-After set to the remaining lease time; returned when another worker still holds the intent's lease, for example for up to 30 s after a crash), `validation_failed` (422), `rate_limited` (429, with `Retry-After`), `internal` (500, no internals in the message). Core reports `intent_busy` as `ApprovalDecision.Busy(retryAfter)`; the REST layer maps it to 409 `intent_busy` with `Retry-After` (M6). A `LeaseLostException` from a fenced write inside `advance` or `decide` also maps to 409 `intent_busy` (the caller retries after the lease), and a `StaleVersionException` inside `decide` maps to `approval_not_pending` (M6). `POST /api/runs` is limited per user by P5 and returns 429 when exceeded.
 
 ## 24. Lab console (UI)
 
@@ -1310,8 +1322,19 @@ public interface IntentRepository {
   void appendEvent(IntentId id, IntentEvent event);
   void recordAttempt(MerchantAttempt attempt, PurchaseIntent intent, long expectedVersion, String leaseOwner); // one transaction (7.3 step 3)
   void resolveAttempt(AttemptId id, AttemptStatus status, Optional<Integer> httpStatus, Optional<String> responseJson);
+  /** QUOTING, APPROVED, COMPLETING and RECONCILING intents, and any intent with cancel_pending set, whose lease is empty, expired or already held by owner (7.6; the last lets a worker renew a lease it parked an intent under). */
   List<PurchaseIntent> claimRecoverable(String owner, Duration lease, int limit);
+  /** The same, leaving out the intents in exclude: not claimed, not renewed, not counted against limit (a worker's parked intents, 7.6). */
+  List<PurchaseIntent> claimRecoverable(String owner, Duration lease, int limit, Set<IntentId> exclude);
+  /** Settles attempts under the same fencing as update (7.6): lease owner, then version. Writes only the attempts; the intent's version is unchanged. All or none. */
+  void resolveAttempts(IntentId intentId, List<AttemptId> ids, AttemptStatus status, Optional<Integer> httpStatus,
+      Optional<String> responseJson, long expectedVersion, String leaseOwner);
   boolean renewLease(IntentId id, String owner, Duration lease); // false = lease lost (7.6)
+}
+
+/** System read for RecoveryWorker (7.6): intents still in AWAITING_APPROVAL whose pending approval has expired. */
+public interface RecoveryScan {
+  List<IntentId> approvalsDue(Instant now, int limit);
 }
 
 public interface Orchestrator {
@@ -1323,6 +1346,17 @@ public interface Orchestrator {
 public interface ApprovalService {
   PendingApproval open(PurchaseIntent intent, CheckoutView quote);  // builds the snapshot from the quote
   ApprovalDecision decide(AuthContext auth, IntentId id, String token, boolean approve); // owner and recent sign-in only (I10)
+}
+
+public sealed interface ApprovalDecision {
+  record Approved(IntentId intentId) implements ApprovalDecision {}
+  record Rejected(IntentId intentId) implements ApprovalDecision {}
+  record ReauthRequired() implements ApprovalDecision {}
+  record NotPending() implements ApprovalDecision {}
+  record NotFound() implements ApprovalDecision {}
+  record InvalidToken() implements ApprovalDecision {}
+  /** Another worker holds the intent's lease (23.5 intent_busy); retryAfter is the remaining lease time. */
+  record Busy(Duration retryAfter) implements ApprovalDecision {}
 }
 
 public interface PolicyEngine {

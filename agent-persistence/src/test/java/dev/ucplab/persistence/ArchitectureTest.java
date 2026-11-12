@@ -1,5 +1,6 @@
 package dev.ucplab.persistence;
 
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 
 import com.tngtech.archunit.core.domain.JavaClasses;
@@ -18,6 +19,18 @@ class ArchitectureTest {
     void architecture_noAdkTypes_outsideAgentAdk() {
         noClasses()
                 .should().dependOnClassesThat().resideInAPackage("com.google.adk..")
+                // The module has no classes yet.
+                .allowEmptyShould(true)
+                .check(PRODUCTION_CLASSES);
+    }
+
+    // Covers: section 5.2 (agent-persistence may depend on agent-core, the JDK, Flyway and the SQLite driver only)
+    @Test
+    void architecture_persistenceDependsOnCoreAndJdbcOnly_always() {
+        classes()
+                .should().onlyDependOnClassesThat()
+                .resideInAnyPackage("java..", "javax.sql..", "dev.ucplab.core..", "dev.ucplab.persistence..",
+                        "org.flywaydb..", "org.sqlite..")
                 // The module has no classes yet.
                 .allowEmptyShould(true)
                 .check(PRODUCTION_CLASSES);
