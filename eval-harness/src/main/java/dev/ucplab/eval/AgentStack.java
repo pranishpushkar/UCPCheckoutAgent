@@ -42,7 +42,8 @@ import java.util.concurrent.TimeUnit;
  * recovery worker and loop with a new worker id. Real time throughout: the system clock and {@code Thread.sleep}
  * (m4-plan section 3). Nothing carries over from one run to the next.
  *
- * <p>The same wiring serves the extra workers of S14 ({@link #racer}).
+ * <p>The same wiring serves the agent child process of S9 and S28 ({@link AgentMain}) and the extra workers of S14
+ * ({@link #racer}).
  */
 final class AgentStack implements AutoCloseable {
 
@@ -75,8 +76,8 @@ final class AgentStack implements AutoCloseable {
      * @param ids the run's id generator (a seeded sequence with a prefix unique to the lane and run, Decision 4; a
      *     UUIDv7 generator in the child process)
      * @param approvalLease how long a decision holds the intent for this stack's worker. The orchestrator's lease, so
-     *     the first complete follows at once; S14 decides as a separate process would (the REST API in M6) and passes
-     *     a lease of {@link #DECISION_ONLY}, so other workers can take the APPROVED intent at once
+     *     the first complete follows at once; S9, S14 and S28 decide as a separate process would (the REST API in M6)
+     *     and pass a lease of {@link #DECISION_ONLY}, so other workers can take the APPROVED intent at once
      */
     AgentStack(URI merchantUrl, Path dbFile, TimeScale scale, long seed, IdGenerator ids, String paymentToken,
                Duration approvalLease) {
@@ -115,6 +116,10 @@ final class AgentStack implements AutoCloseable {
 
     String workerId() {
         return worker.workerId();
+    }
+
+    Path dbFile() {
+        return dbFile;
     }
 
     private DefaultOrchestrator orchestrator(SqlIntentRepository repo, SqlApprovalRepository approvalRepo,

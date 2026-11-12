@@ -12,6 +12,7 @@ import java.io.IOException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -27,6 +28,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -53,22 +55,33 @@ public final class RunScript {
     private final TimeScale scale;
     private final Consumer<String> tokenSeen;
     private final Consumer<List<RaceOutcome>> raceSeen;
+    private final Semaphore childSlots;
 
     public RunScript(Lane lane, TimeScale scale) {
-        this(lane, scale, t -> { }, r -> { });
+        this(lane, scale, t -> { }, r -> { }, new Semaphore(ChildProcess.MAX_CHILDREN));
+    }
+
+    /**
+     * @param childSlots shared by every lane of an evaluation: a run that starts agent child processes holds one slot
+     *     for its whole length, so at most {@link ChildProcess#MAX_CHILDREN} child JVMs run at once
+     */
+    public RunScript(Lane lane, TimeScale scale, Semaphore childSlots) {
+        this(lane, scale, t -> { }, r -> { }, childSlots);
     }
 
     /** @param tokenSeen given every approval token the approver uses (the redaction test only) */
-    RunScript(Lane lane, TimeScale scale, Consumer<String> tokenSeen) {
-        this(lane, scale, tokenSeen, r -> { });
+    RunScript(Lane lane, TimeScale scale, Consumer<String> tokenSeen, Semaphore childSlots) {
+        this(lane, scale, tokenSeen, r -> { }, childSlots);
     }
 
     /** @param raceSeen given the outcome of every racer of an S14 run (its test only) */
-    RunScript(Lane lane, TimeScale scale, Consumer<String> tokenSeen, Consumer<List<RaceOutcome>> raceSeen) {
+    RunScript(Lane lane, TimeScale scale, Consumer<String> tokenSeen, Consumer<List<RaceOutcome>> raceSeen,
+              Semaphore childSlots) {
         this.lane = Objects.requireNonNull(lane, "lane");
         this.scale = Objects.requireNonNull(scale, "scale");
         this.tokenSeen = Objects.requireNonNull(tokenSeen, "tokenSeen");
         this.raceSeen = Objects.requireNonNull(raceSeen, "raceSeen");
+        this.childSlots = Objects.requireNonNull(childSlots, "childSlots");
     }
 
     public TimeScale scale() {
@@ -91,6 +104,24 @@ public final class RunScript {
 
     public RunEvidence run(Scenario scenario, int run, long seed) {
         Objects.requireNonNull(scenario, "scenario");
+        if (scenario.driver() != Scenario.Driver.KILL_AND_RESTART) {
+            return run(scenario, run, seed, Optional.empty());
+        }
+        try {
+            // Held for the whole run: the restart must not wait behind another lane's child (S9's takeover margin).
+            childSlots.acquire();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("interrupted while waiting for a child slot", e);
+        }
+        try {
+            return run(scenario, run, seed, Optional.of(Scenarios.killPoint(scenario, run)));
+        } finally {
+            childSlots.release();
+        }
+    }
+
+    private RunEvidence run(Scenario scenario, int run, long seed, Optional<KillPoint> killPoint) {
         Instant startedAt = Instant.now();
         String name = "L" + lane.index() + "-" + scenario.id() + "-r" + run;
         lane.merchant().reset();
@@ -107,17 +138,24 @@ public final class RunScript {
         Optional<Thread> clearer = Optional.empty();
         AtomicReference<String> windowFailed = new AtomicReference<>();
         List<AgentStack.Racer> racers = new ArrayList<>();
+        Children children = new Children(name, seed);
         try (AgentStack stack = new AgentStack(lane.agentFacingUrl(), lane.newDatabase(name), scale, seed,
                 new SequentialIdGenerator(name), scenario.paymentToken(),
-                race ? AgentStack.DECISION_ONLY : scale.orchestrator().lease())) {
+                race || killPoint.isPresent() ? AgentStack.DECISION_ONLY : scale.orchestrator().lease())) {
             Supplier<AuthContext> auth = () -> new AuthContext(user, user.value() + "@eval.example",
                     stack.clock.instant(), "eval-session-" + name);
             AutoApprover approver = new AutoApprover(stack.approvalService, scenario.approver(), auth, stack.clock,
                     tokenSeen, () -> scenario.beforeFirstDecision().apply(lane.merchant(), scale));
             try {
+                if (killPoint.isPresent()) {
+                    // The agent child is the worker; it is running before the intent exists.
+                    children.start(stack.dbFile());
+                }
                 proposed.addAll(propose(stack, scenario, run, auth));
                 Set<IntentId> ids = new LinkedHashSet<>(proposed);
-                if (race) {
+                if (killPoint.isPresent()) {
+                    // No loop here: only the child drives the intent.
+                } else if (race) {
                     for (int i = 0; i < RACERS; i++) {
                         racers.add(stack.racer(new SequentialIdGenerator(name + "-w" + i), i));
                     }
@@ -131,7 +169,9 @@ public final class RunScript {
                             if (window.isPresent() && clearer.isEmpty()) {
                                 clearer = Optional.of(openWindow(window.get(), windowFailed));
                             }
-                            if (race && !racers.isEmpty()) {
+                            if (killPoint.isPresent()) {
+                                // The child's next pass takes the APPROVED intent.
+                            } else if (race && !racers.isEmpty()) {
                                 aborted = race(stack, id, racers);
                                 racers.forEach(AgentStack.Racer::close);
                                 racers.clear();
@@ -145,6 +185,13 @@ public final class RunScript {
                     if (aborted.isPresent()) {
                         break;
                     }
+                    if (killPoint.isPresent() && children.kills() == 0 && killPoint.get().due(lane.proxy().log(startSeq),
+                            stack.intents.findForSystem(proposed.getFirst()), scale, Instant.now())) {
+                        aborted = children.killAndRestart(stack.dbFile());
+                        if (aborted.isPresent()) {
+                            break;
+                        }
+                    }
                     if (ids.stream().allMatch(id -> done(stack, id))) {
                         terminalSeenAt = Optional.of(Instant.now());
                         break;
@@ -155,6 +202,10 @@ public final class RunScript {
                     }
                     Thread.sleep(POLL);
                 }
+                if (killPoint.isPresent() && aborted.isEmpty() && children.kills() == 0) {
+                    aborted = Optional.of("the intent ended before kill point " + killPoint.get() + " was reached");
+                }
+                aborted = aborted.or(children::stop);
                 stack.loop.close();
                 if (clearer.isPresent() && !closeWindow(clearer.get(), window.get())) {
                     aborted = aborted.or(() -> Optional.of("the fault window was not cleared"));
@@ -174,9 +225,12 @@ public final class RunScript {
                 aborted = Optional.of("interrupted");
             } catch (RuntimeException e) {
                 aborted = Optional.of("harness error: " + e.getClass().getSimpleName());
+            } catch (IOException e) {
+                aborted = Optional.of("agent child: " + e.getMessage());
             } finally {
                 racers.forEach(AgentStack.Racer::close);
                 clearer.ifPresent(Thread::interrupt);
+                children.close();
             }
             decisions = approver.log();
         } catch (IOException e) {
@@ -194,7 +248,96 @@ public final class RunScript {
         List<LogEntry> log = lane.proxy().log(startSeq);
         lane.proxyLogMark();
         return new RunEvidence(scenario.id(), run, seed, lane.index(), user, aborted, proposed, persisted, orders, sessions,
-                log, decisions, startedAt, terminalSeenAt);
+                log, decisions, startedAt, terminalSeenAt, children.kills(), children.records());
+    }
+
+    /**
+     * The agent child processes of one S9 or S28 run (m4-plan section 8): one is running at a time, each with a log
+     * file next to the run's database, and the kill and the restart go through here.
+     */
+    private final class Children implements AutoCloseable {
+        /** How long a child JVM may take to print READY. */
+        private static final Duration READY_LIMIT = Duration.ofSeconds(30);
+
+        private final String name;
+        private final long seed;
+        private final List<RunEvidence.Child> done = new ArrayList<>();
+        private ChildProcess current;
+        private String currentWorker;
+        private Path currentLog;
+        private Path currentDb;
+        private int kills;
+
+        Children(String name, long seed) {
+            this.name = name;
+            this.seed = seed;
+        }
+
+        int kills() {
+            return kills;
+        }
+
+        void start(Path db) throws IOException, InterruptedException {
+            int n = done.size() + 1;
+            currentDb = db;
+            currentLog = db.resolveSibling(name + "-child-" + n + ".log");
+            current = ChildProcess.startAgent(db, lane.agentFacingUrl(), scale, seed + n, currentLog);
+            currentWorker = current.awaitReady(READY_LIMIT);
+        }
+
+        /** kill -9, then a new child on the same file at once. Returns why the run must abort, if it must. */
+        Optional<String> killAndRestart(Path db) throws IOException, InterruptedException {
+            int exit = current.kill();
+            kills++;
+            finish(true, exit);
+            if (exit != ChildProcess.SIGKILL_EXIT) {
+                return Optional.of("the agent child exited " + exit + " after destroyForcibly, not "
+                        + ChildProcess.SIGKILL_EXIT + " (SIGKILL)");
+            }
+            start(db);
+            return Optional.empty();
+        }
+
+        /** Stops the running child normally at the end of the run. */
+        Optional<String> stop() {
+            if (current == null) {
+                return Optional.empty();
+            }
+            try {
+                finish(false, current.stop());
+                return Optional.empty();
+            } catch (IOException e) {
+                return Optional.of("agent child: " + e.getMessage());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return Optional.of("interrupted");
+            }
+        }
+
+        private void finish(boolean killed, int exit) throws IOException {
+            done.add(new RunEvidence.Child(currentWorker, currentDb.getFileName().toString(), killed, exit,
+                    current.log()));
+            current = null;
+        }
+
+        List<RunEvidence.Child> records() {
+            return List.copyOf(done);
+        }
+
+        /** An aborted run: kill whatever is still running, and keep its log. */
+        @Override
+        public void close() {
+            if (current != null) {
+                current.close();
+                try {
+                    done.add(new RunEvidence.Child(currentWorker == null ? "(not ready)" : currentWorker,
+                            currentDb.getFileName().toString(), true, -1, current.log()));
+                } catch (IOException e) {
+                    // The log is lost; the abort reason already says why.
+                }
+                current = null;
+            }
+        }
     }
 
     private static boolean done(AgentStack stack, IntentId id) {
@@ -206,7 +349,7 @@ public final class RunScript {
                                    Supplier<AuthContext> auth) throws InterruptedException {
         String rationale = "scripted run: " + scenario.id();
         return switch (scenario.driver()) {
-            case PROPOSE_ONCE, ADVANCE_RACE -> List.of(stack.orchestrator.propose(auth.get(), scenario.target(), scenario.basket(),
+            case PROPOSE_ONCE, ADVANCE_RACE, KILL_AND_RESTART -> List.of(stack.orchestrator.propose(auth.get(), scenario.target(), scenario.basket(),
                     rationale).intentId());
             case PROPOSE_TWICE -> {
                 if (run % 2 == 0) {

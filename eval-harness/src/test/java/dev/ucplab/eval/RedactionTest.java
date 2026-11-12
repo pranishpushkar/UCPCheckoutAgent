@@ -27,11 +27,12 @@ import org.junit.jupiter.api.io.TempDir;
  * m4-plan risk 9, I8: a full report from real runs of every scenario, with an evidence folder for every run, never
  * contains a payment token, an approval token, an Authorization value, the bodyHmac key (hex or Base64), or any
  * request or response body the agent stored. The test sees the real tokens, key and bodies and searches every file
- * written for each of them.
+ * written for each of them, the stdout and stderr of every agent child process (S9, S28) included.
  */
 class RedactionTest {
 
-    // Covers: I8, 13.5 (m4-plan risk 9: nothing secret reaches the report or the evidence folders)
+    // Covers: I8, 13.5, S9, S28 (m4-plan risk 9: nothing secret reaches the report, the evidence folders or the agent
+    // child processes' logs kept in them)
     @Test
     void fullReportFromRealRuns_containsNoSecretOrBody(@TempDir Path out) throws IOException, InterruptedException {
         byte[] key = new byte[32];
@@ -74,6 +75,13 @@ class RedactionTest {
         assertThat(files).contains(out.resolve("report.json"), out.resolve("report.md"));
         assertThat(files).anySatisfy(f -> assertThat(f.toString()).contains("intents.json"));
         assertThat(files.size()).isGreaterThan(2 + 6 * report.scenarios().size());
+        // Every child log the runs produced was written out, so the search below covers it.
+        long childLogs = evidence.stream().mapToLong(e -> e.children().size()).sum();
+        assertThat(childLogs).as("agent child processes started").isGreaterThanOrEqualTo(8);
+        assertThat(evidence).allSatisfy(e -> assertThat(e.children()).allSatisfy(
+                c -> assertThat(c.log()).contains(AgentMain.READY)));
+        assertThat(files.stream().filter(f -> f.getFileName().toString().matches("child-\\d+\\.log")).count())
+                .as("child logs in the evidence folders").isEqualTo(childLogs);
         for (Path f : files) {
             String text = Files.readString(f, StandardCharsets.UTF_8);
             forbidden.forEach((needle, what) -> assertThat(text)

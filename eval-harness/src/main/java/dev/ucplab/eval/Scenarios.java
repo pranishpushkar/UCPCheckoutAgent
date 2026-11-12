@@ -120,6 +120,31 @@ public final class Scenarios {
             AutoApprover.Policy.APPROVE_ALL, Scenario.Driver.PROPOSE_ONCE, SHOP, TWO_SHIRTS, PAY_OK,
             Scenario.MerchantEvent.NONE, t -> Optional.of(new Scenario.AdminRules(S8_OUTAGE_RULES, t.s8Outage())));
 
+    /**
+     * S9: the agent child process is killed with kill -9 in COMPLETING or RECONCILING and started again on the same
+     * file with a new worker id; its runs go through K1, K2 and K3 in turn ({@link KillPoint#forS9}). The new worker
+     * takes over within one lease and one worker period, inside the reconcile deadline, and reconciles.
+     */
+    public static final Scenario S9 = new Scenario("S9", "agent process killed (kill -9) while COMPLETING or"
+            + " RECONCILING, then restarted", "kill -9 of the agent child at K1 (complete held before forwarding), K2"
+                    + " (the merchant's answer held) or K3 (first read held after a dropped answer), in turn; restart"
+                    + " on the same database with a new worker id",
+            Set.of(IntentState.COMPLETED), List.of("I1", "I4", "I5"),
+            (t, run) -> KillPoint.forS9(run).rules(t, run), AutoApprover.Policy.APPROVE_ALL,
+            Scenario.Driver.KILL_AND_RESTART, SHOP, TWO_SHIRTS, PAY_OK);
+
+    /**
+     * S28 (13.2, D4): the kill comes late in RECONCILING, while every read is answered 503, so the new worker takes
+     * over after the reconcile deadline and must escalate. No order in even runs (the complete never reached the
+     * merchant), one in odd runs (its answer was dropped).
+     */
+    public static final Scenario S28 = new Scenario("S28", "agent process killed late in RECONCILING, so the takeover"
+            + " comes after the reconciliation deadline", "complete closed before forwarding (even runs) or answered"
+                    + " and dropped (odd runs); 503 on every read; kill -9 once D - L/2 has passed since"
+                    + " uncertain_since; restart on the same database with a new worker id",
+            Set.of(IntentState.ESCALATED), List.of("I1", "I4", "I5"), (t, run) -> KillPoint.LATE.rules(t, run),
+            AutoApprover.Policy.APPROVE_ALL, Scenario.Driver.KILL_AND_RESTART, SHOP, TWO_SHIRTS, PAY_OK);
+
     public static final Scenario S11 = new Scenario("S11", "merchant host not on the allowlist",
             "none; the proposal names a merchant missing from the registry", Set.of(IntentState.REJECTED),
             List.of("I3"), (t, run) -> RuleSet.empty(), AutoApprover.Policy.APPROVE_ALL, Scenario.Driver.PROPOSE_ONCE,
@@ -148,7 +173,16 @@ public final class Scenarios {
 
     /** Every row the harness can run, in catalogue order. */
     public static List<Scenario> all() {
-        return List.of(S0, S1, S2, S3, S4, S5A, S5B, S6, S7, S8, S11, S13, S14);
+        return List.of(S0, S1, S2, S3, S4, S5A, S5B, S6, S7, S8, S9, S11, S13, S14, S28);
+    }
+
+    /** Where a run of a {@link Scenario.Driver#KILL_AND_RESTART} row kills the agent. */
+    static KillPoint killPoint(Scenario s, int run) {
+        return switch (s.id()) {
+            case "S9" -> KillPoint.forS9(run);
+            case "S28" -> KillPoint.LATE;
+            default -> throw new IllegalArgumentException(s.id() + " kills no agent process");
+        };
     }
 
     private static RuleSet rules(int run, Rule... rules) {

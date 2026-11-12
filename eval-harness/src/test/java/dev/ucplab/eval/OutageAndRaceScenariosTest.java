@@ -15,6 +15,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.OptionalInt;
+import java.util.concurrent.Semaphore;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -41,7 +42,7 @@ class OutageAndRaceScenariosTest {
         byte[] key = new byte[32];
         new SecureRandom().nextBytes(key);
         lane = Lane.start(0, key, dir);
-        script = new RunScript(lane, SCALE, t -> { }, races::add);
+        script = new RunScript(lane, SCALE, t -> { }, races::add, new Semaphore(ChildProcess.MAX_CHILDREN));
         checks = CheckContext.of(SCALE, key, Scenarios.SHOP, RunScript.POLL);
     }
 

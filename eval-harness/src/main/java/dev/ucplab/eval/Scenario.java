@@ -82,7 +82,13 @@ public record Scenario(
          * Once; after the approval, {@link RunScript#RACERS} workers, each with its own orchestrator, worker id and
          * database connection on the run's file, call {@code advance} on the APPROVED intent at the same instant (S14).
          */
-        ADVANCE_RACE
+        ADVANCE_RACE,
+        /**
+         * Once, by the harness, which also decides; the intent is driven by an agent child process ({@link AgentMain})
+         * on the run's database file, killed with kill -9 at the run's {@link KillPoint} and started again at once
+         * with a new worker id (S9, S28).
+         */
+        KILL_AND_RESTART
     }
 
     public Scenario {

@@ -29,6 +29,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
@@ -39,7 +40,8 @@ import java.util.stream.Stream;
  *
  * <p>The {@code bodyHmac} key is generated here, held in memory only, and handed to every lane's proxy and to the
  * checks. The lanes' database files hold the agent's frozen bodies (and so the mock card tokens); they live in a
- * temporary folder outside the output folder and are deleted at the end.
+ * temporary folder outside the output folder and are deleted at the end. So do the agent child processes' log files;
+ * their text goes into the evidence of the runs that keep one.
  */
 public final class Evaluation {
 
@@ -126,6 +128,7 @@ public final class Evaluation {
                     lanes.add(Lane.start(i, key, work));
                 }
                 CheckContext checks = CheckContext.of(config.timeScale(), key, Scenarios.SHOP, RunScript.POLL);
+                Semaphore childSlots = new Semaphore(ChildProcess.MAX_CHILDREN);
                 ExecutorService pool = Executors.newFixedThreadPool(laneCount, r -> {
                     Thread t = new Thread(r, "eval-lane");
                     t.setDaemon(true);
@@ -134,7 +137,7 @@ public final class Evaluation {
                 try {
                     List<Future<?>> running = new ArrayList<>();
                     for (Lane lane : lanes) {
-                        RunScript script = new RunScript(lane, config.timeScale(), tokenSeen);
+                        RunScript script = new RunScript(lane, config.timeScale(), tokenSeen, childSlots);
                         running.add(pool.submit(() -> drain(tasks, script, checks, results)));
                     }
                     for (Future<?> f : running) {
@@ -172,7 +175,8 @@ public final class Evaluation {
         for (Task t = tasks.poll(); t != null; t = tasks.poll()) {
             RunEvidence e = script.run(t.scenario(), t.run(), t.seed());
             evidenceSeen.accept(e);
-            CheckResult found = Checks.run(e, checks);
+            // Each kill of the agent process extends the 7.6 bounds of I5 by one takeover.
+            CheckResult found = Checks.run(e, checks.withCrashes(e.crashes()));
             RunResult result = RunResult.of(t.scenario(), e, found);
             if (evidence == EvidenceMode.ALL || result.failed()) {
                 String rel = "evidence/" + t.scenario().id() + "/run-" + t.run();

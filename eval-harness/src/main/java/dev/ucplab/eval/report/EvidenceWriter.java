@@ -22,10 +22,12 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Writes one run's evidence folder (m4-plan section 11): L, O, G, A, D and what the checks found. Redaction (I8,
+ * Writes one run's evidence folder (m4-plan section 11): L, O, G, A, D, what the checks found, and the stdout and
+ * stderr of each agent child process (S9, S28) as {@code child-<n>.log}. Redaction (I8,
  * m4-plan risk 9) is by construction: only typed fields are written, field by field, and none of them is a request or
  * response body, a payment or approval token (nor a token's hash), an Authorization value or the {@code bodyHmac} key.
- * A frozen request body appears only as its length.
+ * A frozen request body appears only as its length. The child logs are written as the child printed them: the child
+ * prints nothing secret ({@code AgentMain}), and the redaction test searches them like every other file.
  */
 public final class EvidenceWriter {
 
@@ -41,6 +43,10 @@ public final class EvidenceWriter {
         put(dir, "sessions.json", e.sessions().values().stream().map(EvidenceWriter::session).toList());
         put(dir, "approvals.json", e.approvals().stream().map(EvidenceWriter::decision).toList());
         put(dir, "intents.json", e.intents().stream().map(EvidenceWriter::persisted).toList());
+        for (int i = 0; i < e.children().size(); i++) {
+            Files.writeString(dir.resolve("child-" + (i + 1) + ".log"), e.children().get(i).log(),
+                    StandardCharsets.UTF_8);
+        }
         return dir;
     }
 
@@ -59,6 +65,19 @@ public final class EvidenceWriter {
         m.put("proposed", e.proposed().stream().map(i -> i.value()).toList());
         m.put("startedAt", e.startedAt().toString());
         m.put("terminalSeenAt", optTime(e.terminalSeenAt()));
+        m.put("crashes", e.crashes());
+        List<Object> children = new ArrayList<>();
+        for (int i = 0; i < e.children().size(); i++) {
+            RunEvidence.Child c = e.children().get(i);
+            Map<String, Object> x = new LinkedHashMap<>();
+            x.put("workerId", c.workerId());
+            x.put("dbFile", c.dbFile());
+            x.put("killed", c.killed());
+            x.put("exitValue", c.exitValue());
+            x.put("log", "child-" + (i + 1) + ".log");
+            children.add(x);
+        }
+        m.put("children", children);
         Map<String, Object> v = new LinkedHashMap<>();
         checks.byInvariant().forEach((id, list) -> v.put(id, list.stream().map(x -> x.detail()).toList()));
         m.put("violations", v);
