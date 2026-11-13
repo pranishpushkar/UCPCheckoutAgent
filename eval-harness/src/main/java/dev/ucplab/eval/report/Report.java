@@ -10,8 +10,11 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * One evaluation's report (13.5, m4-plan section 11), before it is written as JSON or Markdown. It is reduced unless
- * every row has at least {@value #FULL_RUNS} runs at time scale 1.
+ * One evaluation's report (13.5, m4-plan section 11), before it is written as JSON or Markdown. A scripted report is
+ * reduced unless every row has at least {@value #FULL_RUNS} runs at time scale 1. A live report is reduced unless every
+ * row has at least {@value #LIVE_FULL_RUNS} runs at time scale 1 and no cap stopped it: the M5 live acceptance is 30
+ * runs (DESIGN 16, m5-plan section 10), and 13.5 ties the 200-run rule to {@code --require-full}, which live mode
+ * refuses.
  *
  * @param merchantVersion the UCP version the in-process merchant speaks
  * @param runtime the Java version and the operating system, as one line each
@@ -23,6 +26,8 @@ public record Report(Instant generatedAt, CommitInfo commit, EvalConfig config, 
 
     /** 13.5: the acceptance report has 200 runs per scenario. */
     public static final int FULL_RUNS = 200;
+    /** A live report's runs per row (DESIGN 16: S10 and S12 pass in live mode over 30 runs). */
+    public static final int LIVE_FULL_RUNS = 30;
 
     /** The exit codes of 13.5. */
     public static final int CLEAN = 0;
@@ -60,8 +65,9 @@ public record Report(Instant generatedAt, CommitInfo commit, EvalConfig config, 
     }
 
     public boolean reduced() {
+        int full = live.isPresent() ? LIVE_FULL_RUNS : FULL_RUNS;
         return config.timeScale().k() != 1 || scenarios.isEmpty() || stopped().isPresent()
-                || scenarios.stream().anyMatch(s -> s.n() < FULL_RUNS);
+                || scenarios.stream().anyMatch(s -> s.n() < full);
     }
 
     /** The first line of a reduced report (13.5: a reduced report says so in its first line). */

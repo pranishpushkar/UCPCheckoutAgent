@@ -12,6 +12,7 @@ import dev.ucplab.eval.check.InvariantCheck;
 import dev.ucplab.eval.check.Violation;
 import java.io.IOException;
 import java.io.InputStream;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -243,5 +244,59 @@ class ReportGoldenTest {
                 l -> assertThat(l).contains(r.reducedBanner()));
         assertThat(ReportMarkdown.write(r)).contains("3 (fewer: S9 1)");
         assertThat(ReportJson.write(r)).contains("\"fewerRuns\": {").contains("\"S9\": 1");
+    }
+
+    private static List<RunResult> liveRuns(String scenario, int n) {
+        List<RunResult> runs = new ArrayList<>();
+        for (int run = 0; run < n; run++) {
+            runs.add(agent(scenario, run, IntentState.COMPLETED, true, 4, 3, 4_000, 500, Optional.empty()));
+        }
+        return runs;
+    }
+
+    private static Report live(int s10Runs, int s12Runs, int k, Optional<String> stopped) {
+        return new Report(AT, COMMIT, new EvalConfig(30, TimeScale.of(k), 2, 42), "2026-08-25", RUNTIME,
+                List.of(new ScenarioSummary(Scenarios.A_S10, liveRuns("A-S10", s10Runs)),
+                        new ScenarioSummary(Scenarios.A_S12, liveRuns("A-S12", s12Runs))),
+                Optional.empty(), Optional.of(new LiveRun("gemini-3.8-flash", "v1", new BigDecimal("2"), 800_000,
+                        270_000, new BigDecimal("0.3"), stopped)));
+    }
+
+    // Covers: 13.5, DESIGN 16 (M5: S10 and S12 pass in live mode over 30 runs), m5-plan section 10 (a live report is
+    // reduced only below 30 runs per live row, at a time scale other than 1, or when a cap stopped it; 13.5 ties the
+    // 200-run rule to --require-full, which live mode refuses)
+    @Test
+    void liveReport_thirtyRunsAtRealTime_notReduced() {
+        Report full = live(30, 30, 1, Optional.empty());
+
+        assertThat(full.reduced()).isFalse();
+        assertThat(full.exitCode()).isEqualTo(Report.CLEAN);
+        assertThat(ReportMarkdown.write(full)).startsWith("# Live evaluation report").doesNotContain("REDUCED");
+        assertThat(ReportJson.write(full)).contains("\"reduced\": false");
+
+        Report fewer = live(30, 29, 1, Optional.empty());
+        assertThat(fewer.reduced()).isTrue();
+        assertThat(fewer.reducedBanner()).isEqualTo("REDUCED: 30 runs per scenario (A-S12 29), time scale 1 — not an"
+                + " acceptance report");
+        assertThat(live(30, 30, 4, Optional.empty()).reduced()).isTrue();
+        Report stopped = live(30, 30, 1, Optional.of("live cost cap reached: estimated $2.1 of --max-cost-usd 2"));
+        assertThat(stopped.reduced()).isTrue();
+        assertThat(stopped.reducedBanner()).startsWith("REDUCED: live cost cap reached");
+    }
+
+    // Covers: 13.5 (the scripted rule is unchanged: a scripted report with fewer than 200 runs per row is reduced,
+    // even at 30 runs and real time)
+    @Test
+    void scriptedReport_thirtyRunsAtRealTime_stillReduced() {
+        List<RunResult> thirty = new ArrayList<>();
+        for (int run = 0; run < 30; run++) {
+            thirty.add(clean("S0", run, IntentState.COMPLETED, 9));
+        }
+        Report r = new Report(AT, COMMIT, new EvalConfig(30, TimeScale.of(1), 2, 42), "2026-08-25", RUNTIME,
+                List.of(new ScenarioSummary(Scenarios.S0, thirty)));
+
+        assertThat(r.reduced()).isTrue();
+        assertThat(r.reducedBanner()).isEqualTo("REDUCED: 30 runs per scenario, time scale 1 — not an acceptance"
+                + " report");
     }
 }
