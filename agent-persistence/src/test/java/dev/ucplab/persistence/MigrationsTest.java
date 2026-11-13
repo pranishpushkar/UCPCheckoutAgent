@@ -256,4 +256,31 @@ class MigrationsTest {
         assertThat(new TreeSet<>(List.of(m.group(1).replace("'", "").split(","))))
                 .containsExactlyInAnyOrder("done", "waiting_for_approval", "budget_exceeded", "user_timeout", "failed");
     }
+
+    // Covers: section 10, 18.5 (V6 creates app_user and user_session, from empty and on a database at V5)
+    @Test
+    void v6_createsTheUserAndSessionTables_fromEmptyAndFromV5() {
+        Path empty = dir.resolve("v6.db");
+        Migrations.migrate(empty);
+        Path upgraded = dir.resolve("v5-to-v6.db");
+        Flyway.configure().dataSource("jdbc:sqlite:" + upgraded, null, null).locations("classpath:db/migration")
+                .target("5").load().migrate();
+        try (Database old = Database.open(upgraded, 1)) {
+            exec(old, "INSERT INTO agent_run (id, user_id, model, started_at, updated_at) VALUES ('r', 'u', 'm', 't', 't')");
+        }
+        Migrations.migrate(upgraded);
+
+        for (Path file : List.of(empty, upgraded)) {
+            try (Database db = Database.open(file, 1)) {
+                assertThat(column(db, "SELECT name FROM sqlite_master WHERE type = 'table'"))
+                        .contains("app_user", "user_session").doesNotContain("login_state");
+                assertThat(column(db, "SELECT name FROM sqlite_master WHERE type = 'index'")).contains("ix_session_user");
+                assertThat(column(db, "SELECT version FROM flyway_schema_history WHERE success = 1"
+                        + " ORDER BY installed_rank")).endsWith("6");
+            }
+        }
+        try (Database db = Database.open(upgraded, 1)) {
+            assertThat(column(db, "SELECT id FROM agent_run")).containsExactly("r");
+        }
+    }
 }
