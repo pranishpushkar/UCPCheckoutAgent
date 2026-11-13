@@ -27,7 +27,8 @@ import java.util.regex.Pattern;
  * and in prod not a {@code change-me} placeholder, 9.2); {@code POLICY_FILE} (optional, {@link PolicyFile}; prod refuses
  * {@code approval_required: false}, P6); {@code MERCHANT_URL}, the one merchant of M6 as the agent reaches it (25.4:
  * "M6 configures its one merchant directly"; default the proxy at {@code http://127.0.0.1:9101}); {@code LOCAL_USERS},
- * the names the local dev sign-in offers (18.8, default {@code alice,bob}); {@code AGENT_MODEL} ({@code scripted} by default, or
+ * the names the local dev sign-in offers (18.8, default {@code alice,bob}); {@code MERCHANT_LAB_URL} (the merchant direct, for the local lab, default
+ * {@code http://127.0.0.1:9001}); {@code AGENT_MODEL} ({@code scripted} by default, or
  * {@code gemini}, which needs {@code GEMINI_API_KEY}; {@code GEMINI_BASE_URL} may point it at a loopback stub);
  * {@code PUBLIC_ORIGIN}, a
  * comma-separated list of the origins a browser shows for this service, which the dev sign-in checks {@code Origin}
@@ -44,6 +45,7 @@ public final class ServiceProperties {
     static final String APPROVAL_OFF = "POLICY_FILE turns approval off, which the prod profile refuses";
     static final String MERCHANT_INVALID = "MERCHANT_URL must be an http URL";
     static final String USERS_INVALID = "LOCAL_USERS must be a comma-separated list of lowercase names";
+    static final String LAB_URL_INVALID = "MERCHANT_LAB_URL must be an http URL";
     static final String MODEL_INVALID = "AGENT_MODEL must be scripted or gemini";
     static final String MODEL_KEY_REQUIRED = "AGENT_MODEL=gemini needs GEMINI_API_KEY";
     static final String MODEL_URL_INVALID = "GEMINI_BASE_URL must be an http URL on a loopback address";
@@ -60,6 +62,8 @@ public final class ServiceProperties {
     /** Both loopback spellings of the console's address, so either works in a browser (Stage 3 review, point 2). */
     private static final String DEFAULT_ORIGINS = "http://localhost:8080,http://127.0.0.1:8080";
     private static final String DEFAULT_MERCHANT_URL = "http://127.0.0.1:9101";
+    /** The merchant itself, where the lab reads ground truth; the proxy never forwards {@code /_lab} (12). */
+    private static final String DEFAULT_LAB_URL = "http://127.0.0.1:9001";
     private static final Pattern LOCAL_NAME = Pattern.compile("[a-z][a-z0-9]{0,31}");
 
     private final AgentProfile profile;
@@ -73,11 +77,12 @@ public final class ServiceProperties {
     private final AgentModel agentModel;
     private final Optional<ModelKey> modelKey;
     private final Optional<URI> modelBaseUrl;
+    private final URI merchantLabUrl;
 
     private ServiceProperties(AgentProfile profile, Path databaseFile, byte[] approvalSecret, ApprovalSecret approvalKey,
                               PolicyConfig policy, MerchantEntry merchant, List<String> localUsers,
                               List<String> publicOrigins, AgentModel agentModel, Optional<ModelKey> modelKey,
-                              Optional<URI> modelBaseUrl) {
+                              Optional<URI> modelBaseUrl, URI merchantLabUrl) {
         this.profile = profile;
         this.databaseFile = databaseFile;
         this.approvalSecret = approvalSecret;
@@ -89,6 +94,7 @@ public final class ServiceProperties {
         this.agentModel = agentModel;
         this.modelKey = modelKey;
         this.modelBaseUrl = modelBaseUrl;
+        this.merchantLabUrl = merchantLabUrl;
     }
 
     /** Reads and checks every setting; throws {@link IllegalStateException} with a fixed message on the first refusal. */
@@ -161,11 +167,20 @@ public final class ServiceProperties {
         if (agentModel == AgentModel.GEMINI && modelKey.isEmpty()) {
             throw new IllegalStateException(MODEL_KEY_REQUIRED);
         }
+        URI labUrl;
+        try {
+            labUrl = URI.create(env.get("MERCHANT_LAB_URL").orElse(DEFAULT_LAB_URL));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalStateException(LAB_URL_INVALID);
+        }
+        if (!"http".equals(labUrl.getScheme()) && !"https".equals(labUrl.getScheme()) || labUrl.getHost() == null) {
+            throw new IllegalStateException(LAB_URL_INVALID);
+        }
         Optional<URI> modelBaseUrl = env.get("GEMINI_BASE_URL").map(ServiceProperties::loopbackUrl);
 
         return new ServiceProperties(profile, databaseFile, secretBytes, approvalKey, policy, merchant, localUsers,
                 origins(env.get("PUBLIC_ORIGIN").orElse(DEFAULT_ORIGINS)), agentModel,
-                agentModel == AgentModel.GEMINI ? modelKey : Optional.empty(), modelBaseUrl);
+                agentModel == AgentModel.GEMINI ? modelKey : Optional.empty(), modelBaseUrl, labUrl);
     }
 
     /** A test points the live client at a loopback stub; any other host could receive the key, so it is refused. */
@@ -232,6 +247,11 @@ public final class ServiceProperties {
     /** The origins a browser shows for this service, each as {@code scheme://host[:port]}. */
     public List<String> publicOrigins() {
         return publicOrigins;
+    }
+
+    /** The merchant as the lab reaches it directly, for ground-truth reads and resets (local profile only). */
+    public URI merchantLabUrl() {
+        return merchantLabUrl;
     }
 
     public AgentModel agentModel() {

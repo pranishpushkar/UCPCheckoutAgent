@@ -86,6 +86,7 @@ final class TestService implements AutoCloseable {
         try {
             Map<String, String> env = baseEnv(dir);
             env.put("MERCHANT_URL", proxy.baseUrl().toString());
+            env.put("MERCHANT_LAB_URL", merchant.baseUrl().toString());
             env.putAll(extra);
             ApplicationContextInitializer<ConfigurableApplicationContext> overrides = context -> {
                 context.getBeanFactory().registerSingleton("testRecoveryConfig", NO_PASSES);

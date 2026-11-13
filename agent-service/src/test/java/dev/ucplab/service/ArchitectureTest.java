@@ -1,5 +1,6 @@
 package dev.ucplab.service;
 
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -144,6 +145,30 @@ class ArchitectureTest {
         noClasses()
                 .that().resideInAPackage("dev.ucplab.service.run..")
                 .should().dependOnClassesThat().resideInAnyPackage("java.util.concurrent.locks..")
+                .check(PRODUCTION_CLASSES);
+    }
+
+    // Covers: 23.3, m6-plan section 6 (every top-level class in the lab package is a local-profile bean, so in prod the routes are
+    // not mapped and answer 404)
+    @Test
+    void labClasses_areAllLocalProfile() {
+        classes()
+                .that().resideInAPackage("dev.ucplab.service.lab..").and().areTopLevelClasses()
+                .should().beAnnotatedWith(org.springframework.context.annotation.Profile.class)
+                .andShould(new com.tngtech.archunit.lang.ArchCondition<com.tngtech.archunit.core.domain.JavaClass>(
+                        "have @Profile(\"local\")") {
+                    @Override
+                    public void check(com.tngtech.archunit.core.domain.JavaClass item,
+                                      com.tngtech.archunit.lang.ConditionEvents events) {
+                        boolean local = item.isAnnotatedWith(org.springframework.context.annotation.Profile.class)
+                                && java.util.Arrays.equals(item.getAnnotationOfType(
+                                        org.springframework.context.annotation.Profile.class).value(),
+                                        new String[] {"local"});
+                        events.add(new com.tngtech.archunit.lang.SimpleConditionEvent(item, local,
+                                item.getName() + (local ? " is" : " is not") + " @Profile(\"local\")"));
+                    }
+                })
+                .allowEmptyShould(false)
                 .check(PRODUCTION_CLASSES);
     }
 

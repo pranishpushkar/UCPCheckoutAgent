@@ -47,6 +47,15 @@ public final class LabMerchant implements AutoCloseable {
         lab("POST", "/_lab/price", "{\"item_id\":\"" + itemId + "\",\"price\":" + priceMinor + "}");
     }
 
+    /** The merchant's current price of an item, from {@code GET /_lab/catalog}. */
+    @SuppressWarnings("unchecked")
+    public long price(String itemId) {
+        List<Map<String, Object>> items = (List<Map<String, Object>>) (List<?>) LenientJson
+                .readObject(lab("GET", "/_lab/catalog", null)).get("items");
+        return items.stream().filter(i -> itemId.equals(i.get("id"))).map(i -> ((Number) i.get("price")).longValue())
+                .findFirst().orElseThrow();
+    }
+
     private String lab(String method, String path, String body) {
         try {
             HttpRequest.Builder r = HttpRequest.newBuilder(baseUrl().resolve(path)).timeout(Duration.ofSeconds(5));
