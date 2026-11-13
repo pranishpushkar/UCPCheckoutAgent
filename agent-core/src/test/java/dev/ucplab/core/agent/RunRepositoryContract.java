@@ -123,6 +123,70 @@ public abstract class RunRepositoryContract {
         assertThat(repo.forIntent(BOB, I2)).isEmpty();
     }
 
+    // Covers: 23.1, P5 (a run's start is its turn 0: an inserted run has one turn, a missing or unowned run none)
+    @Test
+    void turns_insertedRunHasItsStartAsTurnZero() {
+        repo.insert(ALICE, RunRecord.started(new RunId("r1"), ALICE, "scripted", T0));
+
+        assertThat(repo.turns(ALICE, new RunId("r1"))).isEqualTo(1);
+        assertThat(repo.turns(BOB, new RunId("r1"))).as("T6").isZero();
+        assertThat(repo.turns(ALICE, new RunId("missing"))).isZero();
+    }
+
+    // Covers: 23.1, Decision 3 (each continuation adds one turn, so the cap of 5 continuations is turns <= 6)
+    @Test
+    void addTurn_byOwner_addsOneTurnEach() {
+        repo.insert(ALICE, RunRecord.started(new RunId("r1"), ALICE, "scripted", T0));
+
+        for (int i = 1; i <= 5; i++) {
+            assertThat(repo.addTurn(ALICE, new RunId("r1"), T0.plusSeconds(i))).isTrue();
+        }
+
+        assertThat(repo.turns(ALICE, new RunId("r1"))).isEqualTo(6);
+    }
+
+    // Covers: T1, T2, T6 (a turn cannot be added to another user's run or a missing one: refused, nothing written)
+    @Test
+    void addTurn_anotherUsersOrMissingRun_isRefused() {
+        repo.insert(ALICE, RunRecord.started(new RunId("r1"), ALICE, "scripted", T0));
+
+        assertThat(repo.addTurn(BOB, new RunId("r1"), T0.plusSeconds(1))).isFalse();
+        assertThat(repo.addTurn(BOB, new RunId("missing"), T0.plusSeconds(1))).isFalse();
+
+        assertThat(repo.turns(ALICE, new RunId("r1"))).isEqualTo(1);
+        assertThat(repo.turnsSince(BOB, T0)).isZero();
+    }
+
+    // Covers: 23.1, P5, Decision 3 (the hourly run limit counts every turn of the user's runs since the instant given,
+    // inclusive; another user's turns never count)
+    @Test
+    void turnsSince_countsTheOwnersTurnsFromTheInstantInclusive() {
+        repo.insert(ALICE, RunRecord.started(new RunId("r1"), ALICE, "scripted", T0));
+        repo.addTurn(ALICE, new RunId("r1"), T0.plusSeconds(10));
+        repo.insert(ALICE, RunRecord.started(new RunId("r2"), ALICE, "scripted", T0.plusSeconds(20)));
+        repo.insert(BOB, RunRecord.started(new RunId("r3"), BOB, "scripted", T0.plusSeconds(30)));
+        repo.addTurn(BOB, new RunId("r3"), T0.plusSeconds(31));
+
+        assertThat(repo.turnsSince(ALICE, T0)).isEqualTo(3);
+        assertThat(repo.turnsSince(ALICE, T0.plusNanos(1))).isEqualTo(2);
+        assertThat(repo.turnsSince(ALICE, T0.plusSeconds(10))).isEqualTo(2);
+        assertThat(repo.turnsSince(ALICE, T0.plusSeconds(21))).isZero();
+        assertThat(repo.turnsSince(BOB, T0)).isEqualTo(2);
+        assertThat(repo.turnsSince(new UserId("carol"), T0)).isZero();
+    }
+
+    // Covers: 23.1 (updating a run when it ends keeps its turns)
+    @Test
+    void update_keepsTheRunsTurns() {
+        repo.insert(ALICE, RunRecord.started(new RunId("r1"), ALICE, "scripted", T0));
+        repo.addTurn(ALICE, new RunId("r1"), T0.plusSeconds(1));
+
+        repo.update(ALICE, ended("r1", ALICE, List.of(I1)));
+
+        assertThat(repo.turns(ALICE, new RunId("r1"))).isEqualTo(2);
+        assertThat(repo.turnsSince(ALICE, T0)).isEqualTo(2);
+    }
+
     // Covers: T2 (the harness's system read sees a run whoever owns it)
     @Test
     void findForSystem_seesAnyOwnersRun() {

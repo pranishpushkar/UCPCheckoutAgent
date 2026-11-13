@@ -307,6 +307,16 @@ public final class InMemoryIntentRepository implements IntentRepository {
         }
     }
 
+    /** The owner's intents, in no particular order: the view {@link InMemoryIntentQueries} pages over (T2). */
+    List<PurchaseIntent> ownedBy(UserId owner) {
+        lock.lock();
+        try {
+            return intents.values().stream().filter(i -> i.owner().equals(owner)).toList();
+        } finally {
+            lock.unlock();
+        }
+    }
+
     /** Test and harness view of an intent's event log, in append order (sequence numbers are the positions plus one). */
     public List<IntentEvent> events(IntentId id) {
         lock.lock();
