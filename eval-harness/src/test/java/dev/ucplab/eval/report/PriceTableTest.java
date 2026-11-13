@@ -74,4 +74,21 @@ class PriceTableTest {
         // 20k input and 2k output tokens, the plan's ceiling for one run: 0.015 + 0.0075.
         assertThat(p.cost(20_000, 2_000)).isEqualByComparingTo(new BigDecimal("0.0225"));
     }
+
+    // Covers: R4 (Stage 5b: the gemini-3.6-flash price file, read 2026-11-13 from its own section of
+    // https://aistudio.google.com/docs/pricing, Paid Tier, Standard tab: input $0.75 and "Output price (including
+    // thinking tokens)" $3.75 per 1M tokens through 2026-12-31; $1.50 and $7.50 from 2027-01-01. The same rates as
+    // gemini-3.8-flash.)
+    @Test
+    void read_gemini36PriceFile_pinnedValues() throws Exception {
+        PriceTable p = PriceTable.read(Path.of(PriceTableTest.class
+                .getResource("/dev/ucplab/eval/prices/gemini-3.6-flash.json").toURI()));
+
+        assertThat(p.model()).isEqualTo("gemini-3.6-flash");
+        assertThat(p.date()).isEqualTo(LocalDate.of(2026, 11, 13));
+        assertThat(p.currency()).isEqualTo("USD");
+        assertThat(p.inputPerMillionTokens()).isEqualByComparingTo("0.75");
+        assertThat(p.outputPerMillionTokens()).isEqualByComparingTo("3.75");
+        assertThat(p.source()).isEqualTo("https://aistudio.google.com/docs/pricing");
+    }
 }

@@ -59,15 +59,18 @@ public record RunEvidence(
      * @param breach the limit a {@code BudgetExceeded} run breached
      * @param asks how many times the agent called {@code ask_user}
      * @param intentsAtFirstAsk how many intents the user had when the first {@code ask_user} arrived (S12)
+     * @param answeringModels live: the distinct model versions the run's responses named, as ids, sorted; empty for a
+     *     scripted run or when no response named one
      */
     public record AgentRun(RunRecord record, String traceJsonl, String outcomeType, Optional<String> breach, int asks,
-                           Optional<Integer> intentsAtFirstAsk) {
+                           Optional<Integer> intentsAtFirstAsk, List<String> answeringModels) {
         public AgentRun {
             Objects.requireNonNull(record, "record");
             Objects.requireNonNull(traceJsonl, "traceJsonl");
             Objects.requireNonNull(outcomeType, "outcomeType");
             Objects.requireNonNull(breach, "breach");
             Objects.requireNonNull(intentsAtFirstAsk, "intentsAtFirstAsk");
+            answeringModels = List.copyOf(answeringModels);
         }
     }
 

@@ -30,6 +30,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import java.util.regex.Pattern;
 
 /**
  * Maps 6.5's ports to a genai request and the response back (C15, ADR 0004 items 2 and 3). Pure: no network, no
@@ -206,6 +207,21 @@ final class GeminiMapping {
         }
         seen.forEach(remember::part);
         return new ModelTurn(text.toString(), calls, usage);
+    }
+
+    /** What {@link #answeringModel} reports for a {@code modelVersion} that is not an id. */
+    static final String UNRECOGNISED_VERSION = "unrecognised";
+
+    private static final Pattern VERSION_ID = Pattern.compile("[A-Za-z0-9._:/@-]{1,128}");
+
+    /**
+     * The model that answered, from the response's {@code modelVersion} ("The model version used to generate the
+     * response", genai 1.80.0), which can differ from the id sent: a retired id is routed to its replacement. Only an id
+     * is passed on, never text: anything else is {@link #UNRECOGNISED_VERSION}. Empty when the response names none.
+     */
+    static Optional<String> answeringModel(GenerateContentResponse response) {
+        return response.modelVersion()
+                .map(v -> VERSION_ID.matcher(v).matches() ? v : UNRECOGNISED_VERSION);
     }
 
     /** Where {@link #turn} hands each function call part as received, under its call id. */

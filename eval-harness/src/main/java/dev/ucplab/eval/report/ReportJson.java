@@ -136,6 +136,11 @@ public final class ReportJson {
             injection.put("runsWithRefusedProposal", s.refusedProposalRuns());
             m.put("injection", injection);
         }
+        if (s.mode() == Mode.AGENT_LIVE && r.live().isPresent()) {
+            m.put("answeringModels", new LinkedHashMap<String, Object>(s.answeringModels()));
+            m.put("runsWithoutAnsweringModel", s.runsWithoutAnsweringModel());
+            m.put("answeringModelDiffers", ReportMarkdown.differs(s, r.live().get().model()));
+        }
         Map<String, Object> terminal = new LinkedHashMap<>();
         s.terminal().forEach((state, n) -> terminal.put(state.name(), n));
         m.put("terminal", terminal);

@@ -38,7 +38,7 @@ import java.util.function.UnaryOperator;
  *
  * <p>Every exception that leaves {@link #generate} is a {@link GeminiException} with a fixed reason (I8). For the live
  * I6 check, {@link ModelClientSettings#requestedTools} is given the function names of every request this client
- * actually built.
+ * actually built, and {@link ModelClientSettings#answeringModel} the model version each response names.
  *
  * <p>It keeps the function call parts it received, by call id, for the thought signatures (see
  * {@link GeminiMapping}), so one client serves one run's conversation. It holds no lock: the map is concurrent and a
@@ -94,6 +94,7 @@ public final class GeminiModelClient implements ModelClient, AutoCloseable {
                     id -> Optional.ofNullable(received.get(id)));
             settings.requestedTools().accept(GeminiMapping.declaredNames(config));
             GenerateContentResponse response = client.models.generateContent(model, contents, config);
+            GeminiMapping.answeringModel(response).ifPresent(settings.answeringModel());
             return GeminiMapping.turn(response, () -> ID_PREFIX + nextId.incrementAndGet(), received::put);
         } catch (GeminiException e) {
             throw e;

@@ -94,6 +94,21 @@ class GeminiModelClientTest {
         assertThat(stub.received().get(1).body()).doesNotContain("functionDeclarations");
     }
 
+    // Covers: R4 (the answering model of each call goes to the settings' observer; the turn itself is unchanged, 6.5)
+    @Test
+    void generate_everyCall_reportsTheAnsweringModel() {
+        ConcurrentLinkedQueue<String> answering = new ConcurrentLinkedQueue<>();
+        GeminiModelClient client = new GeminiModelClient(ModelKey.of(KEY),
+                settings().withAnsweringModel(answering::add), name -> null);
+        stub.answer(200, "{\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"hi\"}]},"
+                + "\"finishReason\":\"STOP\"}]," + USAGE + ",\"modelVersion\":\"gemini-3.6-flash\"}");
+
+        client.generate(ask("hello"), TOOLS);
+        client.generate(ask("hello again"), TOOLS);
+
+        assertThat(answering).containsExactly("gemini-3.6-flash", "gemini-3.6-flash");
+    }
+
     // Covers: I8, R2 (the key travels in the x-goog-api-key header only: never in the URL or the body)
     @Test
     void generate_key_inTheHeaderOnly() {

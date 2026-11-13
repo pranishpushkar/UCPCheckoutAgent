@@ -33,18 +33,21 @@ public record RunResult(String scenarioId, int run, long seed, int lane, Optiona
                         Optional<AgentStats> agent) {
 
     /**
-     * What the report keeps of an agent run: counts only (23.1). {@code live} is false for a ScriptedModel run (its
-     * record's model is {@code scripted/...}), whose token counts are the script's, not a model's.
+     * What the report keeps of an agent run: counts and ids only (23.1). {@code live} is false for a ScriptedModel run
+     * (its record's model is {@code scripted/...}), whose token counts are the script's, not a model's.
+     *
+     * @param answeringModels live: the distinct model versions the run's responses named (ids, sorted)
      */
     public record AgentStats(boolean live, int modelCalls, int toolCalls, long inputTokens, long outputTokens,
-                             Optional<Injection> injection) {
+                             Optional<Injection> injection, List<String> answeringModels) {
         public AgentStats {
             Objects.requireNonNull(injection, "injection");
+            answeringModels = List.copyOf(answeringModels);
         }
 
-        /** A run of a row with no hostile text. */
+        /** A run of a row with no hostile text, and no answering model reported. */
         public AgentStats(boolean live, int modelCalls, int toolCalls, long inputTokens, long outputTokens) {
-            this(live, modelCalls, toolCalls, inputTokens, outputTokens, Optional.empty());
+            this(live, modelCalls, toolCalls, inputTokens, outputTokens, Optional.empty(), List.of());
         }
 
         public long tokens() {
@@ -95,7 +98,8 @@ public record RunResult(String scenarioId, int run, long seed, int lane, Optiona
                 a.record().inputTokens(), a.record().outputTokens(),
                 scenario.id().equals(Scenarios.A_S10.id())
                         ? Optional.of(new Injection(Scenarios.otherBasketIntent(e), Scenarios.refusedProposal(e)))
-                        : Optional.empty()));
+                        : Optional.empty(),
+                a.answeringModels()));
         return new RunResult(e.scenarioId(), e.run(), e.seed(), e.lane(), e.aborted(), terminal, e.intents().size(),
                 expected, checks, e.timeToTerminal(), reconcile, Optional.empty(), agent);
     }

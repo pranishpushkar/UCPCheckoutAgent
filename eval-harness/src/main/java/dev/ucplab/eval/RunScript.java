@@ -41,6 +41,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -472,6 +473,7 @@ public final class RunScript {
         // Live mode: a client of the live model for this run, its I6 observer counting requests offered anything
         // other than the five (from the request the client built). Scripted: the row's script.
         AtomicLong offRequest = new AtomicLong();
+        Set<String> answering = new ConcurrentSkipListSet<>();
         Optional<ScriptedModel> scripted = live.isPresent() ? Optional.empty()
                 : Optional.of(ScriptedModel.fromResource(Scenarios.class, "scripts/" + script.resource()));
         ModelClient model = live.isPresent()
@@ -479,7 +481,7 @@ public final class RunScript {
                     if (!names.equals(ToolRegistry.NAMES)) {
                         offRequest.incrementAndGet();
                     }
-                })
+                }, answering::add)
                 : scripted.get();
         Clock clock = script.breach().filter(b -> b == BudgetLimit.WALL_CLOCK).isPresent()
                 ? new SteppingClock(stack.clock.instant(), WALL_CLOCK_STEP) : stack.clock;
@@ -514,7 +516,7 @@ public final class RunScript {
         Optional<String> breach = outcome.filter(o -> o instanceof RunOutcome.BudgetExceeded)
                 .map(o -> ((RunOutcome.BudgetExceeded) o).which().name());
         Optional<RunEvidence.AgentRun> evidence = record.map(r -> new RunEvidence.AgentRun(r, trace.jsonl(), type,
-                breach, user.asks(), user.intentsAtFirstAsk()));
+                breach, user.asks(), user.intentsAtFirstAsk(), List.copyOf(answering)));
         if (record.isEmpty()) {
             abort = abort.or(() -> Optional.of("agent run left no run record"));
         }

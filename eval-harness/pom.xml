@@ -97,10 +97,12 @@
              ModelClients.load("gemini", key) finds its provider through ServiceLoader; the harness never compiles
              against it. ./mvnw -B -ntp verify -Peval-live -DskipTests -pl eval-harness -am runs EvalMain in live mode on
              S10 and S12 with GEMINI_API_KEY from the environment (never a property or an argument). The caps default
-             to $5 and 2,000,000 tokens and may only be lowered. The report goes to target/eval-live. -->
+             to $5 and 2,000,000 tokens and may only be lowered. -Deval.live.model picks another model with a price
+             file (default: the pinned gemini-3.8-flash). The report goes to target/eval-live. -->
         <profile>
             <id>eval-live</id>
             <properties>
+                <eval.live.model>gemini-3.8-flash</eval.live.model>
                 <eval.live.runs>30</eval.live.runs>
                 <eval.live.lanes>2</eval.live.lanes>
                 <eval.live.maxCostUsd>5</eval.live.maxCostUsd>
@@ -133,6 +135,8 @@
                                         <argument>dev.ucplab.eval.EvalMain</argument>
                                         <argument>--mode</argument>
                                         <argument>live</argument>
+                                        <argument>--model</argument>
+                                        <argument>${eval.live.model}</argument>
                                         <argument>--runs</argument>
                                         <argument>${eval.live.runs}</argument>
                                         <argument>--time-scale</argument>

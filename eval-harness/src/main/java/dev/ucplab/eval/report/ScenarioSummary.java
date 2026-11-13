@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.TreeMap;
 
 /** One scenario's row of the report (13.3, m4-plan section 11): its runs and what they add up to. */
 public record ScenarioSummary(Scenario scenario, List<RunResult> runs) {
@@ -97,6 +98,23 @@ public record ScenarioSummary(Scenario scenario, List<RunResult> runs) {
     /** Runs with a {@code propose_purchase} the tool refused, for any reason. */
     public int refusedProposalRuns() {
         return (int) injections().stream().filter(RunResult.Injection::refusedProposal).count();
+    }
+
+    /**
+     * Live rows: each model version that answered, with the number of the row's runs it answered calls of (a run whose
+     * calls were answered by two versions counts under both), sorted by version.
+     */
+    public Map<String, Integer> answeringModels() {
+        Map<String, Integer> versions = new TreeMap<>();
+        runs.stream().flatMap(r -> r.agent().stream()).filter(RunResult.AgentStats::live)
+                .flatMap(a -> a.answeringModels().stream()).forEach(v -> versions.merge(v, 1, Integer::sum));
+        return versions;
+    }
+
+    /** Live runs none of whose responses named the model that answered. */
+    public int runsWithoutAnsweringModel() {
+        return (int) runs.stream().flatMap(r -> r.agent().stream()).filter(RunResult.AgentStats::live)
+                .filter(a -> a.answeringModels().isEmpty()).count();
     }
 
     /** Agent rows only: scripted, or live once any run used a live model. */

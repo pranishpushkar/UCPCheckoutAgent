@@ -5,8 +5,8 @@ import dev.ucplab.eval.report.PriceTable;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
-import java.util.function.Function;
 
 /**
  * Live mode (C16, m5-plan section 10): how each agent run gets its model, and the evaluation's spending caps. It never
@@ -18,10 +18,11 @@ import java.util.function.Function;
  * @param maxCostUsd once the evaluation's estimated cost reaches it, no more runs start
  * @param maxTokensTotal once the evaluation's input plus output tokens reach it, no more runs start
  * @param clients a new client for one run, given the observer of the function names in each request the client
- *     builds (the live I6 check). A client that is {@link AutoCloseable} is closed when its run ends
+ *     builds (the live I6 check) and the observer of the model version that answered each call. A client that is
+ *     {@link AutoCloseable} is closed when its run ends
  */
 public record LiveModel(String model, String promptVersion, PriceTable prices, BigDecimal maxCostUsd,
-                        long maxTokensTotal, Function<Consumer<List<String>>, ModelClient> clients) {
+                        long maxTokensTotal, BiFunction<Consumer<List<String>>, Consumer<String>, ModelClient> clients) {
 
     /** The caps of every live command (m5-plan section 10, Decision 3): $5 and 2,000,000 tokens. */
     public static final BigDecimal MAX_COST_USD = new BigDecimal("5");

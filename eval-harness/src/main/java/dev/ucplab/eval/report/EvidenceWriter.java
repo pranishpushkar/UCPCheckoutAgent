@@ -109,6 +109,7 @@ public final class EvidenceWriter {
             x.put("breach", opt(a.breach()));
             x.put("asks", a.asks());
             x.put("intentsAtFirstAsk", a.intentsAtFirstAsk().<Object>map(n -> n).orElse(JsonOut.NULL));
+            x.put("answeringModels", a.answeringModels());
             x.put("run", RUN_FILE);
             x.put("trace", TRACE_FILE);
             m.put("agent", x);

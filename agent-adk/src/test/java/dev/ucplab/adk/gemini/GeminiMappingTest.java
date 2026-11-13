@@ -97,6 +97,21 @@ class GeminiMappingTest {
         assertThat(t.usage()).isEqualTo(new Usage(103, 260));
     }
 
+    // Covers: R4, 6.5 (the model that answered, from the response's modelVersion: an id passes as sent, anything
+    // else is a fixed placeholder, and a response without one reports nothing)
+    @Test
+    void answeringModel_fromModelVersion() {
+        assertThat(GeminiMapping.answeringModel(GenerateContentResponse.fromJson(
+                "{\"modelVersion\":\"gemini-3.6-flash\"}"))).hasValue("gemini-3.6-flash");
+        assertThat(GeminiMapping.answeringModel(GenerateContentResponse.fromJson(
+                "{\"modelVersion\":\"models/gemini-3.6-flash-001\"}"))).hasValue("models/gemini-3.6-flash-001");
+        assertThat(GeminiMapping.answeringModel(GenerateContentResponse.fromJson(
+                "{\"modelVersion\":\"not an id, a sentence\"}"))).hasValue(GeminiMapping.UNRECOGNISED_VERSION);
+        assertThat(GeminiMapping.answeringModel(GenerateContentResponse.fromJson("{\"modelVersion\":\"\"}")))
+                .hasValue(GeminiMapping.UNRECOGNISED_VERSION);
+        assertThat(GeminiMapping.answeringModel(GenerateContentResponse.fromJson("{}"))).isEmpty();
+    }
+
     // Covers: 6.3, R4 (a turn without usage metadata, or without a prompt count, fails the call rather than running
     // unmetered against the token budget and the live cost cap)
     @Test

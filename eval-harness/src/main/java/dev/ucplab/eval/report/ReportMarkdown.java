@@ -3,6 +3,7 @@ package dev.ucplab.eval.report;
 import dev.ucplab.eval.check.Checks;
 import dev.ucplab.eval.check.InvariantCheck;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -97,6 +98,27 @@ public final class ReportMarkdown {
             }
             sb.append('\n');
         }
+        r.live().ifPresent(l -> {
+            sb.append("## Answering model\n\n");
+            sb.append("The model version each response named (genai's modelVersion), by row. The id sent can be routed to"
+                    + " another model (a retired id is), so a version other than the one requested is flagged.\n\n");
+            sb.append("| ID | Requested | Answering versions (runs) | Differs from the requested model |\n"
+                    + "|---|---|---|---|\n");
+            for (ScenarioSummary s : r.scenarios()) {
+                if (s.mode() != Mode.AGENT_LIVE) {
+                    continue;
+                }
+                List<String> versions = new ArrayList<>();
+                s.answeringModels().forEach((v, n) -> versions.add(cell(v) + " (" + runs(n) + ")"));
+                if (s.runsWithoutAnsweringModel() > 0) {
+                    versions.add("none reported (" + runs(s.runsWithoutAnsweringModel()) + ")");
+                }
+                sb.append("| ").append(s.scenario().id()).append(" | ").append(cell(l.model())).append(" | ")
+                        .append(versions.isEmpty() ? "none" : String.join("; ", versions)).append(" | ")
+                        .append(differs(s, l.model()) ? "**yes**" : "no").append(" |\n");
+            }
+            sb.append('\n');
+        });
         sb.append("## Invariants\n\n");
         sb.append("| Invariant | Scenarios | Runs | Violations | 95% upper bound (method) |\n");
         sb.append("|---|---|---|---|---|\n");
@@ -198,6 +220,15 @@ public final class ReportMarkdown {
         Optional<Duration> p50 = Stats.percentile(values, 50);
         Optional<Duration> p95 = Stats.percentile(values, 95);
         return p50.isEmpty() ? "–" : p50.get().toMillis() + "/" + p95.orElseThrow().toMillis() + " ms";
+    }
+
+    /** Whether any version that answered the row's calls is other than {@code requested}. */
+    static boolean differs(ScenarioSummary s, String requested) {
+        return s.answeringModels().keySet().stream().anyMatch(v -> !v.equals(requested));
+    }
+
+    private static String runs(int n) {
+        return n + (n == 1 ? " run" : " runs");
     }
 
     private static String cell(String s) {
