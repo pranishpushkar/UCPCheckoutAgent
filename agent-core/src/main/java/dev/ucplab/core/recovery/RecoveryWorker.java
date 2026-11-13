@@ -40,6 +40,11 @@ import java.util.concurrent.Executor;
  * platform-thread pool in production. No lock is held while waiting or while calling the merchant (7.8). The worker id
  * is unique per process start and comes from {@link #newWorkerId}; it is never a configured name, so a paused process
  * and its restarted successor are never the same lease owner.
+ *
+ * <p><b>Driving one intent now.</b> {@link #driveNow} starts a driver for one named intent at once, under the same claim
+ * and lease rules as a pass (m6-plan section 12): the service calls it after an approval, so the first complete does not
+ * wait for the next pass. A pass and {@code driveNow} share the set of intents in flight, so this worker never runs two
+ * drivers for one intent; the lease keeps any other worker out (I1, I7).
  */
 public final class RecoveryWorker {
 
@@ -137,10 +142,65 @@ public final class RecoveryWorker {
                 // The executor refused the task: the intent keeps its lease until it lapses and the next pass finds it.
                 inFlight.remove(id);
                 LOG.log(System.Logger.Level.ERROR, "could not start a driver for intent {0}: {1}", id,
-                        e.getClass().getName());
+                        RecoveryLoop.reason(e));
             }
         }
         return List.copyOf(started);
+    }
+
+    /**
+     * Starts a driver for {@code id} now, on the injected executor (7.6, m6-plan section 12). It claims the intent here,
+     * as a pass would ({@link IntentRepository#claim}: free, expired or already held by this worker), and only for an
+     * intent a pass would drive: QUOTING, APPROVED, COMPLETING, RECONCILING, or one with {@code cancel_pending}. An
+     * intent parked for a later attempt (7.5) waits for its time. Nothing is started, and nothing thrown, when this worker
+     * is already driving the intent, another worker holds a live lease, the intent is in any other state, or it does not
+     * exist; the next pass remains the fallback.
+     *
+     * @return true when a driver was started
+     */
+    public boolean driveNow(IntentId id) {
+        Objects.requireNonNull(id, "id");
+        Instant parkedUntil = notBefore.get(id);
+        if (parkedUntil != null && clock.instant().isBefore(parkedUntil)) {
+            return false;
+        }
+        if (!inFlight.add(id)) {
+            return false;
+        }
+        boolean started = false;
+        try {
+            Optional<PurchaseIntent> intent = intents.findForSystem(id);
+            if (intent.isEmpty() || !drivable(intent.get())
+                    || intents.claim(id, workerId, config.lease()).isEmpty()) {
+                return false;
+            }
+            notBefore.remove(id);
+            executor.execute(() -> {
+                try {
+                    drive(id, true);
+                } finally {
+                    inFlight.remove(id);
+                }
+            });
+            started = true;
+            return true;
+        } catch (RuntimeException e) {
+            // A failed read or claim, or an executor that refused the task: the next pass picks the intent up.
+            LOG.log(System.Logger.Level.ERROR, "could not drive intent {0} now: {1}", id, RecoveryLoop.reason(e));
+            return false;
+        } finally {
+            if (!started) {
+                inFlight.remove(id);
+            }
+        }
+    }
+
+    /** The intents {@link IntentRepository#claimRecoverable} returns: what a pass would drive (7.6). */
+    private static boolean drivable(PurchaseIntent intent) {
+        return switch (intent.state()) {
+            case QUOTING, APPROVED, COMPLETING, RECONCILING -> true;
+            default -> intent.cancelPending();
+        };
     }
 
     /**
@@ -200,9 +260,9 @@ public final class RecoveryWorker {
                         id, e.getClass().getSimpleName());
                 return;
             } catch (RuntimeException e) {
-                // Not the lease: the intent is left for the next pass. Only the type is logged, never a message that
-                // could carry a request body or a credential.
-                LOG.log(System.Logger.Level.ERROR, "advance failed for intent {0}: {1}", id, e.getClass().getName());
+                // Not the lease: the intent is left for the next pass. Only a fixed reason is logged, never a message
+                // that could carry a request body or a credential.
+                LOG.log(System.Logger.Level.ERROR, "advance failed for intent {0}: {1}", id, RecoveryLoop.reason(e));
                 return;
             }
         }
