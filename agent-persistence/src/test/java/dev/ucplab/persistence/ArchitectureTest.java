@@ -18,7 +18,7 @@ class ArchitectureTest {
     @Test
     void architecture_noAdkTypes_outsideAgentAdk() {
         noClasses()
-                .should().dependOnClassesThat().resideInAPackage("com.google.adk..")
+                .should().dependOnClassesThat().resideInAnyPackage("com.google.adk..", "com.google.genai..")
                 // The module has no classes yet.
                 .allowEmptyShould(true)
                 .check(PRODUCTION_CLASSES);

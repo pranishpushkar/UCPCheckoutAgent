@@ -18,5 +18,31 @@
             <groupId>dev.ucplab</groupId>
             <artifactId>agent-core</artifactId>
         </dependency>
+        <!-- The only module that imports ADK or Gemini SDK types (5.2, ADR 0004). -->
+        <dependency>
+            <groupId>com.google.adk</groupId>
+            <artifactId>google-adk</artifactId>
+        </dependency>
     </dependencies>
+
+    <profiles>
+        <!-- One live round trip with the Gemini API (C1, ADR 0004). Needs GEMINI_API_KEY in the environment; never part
+             of a plain verify, which runs no *IT class. -->
+        <profile>
+            <id>live-spike</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <includes>
+                                <include>**/*IT.java</include>
+                            </includes>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

@@ -32,6 +32,8 @@
         <archunit.version>1.5.1</archunit.version>
         <sqlite-jdbc.version>3.54.1.0</sqlite-jdbc.version>
         <flyway.version>13.12.1</flyway.version>
+        <!-- ADK for Java (R2, ADR 0004): 1.13.0, not 1.14.0, which was under two weeks old on 2026-11-13. -->
+        <google-adk.version>1.13.0</google-adk.version>
 
         <maven-compiler-plugin.version>3.16.0</maven-compiler-plugin.version>
         <maven-surefire-plugin.version>3.6.1</maven-surefire-plugin.version>
@@ -88,6 +90,11 @@
                 <groupId>org.flywaydb</groupId>
                 <artifactId>flyway-core</artifactId>
                 <version>${flyway.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.google.adk</groupId>
+                <artifactId>google-adk</artifactId>
+                <version>${google-adk.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.junit</groupId>
