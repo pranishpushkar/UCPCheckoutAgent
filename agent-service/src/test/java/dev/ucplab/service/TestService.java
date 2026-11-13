@@ -16,6 +16,7 @@ import java.util.Map;
 import java.util.Optional;
 import org.springframework.context.ApplicationContextInitializer;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.context.support.GenericApplicationContext;
 import org.springframework.core.env.ConfigurableEnvironment;
 
 /**
@@ -57,6 +58,12 @@ final class TestService implements AutoCloseable {
     }
 
     static TestService start(Path dir, Map<String, String> extra, Optional<Clock> clock) throws IOException {
+        return start(dir, extra, clock, List.of());
+    }
+
+    /** @param beans extra bean classes, such as a test-only controller */
+    static TestService start(Path dir, Map<String, String> extra, Optional<Clock> clock, List<Class<?>> beans)
+            throws IOException {
         LabMerchant merchant = LabMerchant.start();
         byte[] hmac = new byte[32];
         new SecureRandom().nextBytes(hmac);
@@ -65,11 +72,12 @@ final class TestService implements AutoCloseable {
             Map<String, String> env = baseEnv(dir);
             env.put("MERCHANT_URL", proxy.baseUrl().toString());
             env.putAll(extra);
-            ApplicationContextInitializer<ConfigurableApplicationContext> beans = context -> {
+            ApplicationContextInitializer<ConfigurableApplicationContext> overrides = context -> {
                 context.getBeanFactory().registerSingleton("testRecoveryConfig", NO_PASSES);
                 clock.ifPresent(c -> context.getBeanFactory().registerSingleton("testClock", c));
+                beans.forEach(b -> ((GenericApplicationContext) context).registerBean(b));
             };
-            ConfigurableApplicationContext context = ServiceApplication.start(Environment.of(env), List.of(beans),
+            ConfigurableApplicationContext context = ServiceApplication.start(Environment.of(env), List.of(overrides),
                     "--server.port=0", "--server.address=127.0.0.1");
             return new TestService(merchant, proxy, context, env);
         } catch (RuntimeException e) {

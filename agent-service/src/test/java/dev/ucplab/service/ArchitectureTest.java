@@ -11,6 +11,8 @@ import com.tngtech.archunit.core.importer.ImportOption;
 import dev.ucplab.core.agent.ModelKey;
 import dev.ucplab.core.agent.RunRepository;
 import dev.ucplab.core.approval.ApprovalRepository;
+import dev.ucplab.core.identity.AuthContext;
+import dev.ucplab.core.identity.UserId;
 import dev.ucplab.core.intent.IntentRepository;
 import dev.ucplab.persistence.SqlIntentRepository;
 import java.io.IOException;
@@ -35,6 +37,8 @@ class ArchitectureTest {
     private static final String ENVIRONMENT = "dev.ucplab.service.config.Environment";
     /** The one class that may take the system clock and ids directly; everything else is given them (7.8, C9). */
     private static final String STACK_CONFIGURATION = "dev.ucplab.service.config.StackConfiguration";
+    /** The one class that builds an AuthContext, from the session row (T1, m6-plan section 4, C10). */
+    private static final String SESSION_INTERCEPTOR = "dev.ucplab.service.web.SessionInterceptor";
 
     private static final JavaClasses PRODUCTION_CLASSES = new ClassFileImporter()
             .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
@@ -101,6 +105,23 @@ class ArchitectureTest {
                 .orShould().callMethod(Clock.class, "systemUTC")
                 .orShould().callMethod(UUID.class, "randomUUID")
                 .check(PRODUCTION_CLASSES);
+    }
+
+    // Covers: T1, m6-plan section 4 (the user id reaches core only through the AuthContext the session interceptor builds
+    // from the session row; no other service class constructs one)
+    @Test
+    void architecture_authContextBuiltBySessionInterceptor_only() {
+        noClasses()
+                .that().doNotHaveFullyQualifiedName(SESSION_INTERCEPTOR)
+                .should().callConstructor(AuthContext.class, UserId.class, String.class, Instant.class, String.class)
+                .check(PRODUCTION_CLASSES);
+    }
+
+    // Covers: T1 (the rule has something to guard: the interceptor does build one)
+    @Test
+    void sessionInterceptor_buildsTheAuthContext() {
+        assertThat(PRODUCTION_CLASSES.get(SESSION_INTERCEPTOR).getConstructorCallsFromSelf())
+                .anyMatch(call -> call.getTargetOwner().isEquivalentTo(AuthContext.class));
     }
 
     // Covers: 7.8 (no synchronized block or method anywhere in agent-service's main source)

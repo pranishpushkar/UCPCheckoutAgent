@@ -23,6 +23,7 @@ import dev.ucplab.persistence.SqlPolicyUsage;
 import dev.ucplab.persistence.SqlRecoveryScan;
 import dev.ucplab.persistence.SqlRunRepository;
 import dev.ucplab.persistence.SqlSessionRepository;
+import dev.ucplab.persistence.SqlUserRepository;
 import dev.ucplab.ucp.CircuitBreakers;
 import dev.ucplab.ucp.JdkHttpTransport;
 import dev.ucplab.ucp.Sleeper;
@@ -143,6 +144,11 @@ public class StackConfiguration {
     @Bean
     SqlSessionRepository sessionRepository(Database db, Clock clock) {
         return new SqlSessionRepository(db, clock);
+    }
+
+    @Bean
+    SqlUserRepository userRepository(Database db) {
+        return new SqlUserRepository(db);
     }
 
     @Bean

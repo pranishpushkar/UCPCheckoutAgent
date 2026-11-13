@@ -145,4 +145,35 @@ class ServicePropertiesTest {
         assertThat(Environment.of(env).toString()).doesNotContain(REAL_SECRET).doesNotContain("AIza-canary")
                 .doesNotContain("GEMINI");
     }
+
+    // Covers: 18.8 (LOCAL_USERS defaults to alice and bob; a name that is not plain lowercase, or a repeat, is refused)
+    @Test
+    void localUsers_defaultAndValidation() {
+        Map<String, String> custom = env("local");
+        custom.put("LOCAL_USERS", "carol, dave");
+
+        assertThat(from(env("local")).localUsers()).containsExactly("alice", "bob");
+        assertThat(from(custom).localUsers()).containsExactly("carol", "dave");
+        for (String bad : new String[] {"alice,,bob", "Alice", "local-alice", "alice,alice", "a b"}) {
+            Map<String, String> env = env("local");
+            env.put("LOCAL_USERS", bad);
+            assertThatThrownBy(() -> from(env)).as(bad).hasMessage(ServiceProperties.USERS_INVALID);
+        }
+    }
+
+    // Covers: m6-plan section 4 (PUBLIC_ORIGIN is scheme, host and port only; a path, query or user info is refused)
+    @Test
+    void publicOrigin_defaultAndValidation() {
+        Map<String, String> custom = env("local");
+        custom.put("PUBLIC_ORIGIN", "https://lab.example:8443");
+
+        assertThat(from(env("local")).publicOrigin()).isEqualTo("http://localhost:8080");
+        assertThat(from(custom).publicOrigin()).isEqualTo("https://lab.example:8443");
+        for (String bad : new String[] {"localhost:8080", "http://localhost:8080/", "http://u@localhost",
+                "http://localhost/?q", "ftp://localhost"}) {
+            Map<String, String> env = env("local");
+            env.put("PUBLIC_ORIGIN", bad);
+            assertThatThrownBy(() -> from(env)).as(bad).hasMessage(ServiceProperties.ORIGIN_INVALID);
+        }
+    }
 }
