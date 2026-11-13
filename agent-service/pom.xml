@@ -97,6 +97,18 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Tests only: ServiceWiringTest runs a purchase through the service's beans against the reference merchant
+             behind the fault proxy (m6-plan section 2.4). Main code never sees these modules. -->
+        <dependency>
+            <groupId>dev.ucplab</groupId>
+            <artifactId>merchant</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>dev.ucplab</groupId>
+            <artifactId>fault-proxy</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

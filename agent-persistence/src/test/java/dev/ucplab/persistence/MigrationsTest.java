@@ -283,4 +283,21 @@ class MigrationsTest {
             assertThat(column(db, "SELECT id FROM agent_run")).containsExactly("r");
         }
     }
+
+    // Covers: 23.4 /readyz (a database file is current only once every migration is applied: an empty file and a file
+    // one migration behind are not; isCurrent never migrates)
+    @Test
+    void isCurrent_onlyAfterEveryMigration_andNeverMigrates() {
+        Path empty = dir.resolve("empty.db");
+        Path behind = dir.resolve("behind.db");
+        Flyway.configure().dataSource("jdbc:sqlite:" + behind, null, null).locations("classpath:db/migration")
+                .target("5").load().migrate();
+        Path current = dir.resolve("current.db");
+        Migrations.migrate(current);
+
+        assertThat(Migrations.isCurrent(empty)).isFalse();
+        assertThat(Migrations.isCurrent(behind)).isFalse();
+        assertThat(Migrations.isCurrent(behind)).as("still behind: isCurrent did not migrate").isFalse();
+        assertThat(Migrations.isCurrent(current)).isTrue();
+    }
 }
