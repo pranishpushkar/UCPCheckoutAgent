@@ -173,4 +173,18 @@ class RecoveryLoopTest {
         assertThatThrownBy(() -> new RecoveryConfig(Duration.ofSeconds(5), Duration.ofSeconds(30), 0, 1))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    // Covers: 7.6 (lease rules: the worker period is at most half the lease, so a pass always comes round before a
+    // lease it renewed can lapse; exactly half is allowed, and so are the defaults)
+    @Test
+    void recoveryConfig_rejectsAPeriodLongerThanHalfTheLease() {
+        assertThatThrownBy(() -> new RecoveryConfig(Duration.ofSeconds(20), Duration.ofSeconds(30), 1, 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("7.6")
+                .hasMessageContaining("PT20S")
+                .hasMessageContaining("PT30S");
+        assertThat(new RecoveryConfig(Duration.ofSeconds(15), Duration.ofSeconds(30), 1, 1).period())
+                .isEqualTo(Duration.ofSeconds(15));
+        assertThat(RecoveryConfig.defaults().period()).isEqualTo(Duration.ofSeconds(5));
+    }
 }

@@ -1,6 +1,9 @@
 # Section 15. Every push runs ./mvnw verify: build, unit, property, component,
-# contract and ArchUnit tests.
-# TODO(M4): on pull requests, add a reduced scripted evaluation (./scripts/eval.sh --mode scripted).
+# contract and ArchUnit tests, and the reduced scripted evaluation (ScriptedEvaluationSmokeTest:
+# 20 runs per scenario at time scale 4, S9 6 and S28 2, labelled REDUCED, in eval-harness/target/eval-reduced).
+# The full evaluation (-Peval-full) is manual: .github/workflows/eval-full.yml (Decision 1).
+# TODO(M4): S9 and S28 assert exit value 137 after kill -9 and start child JVMs from surefire; the first
+# Linux run of this job is the check of both on Linux (m4-plan risks 1 and 3).
 # TODO(M5): add a manual (workflow_dispatch) live evaluation that reads GEMINI_API_KEY from a repository secret.
 name: CI
 

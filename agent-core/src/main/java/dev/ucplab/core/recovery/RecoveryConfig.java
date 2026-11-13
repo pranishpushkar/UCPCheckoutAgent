@@ -6,7 +6,7 @@ import java.util.Objects;
 /**
  * Settings of {@link RecoveryWorker} and {@link RecoveryLoop} (7.6).
  *
- * @param period how often the loop runs a pass (5 s)
+ * @param period how often the loop runs a pass (5 s); at most half the lease (7.6 lease rules)
  * @param lease the lease a claim takes and each renewal extends (30 s); the same value the orchestrator uses
  * @param limit the most intents one pass claims
  * @param maxStepsPerIntent a guard on one intent's series of {@code advance} calls within a pass
@@ -21,6 +21,10 @@ public record RecoveryConfig(Duration period, Duration lease, int limit, int max
         }
         if (lease.isZero() || lease.isNegative()) {
             throw new IllegalArgumentException("lease must be positive: " + lease);
+        }
+        if (period.compareTo(lease.dividedBy(2)) > 0) {
+            throw new IllegalArgumentException("7.6: worker period " + period + " is longer than half the lease "
+                    + lease + " (" + lease.dividedBy(2) + ")");
         }
         if (limit < 1) {
             throw new IllegalArgumentException("limit must be at least 1: " + limit);

@@ -42,7 +42,8 @@ public final class Database implements AutoCloseable {
 
     /**
      * Connections borrowed right now. Zero while the orchestrator calls the merchant: no connection is held across
-     * network I/O (7.8).
+     * network I/O (7.8). Exact only because {@link #open} opens every connection eagerly, so
+     * {@code poolSize - idle.size()} is the number borrowed; a lazily filled pool would need a separate count.
      */
     public int inUse() {
         return poolSize - idle.size();

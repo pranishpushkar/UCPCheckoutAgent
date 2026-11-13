@@ -1,6 +1,5 @@
 package dev.ucplab.ucp;
 
-import static dev.ucplab.ucp.StubMerchant.drop;
 import static dev.ucplab.ucp.StubMerchant.reply;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -16,15 +15,16 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.SplittableRandom;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * Catalog reads against a misbehaving stub (decision R): the retry rules of {@code get} (8.2) and the invalid-body rule
- * (8.1) hold for a POST read, and a read never carries an Idempotency-Key (8.4).
+ * Catalog reads against a misbehaving stub (decision R), for what the fault proxy cannot do: check the headers and
+ * bytes of a read (the proxy log records neither, I8), and answer with valid JSON that is semantically wrong (a decimal
+ * price, a 202, a credential echoed in an error, a route the stub does not serve). The 429, 500, drop and garbled cases
+ * moved to {@link ProxyCatalogFaultTest} in M4.
  */
 class CatalogStubFaultTest {
 
@@ -88,88 +88,6 @@ class CatalogStubFaultTest {
         assertThat(seen.stream().map(s -> s.headers().get("request-id")).distinct()).hasSize(2);
         assertThat(seen.stream().map(s -> new String(s.body())).distinct())
                 .containsExactly("{\"pagination\":{\"limit\":3},\"query\":\"mug\"}");
-    }
-
-    // Covers: 8.1, 8.2 (429 with a Retry-After within the cap: the client waits that long and retries, then succeeds)
-    @Test
-    void search_429WithShortRetryAfter_isRetried() {
-        stub.on(SEARCH, reply(429, "{\"code\":\"rate_limited\",\"content\":\"slow down\"}", "Retry-After", "1"),
-                reply(200, ONE_PRODUCT));
-
-        CallOutcome<CatalogPage> outcome = client.search(mug());
-
-        assertThat(outcome).isInstanceOf(CallOutcome.Ok.class);
-        assertThat(stub.requestsTo(SEARCH)).hasSize(2);
-        assertThat(sleeps).containsExactly(Duration.ofSeconds(1));
-    }
-
-    // Covers: 8.1, 8.2 (429 with a Retry-After beyond the cap: stop at once, ProtocolError carrying retryAfter)
-    @Test
-    void search_429WithLongRetryAfter_isProtocolErrorWithRetryAfter() {
-        stub.on(SEARCH, reply(429, "{\"code\":\"rate_limited\",\"content\":\"slow down\"}", "Retry-After", "30"));
-
-        CallOutcome<CatalogPage> outcome = client.search(mug());
-
-        assertThat(outcome).isEqualTo(new CallOutcome.ProtocolError<CatalogPage>(429, "rate_limited", "slow down",
-                Optional.of(Duration.ofSeconds(30))));
-        assertThat(stub.requestsTo(SEARCH)).hasSize(1);
-        assertThat(sleeps).isEmpty();
-    }
-
-    // Covers: 8.1, 8.2 (429 with no Retry-After backs off and retries up to 3 times, then ProtocolError)
-    @Test
-    void search_429Forever_stopsAfterFourAttempts() {
-        stub.on(SEARCH, reply(429, "{\"code\":\"rate_limited\",\"content\":\"slow down\"}"));
-
-        CallOutcome<CatalogPage> outcome = client.search(mug());
-
-        assertThat(outcome).isInstanceOfSatisfying(CallOutcome.ProtocolError.class, e -> assertThat(e.httpStatus()).isEqualTo(429));
-        assertThat(stub.requestsTo(SEARCH)).hasSize(4);
-        assertThat(sleeps).hasSize(3);
-    }
-
-    // Covers: 8.1, 8.2 (a 500 on a read is retried, and Uncertain when the retries run out)
-    @Test
-    void search_500Forever_isUncertainAfterFourAttempts() {
-        stub.on(SEARCH, reply(500, "{\"code\":\"internal\",\"content\":\"boom\"}"));
-
-        CallOutcome<CatalogPage> outcome = client.search(mug());
-
-        assertThat(outcome).isInstanceOf(CallOutcome.Uncertain.class);
-        assertThat(stub.requestsTo(SEARCH)).hasSize(4);
-    }
-
-    // Covers: 8.1, 8.2 (a 500 that clears is retried to success)
-    @Test
-    void search_500ThenOk_isOk() {
-        stub.on(SEARCH, reply(500, "{}"), reply(500, "{}"), reply(200, ONE_PRODUCT));
-
-        assertThat(client.search(mug())).isInstanceOf(CallOutcome.Ok.class);
-        assertThat(stub.requestsTo(SEARCH)).hasSize(3);
-    }
-
-    // Covers: 8.1, 8.2 (a dropped connection is retried like any read)
-    @Test
-    void search_dropped_isRetried_thenUncertain() {
-        stub.on(SEARCH, drop());
-
-        assertThat(client.search(mug())).isInstanceOf(CallOutcome.Uncertain.class);
-        assertThat(stub.requestsTo(SEARCH)).hasSize(4);
-    }
-
-    // Covers: 8.1 (a garbled 200 body on a read is a ProtocolError invalid_response, not retried: the merchant answered)
-    @Test
-    void search_garbledBody_isProtocolError_notRetried() {
-        stub.on(SEARCH, reply(200, "<html>not json</html>"));
-
-        CallOutcome<CatalogPage> outcome = client.search(mug());
-
-        assertThat(outcome).isInstanceOfSatisfying(CallOutcome.ProtocolError.class, e -> {
-            assertThat(e.code()).isEqualTo("invalid_response");
-            assertThat(e.httpStatus()).isEqualTo(200);
-            assertThat(e.content()).doesNotContain("html");
-        });
-        assertThat(stub.requestsTo(SEARCH)).hasSize(1);
     }
 
     // Covers: 8.1 (valid JSON with a wrong field type, such as a decimal price, is invalid too)

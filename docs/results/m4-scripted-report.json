@@ -1,0 +1,900 @@
+{
+  "schema": "ucplab.eval.report/1",
+  "generatedAt": "2026-11-12T20:57:36.893814Z",
+  "mode": "scripted",
+  "driver": "orchestrator-direct (M4, no model)",
+  "reduced": false,
+  "commit": {
+    "sha": "476662df2db1e3968739667fd68053a8cfd6a89f",
+    "branch": "feature/m4-fault-proxy",
+    "dirty": false,
+    "source": "git"
+  },
+  "config": {
+    "runsPerScenario": 200,
+    "timeScale": 1,
+    "lanes": 16,
+    "baseSeed": 42,
+    "ucp": {
+      "connectTimeoutMs": 2000,
+      "requestTimeoutMs": 5000,
+      "completeTimeoutMs": 10000,
+      "maxRetries": 3,
+      "backoffInitialMs": 200,
+      "backoffCapMs": 2000,
+      "breakerThreshold": 5,
+      "breakerOpenForMs": 30000
+    },
+    "orchestrator": {
+      "leaseMs": 30000,
+      "completeTimeoutMs": 10000,
+      "resendQuietPeriodMs": 20000,
+      "reconcileDeadlineMs": 60000,
+      "maxCompleteResends": 2,
+      "pollInitialMs": 250,
+      "pollMaxMs": 2000,
+      "pollJitter": 0.2
+    },
+    "recovery": {
+      "periodMs": 5000,
+      "limit": 50,
+      "maxStepsPerIntent": 500
+    },
+    "merchant": {
+      "ucpVersion": "2026-08-25",
+      "module": "dev.ucplab:merchant (in process, same commit)"
+    },
+    "runtime": ["Java 21.0.13.0.2+1-LTS (Microsoft)", "Mac OS X 26.5.2 aarch64"]
+  },
+  "method": ["Scripted, orchestrator-direct (13.1 M4 note): each run calls Orchestrator.propose with the scenario's fixed basket; an automatic approver decides through the approval service; the recovery worker drives the intent. There is no model, so model calls, tokens, cost and traces read n/a: no agent until M5.", "Real time throughout, every duration divided by the time scale k = 1 (13.1); approval lifetime and sign-in age are not scaled.", "Each run gets a fresh database, gateway, circuit breakers, worker id and user, and the merchant is reset before it; runs in one lane are sequential, lanes share nothing.", "Policy usage is a harness stub with no earlier spend or proposals: every run has a user of its own, so there is nothing to count. A real PolicyUsage is out of scope for M4 (it belongs with agent-service in M6).", "Invariants are checked on ground truth the agent does not control: O (/_lab/orders), G (the merchant's own GET of each order's session), L (the fault proxy's log in front of the merchant, including Idempotency-Key and a keyed body hash) and A (the approver's own decisions). An aborted run fails every check.", "Terminal states, the expected outcome and reconciliation times come from the agent's stored state (D), which is what they describe; time to terminal is the harness's own observation.", "I1 (at most one order per run, and each order's session is completed with that order): O (/_lab/orders) and G (the merchant's GET of each order's session); D is not read.", "I2 (every order matches the snapshot the user approved for its key: merchant, session, lines, currency, and an amount not above the approved maximum): O, G (lines and currency of each order's session), L (which key produced the order, and when it was first sent) and A (the approved snapshot); D is not read.", "I3 (every complete follows an unexpired approval of the same session by the owner, matched by revision, with no decline in between): L (every complete, its key and arrival) and A (the decisions); D only for the stored approval row's status and decided_by, which I3 is about.", "I4 (after the first complete, no create for the intent and no request to another session, and the stored session id is the completed one): L (every request after the intent's first complete); D only for the final stored session_id, which I4 is about.", "I5 (every intent is terminal with no cancel owed, and no state outlasted its 7.6 bound): D for the end state and the time in each state (I5 is about the agent's state), L and the harness's own terminal observation for the last complete stretch.", "I7 (one key and one byte-identical body per approval, a new key for each new approval): L (keys and bodyHmac of every complete) and A (the approval in force); D only as a cross-check that L's body hash is the hash of the agent's frozen body."],
+  "scenarios": [
+    {
+      "id": "S0",
+      "title": "no fault",
+      "fault": "none",
+      "expected": ["COMPLETED"],
+      "requiredInvariants": ["I1", "I2", "I3"],
+      "alsoChecked": ["I4", "I5", "I7"],
+      "runs": 200,
+      "aborted": 0,
+      "terminal": {
+        "COMPLETED": 200,
+        "REJECTED": 0,
+        "FAILED_NOT_CHARGED": 0,
+        "ESCALATED": 0
+      },
+      "expectedOutcome": {
+        "k": 200,
+        "n": 200,
+        "rate": 1.0,
+        "wilson95": [0.9812, 1.0]
+      },
+      "violations": {
+        "I1": 0,
+        "I2": 0,
+        "I3": 0,
+        "I4": 0,
+        "I5": 0,
+        "I7": 0
+      },
+      "violationUpperBound95": {
+        "method": "rule_of_three",
+        "value": 0.015
+      },
+      "timeToTerminalMs": {
+        "p50": 31,
+        "p95": 118,
+        "max": 120
+      },
+      "reconciliation": {
+        "runs": 0,
+        "timeToResolveMs": {
+          "p50": null,
+          "p95": null
+        }
+      },
+      "modelCalls": null,
+      "tokens": null,
+      "costPerCompletedPurchase": null,
+      "traces": null,
+      "deferred": "n/a: no agent until M5",
+      "failures": []
+    },
+    {
+      "id": "S1",
+      "title": "connection closed before forwarding on the first 2 creates",
+      "fault": "fail_before_forward {close} on POST /ucp/v1/checkout-sessions, times 2",
+      "expected": ["COMPLETED"],
+      "requiredInvariants": ["I1", "I4"],
+      "alsoChecked": ["I2", "I3", "I5", "I7"],
+      "runs": 200,
+      "aborted": 0,
+      "terminal": {
+        "COMPLETED": 200,
+        "REJECTED": 0,
+        "FAILED_NOT_CHARGED": 0,
+        "ESCALATED": 0
+      },
+      "expectedOutcome": {
+        "k": 200,
+        "n": 200,
+        "rate": 1.0,
+        "wilson95": [0.9812, 1.0]
+      },
+      "violations": {
+        "I1": 0,
+        "I2": 0,
+        "I3": 0,
+        "I4": 0,
+        "I5": 0,
+        "I7": 0
+      },
+      "violationUpperBound95": {
+        "method": "rule_of_three",
+        "value": 0.015
+      },
+      "timeToTerminalMs": {
+        "p50": 341,
+        "p95": 514,
+        "max": 581
+      },
+      "reconciliation": {
+        "runs": 0,
+        "timeToResolveMs": {
+          "p50": null,
+          "p95": null
+        }
+      },
+      "modelCalls": null,
+      "tokens": null,
+      "costPerCompletedPurchase": null,
+      "traces": null,
+      "deferred": "n/a: no agent until M5",
+      "failures": []
+    },
+    {
+      "id": "S2",
+      "title": "complete response dropped after the merchant processed it",
+      "fault": "forward_then_drop_response on POST /ucp/v1/checkout-sessions/*/complete, nth 1",
+      "expected": ["COMPLETED"],
+      "requiredInvariants": ["I1", "I4", "I7"],
+      "alsoChecked": ["I2", "I3", "I5"],
+      "runs": 200,
+      "aborted": 0,
+      "terminal": {
+        "COMPLETED": 200,
+        "REJECTED": 0,
+        "FAILED_NOT_CHARGED": 0,
+        "ESCALATED": 0
+      },
+      "expectedOutcome": {
+        "k": 200,
+        "n": 200,
+        "rate": 1.0,
+        "wilson95": [0.9812, 1.0]
+      },
+      "violations": {
+        "I1": 0,
+        "I2": 0,
+        "I3": 0,
+        "I4": 0,
+        "I5": 0,
+        "I7": 0
+      },
+      "violationUpperBound95": {
+        "method": "rule_of_three",
+        "value": 0.015
+      },
+      "timeToTerminalMs": {
+        "p50": 267,
+        "p95": 311,
+        "max": 317
+      },
+      "reconciliation": {
+        "runs": 200,
+        "timeToResolveMs": {
+          "p50": 259,
+          "p95": 304
+        }
+      },
+      "modelCalls": null,
+      "tokens": null,
+      "costPerCompletedPurchase": null,
+      "traces": null,
+      "deferred": "n/a: no agent until M5",
+      "failures": []
+    },
+    {
+      "id": "S3",
+      "title": "complete response delayed past the client timeout",
+      "fault": "forward_then_delay_response {1.5 x complete timeout} on POST /ucp/v1/checkout-sessions/*/complete, nth 1",
+      "expected": ["COMPLETED"],
+      "requiredInvariants": ["I1", "I7"],
+      "alsoChecked": ["I2", "I3", "I4", "I5"],
+      "runs": 200,
+      "aborted": 0,
+      "terminal": {
+        "COMPLETED": 200,
+        "REJECTED": 0,
+        "FAILED_NOT_CHARGED": 0,
+        "ESCALATED": 0
+      },
+      "expectedOutcome": {
+        "k": 200,
+        "n": 200,
+        "rate": 1.0,
+        "wilson95": [0.9812, 1.0]
+      },
+      "violations": {
+        "I1": 0,
+        "I2": 0,
+        "I3": 0,
+        "I4": 0,
+        "I5": 0,
+        "I7": 0
+      },
+      "violationUpperBound95": {
+        "method": "rule_of_three",
+        "value": 0.015
+      },
+      "timeToTerminalMs": {
+        "p50": 10278,
+        "p95": 10320,
+        "max": 10331
+      },
+      "reconciliation": {
+        "runs": 200,
+        "timeToResolveMs": {
+          "p50": 261,
+          "p95": 303
+        }
+      },
+      "modelCalls": null,
+      "tokens": null,
+      "costPerCompletedPurchase": null,
+      "traces": null,
+      "deferred": "n/a: no agent until M5",
+      "failures": []
+    },
+    {
+      "id": "S4",
+      "title": "the same proposal submitted twice",
+      "fault": "none; propose twice with the same basket (sequential in even runs, concurrent in odd runs)",
+      "expected": ["COMPLETED"],
+      "requiredInvariants": ["I1"],
+      "alsoChecked": ["I2", "I3", "I4", "I5", "I7"],
+      "runs": 200,
+      "aborted": 0,
+      "terminal": {
+        "COMPLETED": 200,
+        "REJECTED": 0,
+        "FAILED_NOT_CHARGED": 0,
+        "ESCALATED": 0
+      },
+      "expectedOutcome": {
+        "k": 200,
+        "n": 200,
+        "rate": 1.0,
+        "wilson95": [0.9812, 1.0]
+      },
+      "violations": {
+        "I1": 0,
+        "I2": 0,
+        "I3": 0,
+        "I4": 0,
+        "I5": 0,
+        "I7": 0
+      },
+      "violationUpperBound95": {
+        "method": "rule_of_three",
+        "value": 0.015
+      },
+      "timeToTerminalMs": {
+        "p50": 10,
+        "p95": 17,
+        "max": 32
+      },
+      "reconciliation": {
+        "runs": 0,
+        "timeToResolveMs": {
+          "p50": null,
+          "p95": null
+        }
+      },
+      "modelCalls": null,
+      "tokens": null,
+      "costPerCompletedPurchase": null,
+      "traces": null,
+      "deferred": "n/a: no agent until M5",
+      "failures": []
+    },
+    {
+      "id": "S5a",
+      "title": "price changes between quote and complete; the re-quote is approved",
+      "fault": "POST /_lab/price item_123 2500 -> 2600 before the first decision; approve every quote",
+      "expected": ["COMPLETED"],
+      "requiredInvariants": ["I2", "I3"],
+      "alsoChecked": ["I1", "I4", "I5", "I7"],
+      "runs": 200,
+      "aborted": 0,
+      "terminal": {
+        "COMPLETED": 200,
+        "REJECTED": 0,
+        "FAILED_NOT_CHARGED": 0,
+        "ESCALATED": 0
+      },
+      "expectedOutcome": {
+        "k": 200,
+        "n": 200,
+        "rate": 1.0,
+        "wilson95": [0.9812, 1.0]
+      },
+      "violations": {
+        "I1": 0,
+        "I2": 0,
+        "I3": 0,
+        "I4": 0,
+        "I5": 0,
+        "I7": 0
+      },
+      "violationUpperBound95": {
+        "method": "rule_of_three",
+        "value": 0.015
+      },
+      "timeToTerminalMs": {
+        "p50": 44,
+        "p95": 49,
+        "max": 51
+      },
+      "reconciliation": {
+        "runs": 0,
+        "timeToResolveMs": {
+          "p50": null,
+          "p95": null
+        }
+      },
+      "modelCalls": null,
+      "tokens": null,
+      "costPerCompletedPurchase": null,
+      "traces": null,
+      "deferred": "n/a: no agent until M5",
+      "failures": []
+    },
+    {
+      "id": "S5b",
+      "title": "price changes between quote and complete; the re-quote is declined",
+      "fault": "POST /_lab/price item_123 2500 -> 2600 before the first decision; decline the re-quote",
+      "expected": ["REJECTED"],
+      "requiredInvariants": ["I2", "I3"],
+      "alsoChecked": ["I1", "I4", "I5", "I7"],
+      "runs": 200,
+      "aborted": 0,
+      "terminal": {
+        "COMPLETED": 0,
+        "REJECTED": 200,
+        "FAILED_NOT_CHARGED": 0,
+        "ESCALATED": 0
+      },
+      "expectedOutcome": {
+        "k": 200,
+        "n": 200,
+        "rate": 1.0,
+        "wilson95": [0.9812, 1.0]
+      },
+      "violations": {
+        "I1": 0,
+        "I2": 0,
+        "I3": 0,
+        "I4": 0,
+        "I5": 0,
+        "I7": 0
+      },
+      "violationUpperBound95": {
+        "method": "rule_of_three",
+        "value": 0.015
+      },
+      "timeToTerminalMs": {
+        "p50": 42,
+        "p95": 48,
+        "max": 50
+      },
+      "reconciliation": {
+        "runs": 0,
+        "timeToResolveMs": {
+          "p50": null,
+          "p95": null
+        }
+      },
+      "modelCalls": null,
+      "tokens": null,
+      "costPerCompletedPurchase": null,
+      "traces": null,
+      "deferred": "n/a: no agent until M5",
+      "failures": []
+    },
+    {
+      "id": "S6",
+      "title": "item sells out after the quote",
+      "fault": "POST /_lab/stock item_123 0 after the quote, before the first decision",
+      "expected": ["FAILED_NOT_CHARGED"],
+      "requiredInvariants": ["I1"],
+      "alsoChecked": ["I2", "I3", "I4", "I5", "I7"],
+      "runs": 200,
+      "aborted": 0,
+      "terminal": {
+        "COMPLETED": 0,
+        "REJECTED": 0,
+        "FAILED_NOT_CHARGED": 200,
+        "ESCALATED": 0
+      },
+      "expectedOutcome": {
+        "k": 200,
+        "n": 200,
+        "rate": 1.0,
+        "wilson95": [0.9812, 1.0]
+      },
+      "violations": {
+        "I1": 0,
+        "I2": 0,
+        "I3": 0,
+        "I4": 0,
+        "I5": 0,
+        "I7": 0
+      },
+      "violationUpperBound95": {
+        "method": "rule_of_three",
+        "value": 0.015
+      },
+      "timeToTerminalMs": {
+        "p50": 11,
+        "p95": 15,
+        "max": 24
+      },
+      "reconciliation": {
+        "runs": 0,
+        "timeToResolveMs": {
+          "p50": null,
+          "p95": null
+        }
+      },
+      "modelCalls": null,
+      "tokens": null,
+      "costPerCompletedPurchase": null,
+      "traces": null,
+      "deferred": "n/a: no agent until M5",
+      "failures": []
+    },
+    {
+      "id": "S7",
+      "title": "payment declined",
+      "fault": "none; the agent pays with the mock card the merchant declines (A.2)",
+      "expected": ["FAILED_NOT_CHARGED"],
+      "requiredInvariants": ["I1"],
+      "alsoChecked": ["I2", "I3", "I4", "I5", "I7"],
+      "runs": 200,
+      "aborted": 0,
+      "terminal": {
+        "COMPLETED": 0,
+        "REJECTED": 0,
+        "FAILED_NOT_CHARGED": 200,
+        "ESCALATED": 0
+      },
+      "expectedOutcome": {
+        "k": 200,
+        "n": 200,
+        "rate": 1.0,
+        "wilson95": [0.9812, 1.0]
+      },
+      "violations": {
+        "I1": 0,
+        "I2": 0,
+        "I3": 0,
+        "I4": 0,
+        "I5": 0,
+        "I7": 0
+      },
+      "violationUpperBound95": {
+        "method": "rule_of_three",
+        "value": 0.015
+      },
+      "timeToTerminalMs": {
+        "p50": 11,
+        "p95": 15,
+        "max": 17
+      },
+      "reconciliation": {
+        "runs": 0,
+        "timeToResolveMs": {
+          "p50": null,
+          "p95": null
+        }
+      },
+      "modelCalls": null,
+      "tokens": null,
+      "costPerCompletedPurchase": null,
+      "traces": null,
+      "deferred": "n/a: no agent until M5",
+      "failures": []
+    },
+    {
+      "id": "S8",
+      "title": "merchant returns 503 on every call for 20 s, then recovers",
+      "fault": "fail_before_forward {status 503} on every method of /ucp/v1/**, installed just before the decision and cleared 20 s / k later through the admin API",
+      "expected": ["COMPLETED", "ESCALATED"],
+      "requiredInvariants": ["I5"],
+      "alsoChecked": ["I1", "I2", "I3", "I4", "I7"],
+      "runs": 200,
+      "aborted": 0,
+      "terminal": {
+        "COMPLETED": 200,
+        "REJECTED": 0,
+        "FAILED_NOT_CHARGED": 0,
+        "ESCALATED": 0
+      },
+      "expectedOutcome": {
+        "k": 200,
+        "n": 200,
+        "rate": 1.0,
+        "wilson95": [0.9812, 1.0]
+      },
+      "violations": {
+        "I1": 0,
+        "I2": 0,
+        "I3": 0,
+        "I4": 0,
+        "I5": 0,
+        "I7": 0
+      },
+      "violationUpperBound95": {
+        "method": "rule_of_three",
+        "value": 0.015
+      },
+      "timeToTerminalMs": {
+        "p50": 21422,
+        "p95": 22360,
+        "max": 22796
+      },
+      "reconciliation": {
+        "runs": 200,
+        "timeToResolveMs": {
+          "p50": 21407,
+          "p95": 22346
+        }
+      },
+      "modelCalls": null,
+      "tokens": null,
+      "costPerCompletedPurchase": null,
+      "traces": null,
+      "deferred": "n/a: no agent until M5",
+      "failures": []
+    },
+    {
+      "id": "S9",
+      "title": "agent process killed (kill -9) while COMPLETING or RECONCILING, then restarted",
+      "fault": "kill -9 of the agent child at K1 (complete held before forwarding), K2 (the merchant's answer held) or K3 (first read held after a dropped answer), in turn; restart on the same database with a new worker id",
+      "expected": ["COMPLETED"],
+      "requiredInvariants": ["I1", "I4", "I5"],
+      "alsoChecked": ["I2", "I3", "I7"],
+      "runs": 200,
+      "aborted": 0,
+      "terminal": {
+        "COMPLETED": 200,
+        "REJECTED": 0,
+        "FAILED_NOT_CHARGED": 0,
+        "ESCALATED": 0
+      },
+      "expectedOutcome": {
+        "k": 200,
+        "n": 200,
+        "rate": 1.0,
+        "wilson95": [0.9812, 1.0]
+      },
+      "violations": {
+        "I1": 0,
+        "I2": 0,
+        "I3": 0,
+        "I4": 0,
+        "I5": 0,
+        "I7": 0
+      },
+      "violationUpperBound95": {
+        "method": "rule_of_three",
+        "value": 0.015
+      },
+      "timeToTerminalMs": {
+        "p50": 36190,
+        "p95": 36339,
+        "max": 37248
+      },
+      "reconciliation": {
+        "runs": 200,
+        "timeToResolveMs": {
+          "p50": 327,
+          "p95": 30811
+        }
+      },
+      "modelCalls": null,
+      "tokens": null,
+      "costPerCompletedPurchase": null,
+      "traces": null,
+      "deferred": "n/a: no agent until M5",
+      "failures": []
+    },
+    {
+      "id": "S11",
+      "title": "merchant host not on the allowlist",
+      "fault": "none; the proposal names a merchant missing from the registry",
+      "expected": ["REJECTED"],
+      "requiredInvariants": ["I3"],
+      "alsoChecked": ["I1", "I2", "I4", "I5", "I7"],
+      "runs": 200,
+      "aborted": 0,
+      "terminal": {
+        "COMPLETED": 0,
+        "REJECTED": 200,
+        "FAILED_NOT_CHARGED": 0,
+        "ESCALATED": 0
+      },
+      "expectedOutcome": {
+        "k": 200,
+        "n": 200,
+        "rate": 1.0,
+        "wilson95": [0.9812, 1.0]
+      },
+      "violations": {
+        "I1": 0,
+        "I2": 0,
+        "I3": 0,
+        "I4": 0,
+        "I5": 0,
+        "I7": 0
+      },
+      "violationUpperBound95": {
+        "method": "rule_of_three",
+        "value": 0.015
+      },
+      "timeToTerminalMs": {
+        "p50": 1,
+        "p95": 1,
+        "max": 3
+      },
+      "reconciliation": {
+        "runs": 0,
+        "timeToResolveMs": {
+          "p50": null,
+          "p95": null
+        }
+      },
+      "modelCalls": null,
+      "tokens": null,
+      "costPerCompletedPurchase": null,
+      "traces": null,
+      "deferred": "n/a: no agent until M5",
+      "failures": []
+    },
+    {
+      "id": "S13",
+      "title": "duplicate_request on complete",
+      "fault": "duplicate_request on POST /ucp/v1/checkout-sessions/*/complete, nth 1 (parallel in even runs, sequential in odd runs)",
+      "expected": ["COMPLETED"],
+      "requiredInvariants": ["I1"],
+      "alsoChecked": ["I2", "I3", "I4", "I5", "I7"],
+      "runs": 200,
+      "aborted": 0,
+      "terminal": {
+        "COMPLETED": 200,
+        "REJECTED": 0,
+        "FAILED_NOT_CHARGED": 0,
+        "ESCALATED": 0
+      },
+      "expectedOutcome": {
+        "k": 200,
+        "n": 200,
+        "rate": 1.0,
+        "wilson95": [0.9812, 1.0]
+      },
+      "violations": {
+        "I1": 0,
+        "I2": 0,
+        "I3": 0,
+        "I4": 0,
+        "I5": 0,
+        "I7": 0
+      },
+      "violationUpperBound95": {
+        "method": "rule_of_three",
+        "value": 0.015
+      },
+      "timeToTerminalMs": {
+        "p50": 3,
+        "p95": 5,
+        "max": 7
+      },
+      "reconciliation": {
+        "runs": 0,
+        "timeToResolveMs": {
+          "p50": null,
+          "p95": null
+        }
+      },
+      "modelCalls": null,
+      "tokens": null,
+      "costPerCompletedPurchase": null,
+      "traces": null,
+      "deferred": "n/a: no agent until M5",
+      "failures": []
+    },
+    {
+      "id": "S14",
+      "title": "24 workers call advance concurrently on one APPROVED intent",
+      "fault": "none; 24 workers, each with its own orchestrator, worker id and connection, call advance at once; payment latency complete timeout / 4",
+      "expected": ["COMPLETED"],
+      "requiredInvariants": ["I1"],
+      "alsoChecked": ["I2", "I3", "I4", "I5", "I7"],
+      "runs": 200,
+      "aborted": 0,
+      "terminal": {
+        "COMPLETED": 200,
+        "REJECTED": 0,
+        "FAILED_NOT_CHARGED": 0,
+        "ESCALATED": 0
+      },
+      "expectedOutcome": {
+        "k": 200,
+        "n": 200,
+        "rate": 1.0,
+        "wilson95": [0.9812, 1.0]
+      },
+      "violations": {
+        "I1": 0,
+        "I2": 0,
+        "I3": 0,
+        "I4": 0,
+        "I5": 0,
+        "I7": 0
+      },
+      "violationUpperBound95": {
+        "method": "rule_of_three",
+        "value": 0.015
+      },
+      "timeToTerminalMs": {
+        "p50": 2536,
+        "p95": 2561,
+        "max": 2596
+      },
+      "reconciliation": {
+        "runs": 0,
+        "timeToResolveMs": {
+          "p50": null,
+          "p95": null
+        }
+      },
+      "modelCalls": null,
+      "tokens": null,
+      "costPerCompletedPurchase": null,
+      "traces": null,
+      "deferred": "n/a: no agent until M5",
+      "failures": []
+    },
+    {
+      "id": "S28",
+      "title": "agent process killed late in RECONCILING, so the takeover comes after the reconciliation deadline",
+      "fault": "complete closed before forwarding (even runs) or answered and dropped (odd runs); 503 on every read; kill -9 once D - L/2 has passed since uncertain_since; restart on the same database with a new worker id",
+      "expected": ["ESCALATED"],
+      "requiredInvariants": ["I1", "I4", "I5"],
+      "alsoChecked": ["I2", "I3", "I7"],
+      "runs": 200,
+      "aborted": 0,
+      "terminal": {
+        "COMPLETED": 0,
+        "REJECTED": 0,
+        "FAILED_NOT_CHARGED": 0,
+        "ESCALATED": 200
+      },
+      "expectedOutcome": {
+        "k": 200,
+        "n": 200,
+        "rate": 1.0,
+        "wilson95": [0.9812, 1.0]
+      },
+      "violations": {
+        "I1": 0,
+        "I2": 0,
+        "I3": 0,
+        "I4": 0,
+        "I5": 0,
+        "I7": 0
+      },
+      "violationUpperBound95": {
+        "method": "rule_of_three",
+        "value": 0.015
+      },
+      "timeToTerminalMs": {
+        "p50": 82284,
+        "p95": 83894,
+        "max": 84326
+      },
+      "reconciliation": {
+        "runs": 200,
+        "timeToResolveMs": {
+          "p50": 76853,
+          "p95": 78424
+        }
+      },
+      "modelCalls": null,
+      "tokens": null,
+      "costPerCompletedPurchase": null,
+      "traces": null,
+      "deferred": "n/a: no agent until M5",
+      "failures": []
+    }
+  ],
+  "invariants": [
+    {
+      "id": "I1",
+      "scenarios": 15,
+      "runs": 3000,
+      "violations": 0,
+      "upperBound95": {
+        "method": "rule_of_three",
+        "value": 0.001
+      }
+    },
+    {
+      "id": "I2",
+      "scenarios": 15,
+      "runs": 3000,
+      "violations": 0,
+      "upperBound95": {
+        "method": "rule_of_three",
+        "value": 0.001
+      }
+    },
+    {
+      "id": "I3",
+      "scenarios": 15,
+      "runs": 3000,
+      "violations": 0,
+      "upperBound95": {
+        "method": "rule_of_three",
+        "value": 0.001
+      }
+    },
+    {
+      "id": "I4",
+      "scenarios": 15,
+      "runs": 3000,
+      "violations": 0,
+      "upperBound95": {
+        "method": "rule_of_three",
+        "value": 0.001
+      }
+    },
+    {
+      "id": "I5",
+      "scenarios": 15,
+      "runs": 3000,
+      "violations": 0,
+      "upperBound95": {
+        "method": "rule_of_three",
+        "value": 0.001
+      }
+    },
+    {
+      "id": "I7",
+      "scenarios": 15,
+      "runs": 3000,
+      "violations": 0,
+      "upperBound95": {
+        "method": "rule_of_three",
+        "value": 0.001
+      }
+    }
+  ],
+  "exit": {
+    "code": 0,
+    "violations": 0,
+    "unexpectedOutcomes": 0,
+    "aborted": 0
+  }
+}

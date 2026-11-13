@@ -33,6 +33,8 @@ import dev.ucplab.core.policy.PolicyConfig;
 import dev.ucplab.core.policy.PolicyUsage;
 import dev.ucplab.core.policy.RequotePolicy;
 import dev.ucplab.core.policy.RuleBasedPolicyEngine;
+import dev.ucplab.faultproxy.Action;
+import dev.ucplab.faultproxy.LogEntry;
 import java.net.URI;
 import java.time.Instant;
 import java.util.List;
@@ -42,7 +44,8 @@ import org.junit.jupiter.api.Test;
 
 /**
  * The orphan-session probe (7.6 M3 note) through the real {@link UcpHttpGateway} and the real merchant: a create that
- * the merchant committed but whose answer was lost, then the probe under the same key.
+ * the merchant committed but whose answer was lost (dropped by the real fault proxy), then the probe under the same
+ * key.
  */
 class OrphanProbeEndToEndTest extends ContractTestBase {
 
@@ -54,7 +57,7 @@ class OrphanProbeEndToEndTest extends ContractTestBase {
     // returns the stored session and not 409, the session is cancelled, and no order exists)
     @Test
     void probe_learnsStoredSessionAndCancelsIt_whenCreateWasCommittedButItsAnswerDropped() throws Exception {
-        try (CommitThenDropProxy proxy = new CommitThenDropProxy(merchant.baseUrl())) {
+        try (ProxyFixture proxy = new ProxyFixture(merchant.baseUrl())) {
             TestClock clock = new TestClock();
             InMemoryIntentRepository intents = new InMemoryIntentRepository(clock);
             InMemoryApprovalRepository approvals = new InMemoryApprovalRepository();
@@ -85,7 +88,8 @@ class OrphanProbeEndToEndTest extends ContractTestBase {
                     policy, new RequotePolicy(policyConfig), PaymentInstrument.mockCard("pi_1", "tok_ok"), config, clock,
                     ids, "worker-1", new SplittableRandom(42));
 
-            proxy.dropCreates(true);
+            proxy.rules(ProxyFixture.rule("drop-create", "POST", ProxyFixture.CREATE,
+                    new Action.ForwardThenDropResponse()));
             ProposalResult proposed = orchestrator.propose(
                     new AuthContext(ALICE, "alice@example.com", clock.instant(), "session-alice"), SHOP, TWO_SHIRTS,
                     "two red t-shirts");
@@ -95,7 +99,7 @@ class OrphanProbeEndToEndTest extends ContractTestBase {
             assertThat(exhausted.sessionId()).isEmpty();
             assertThat(exhausted.cancelPending()).isTrue();
 
-            proxy.dropCreates(false);
+            proxy.clear();
             for (int i = 0; i < 20; i++) {
                 StepResult r = orchestrator.advance(id);
                 if (r.idle()) {
@@ -120,6 +124,20 @@ class OrphanProbeEndToEndTest extends ContractTestBase {
             assertThat(ok(session).status()).isEqualTo(CheckoutStatus.CANCELED);
             assertThat(intents.attempts(id)).noneMatch(a -> a.op() == AttemptOp.COMPLETE);
             assertThat(merchant.orders()).isEmpty();
+            // On the wire: every create under the one key and the same bytes, and each dropped one was answered by
+            // the merchant, so the session really existed before the probe learnt its id.
+            List<LogEntry> wireCreates = proxy.to("POST", ProxyFixture.CREATE);
+            assertThat(wireCreates).hasSize(5);
+            assertThat(wireCreates).extracting(e -> e.idempotencyKey().orElseThrow())
+                    .containsOnly(IdempotencyKey.derive(id, MutatingOp.CREATE, 0).value());
+            assertThat(wireCreates).extracting(e -> e.bodyHmac().orElseThrow()).hasSize(5).containsOnly(
+                    wireCreates.getFirst().bodyHmac().orElseThrow());
+            assertThat(wireCreates.subList(0, 4)).allSatisfy(e -> {
+                assertThat(e.ruleId()).contains("drop-create");
+                assertThat(e.merchantStatus()).isPresent();
+                assertThat(e.merchantStatus().getAsInt()).isBetween(200, 299);
+            });
+            assertThat(wireCreates.get(4).ruleId()).isEmpty();
         }
     }
 }

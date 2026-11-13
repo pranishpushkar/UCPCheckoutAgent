@@ -1,0 +1,29 @@
+# Sections 13.5 and 15, Decision 1. The full scripted evaluation: 200 runs per scenario at time scale 1
+# (./mvnw verify -Peval-full, which runs EvalMain with --require-full). Manual only, never a required check:
+# it is run once for each milestone that needs a report, and that report is committed under docs/results/.
+name: eval-full
+
+on:
+  workflow_dispatch:
+
+jobs:
+  eval-full:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - run: ./mvnw -B -ntp verify -Peval-full
+      # The report and the evidence of failed runs (redacted, I8); uploaded on failure too.
+      # v7 (v7.0.2 latest, checked on github.com/actions/upload-artifact/releases on 2026-11-13; v6 and later run on
+      # Node 24 and need runner 2.327.1 or newer, which GitHub-hosted runners have).
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: eval-full-report
+          path: eval-harness/target/eval-full/
+          if-no-files-found: warn

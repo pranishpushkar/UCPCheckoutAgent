@@ -24,5 +24,11 @@
             <artifactId>merchant</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Section 14 level 4: from M4 the faults the merchant cannot produce go through the fault proxy. -->
+        <dependency>
+            <groupId>dev.ucplab</groupId>
+            <artifactId>fault-proxy</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 </project>
