@@ -23,6 +23,13 @@
             <groupId>com.google.genai</groupId>
             <artifactId>google-genai</artifactId>
         </dependency>
+        <!-- Tests only: GeminiSchemaKeywordsTest sends the five tools' real schemas (C15 VERIFY). Main code depends on
+             core alone; agent-runtime never depends on this module. -->
+        <dependency>
+            <groupId>dev.ucplab</groupId>
+            <artifactId>agent-runtime</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <profiles>

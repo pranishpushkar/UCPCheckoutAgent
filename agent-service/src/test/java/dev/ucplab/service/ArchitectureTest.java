@@ -5,6 +5,7 @@ import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.core.importer.ImportOption;
+import dev.ucplab.core.agent.ModelKey;
 import org.junit.jupiter.api.Test;
 
 class ArchitectureTest {
@@ -18,6 +19,16 @@ class ArchitectureTest {
     void architecture_noAdkTypes_outsideAgentAdk() {
         noClasses()
                 .should().dependOnClassesThat().resideInAnyPackage("com.google.adk..", "com.google.genai..")
+                // The module has no classes yet.
+                .allowEmptyShould(true)
+                .check(PRODUCTION_CLASSES);
+    }
+
+    // Covers: I8 (the model key is handed out only in agent-adk's gemini package; nothing here reads it)
+    @Test
+    void architecture_noCallToModelKeyReveal_always() {
+        noClasses()
+                .should().callMethod(ModelKey.class, "reveal")
                 // The module has no classes yet.
                 .allowEmptyShould(true)
                 .check(PRODUCTION_CLASSES);

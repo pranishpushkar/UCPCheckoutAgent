@@ -9,6 +9,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.core.importer.ImportOption;
+import dev.ucplab.core.agent.ModelKey;
 import dev.ucplab.merchant.LabMerchant;
 import org.junit.jupiter.api.Test;
 
@@ -57,5 +58,13 @@ class ArchitectureTest {
                 .should().dependOnClassesThat(resideInAPackage("dev.ucplab.merchant..")
                         .and(not(equivalentTo(LabMerchant.class))))
                 .check(EVAL_CLASSES);
+    }
+
+    // Covers: I8 (the model key is handed out only in agent-adk's gemini package; nothing here reads it)
+    @Test
+    void architecture_noCallToModelKeyReveal_always() {
+        noClasses()
+                .should().callMethod(ModelKey.class, "reveal")
+                .check(ALL_HARNESS_CLASSES);
     }
 }

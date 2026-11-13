@@ -1,10 +1,12 @@
 package dev.ucplab.adk;
 
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.core.importer.ImportOption;
+import dev.ucplab.core.agent.ModelKey;
 import org.junit.jupiter.api.Test;
 
 class ArchitectureTest {
@@ -22,7 +24,16 @@ class ArchitectureTest {
                 .should().onlyDependOnClassesThat()
                 .resideInAnyPackage("java..", "javax.crypto..", "dev.ucplab.core..", "dev.ucplab.adk..",
                         "com.google.genai..")
-                // The module has no production classes until C15 (GeminiModelClient).
+                .check(PRODUCTION_CLASSES);
+    }
+
+    // Covers: I8 (only the gemini package reads the model key, to hand it to the SDK's client builder)
+    @Test
+    void architecture_modelKeyRevealedOnlyInTheGeminiPackage_always() {
+        noClasses()
+                .that().resideOutsideOfPackage("dev.ucplab.adk.gemini..")
+                .should().callMethod(ModelKey.class, "reveal")
+                // Every class of the module is in the gemini package today; the rule guards any added beside it.
                 .allowEmptyShould(true)
                 .check(PRODUCTION_CLASSES);
     }

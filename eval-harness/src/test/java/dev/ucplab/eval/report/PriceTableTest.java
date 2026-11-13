@@ -55,4 +55,23 @@ class PriceTableTest {
             assertThatThrownBy(() -> PriceTable.read(f)).isInstanceOf(RuntimeException.class);
         }
     }
+
+    // Covers: 13.3, 13.4, R4 (the live model's price file: gemini-3.8-flash, Paid Tier, Standard, as read on
+    // https://aistudio.google.com/docs/pricing on 2026-11-13: input $0.75 and "Output price (including thinking tokens)"
+    // $3.75 per 1M tokens through 2026-12-31. The page lists $1.50 and $7.50 from 2027-01-01; a run after that needs a
+    // new file. Thinking tokens are not priced separately.)
+    @Test
+    void read_geminiPriceFile_pinnedValues() throws Exception {
+        PriceTable p = PriceTable.read(Path.of(PriceTableTest.class
+                .getResource("/dev/ucplab/eval/prices/gemini-3.8-flash.json").toURI()));
+
+        assertThat(p.model()).isEqualTo("gemini-3.8-flash");
+        assertThat(p.date()).isEqualTo(LocalDate.of(2026, 11, 13));
+        assertThat(p.currency()).isEqualTo("USD");
+        assertThat(p.inputPerMillionTokens()).isEqualByComparingTo("0.75");
+        assertThat(p.outputPerMillionTokens()).isEqualByComparingTo("3.75");
+        assertThat(p.source()).isEqualTo("https://aistudio.google.com/docs/pricing");
+        // 20k input and 2k output tokens, the plan's ceiling for one run: 0.015 + 0.0075.
+        assertThat(p.cost(20_000, 2_000)).isEqualByComparingTo(new BigDecimal("0.0225"));
+    }
 }

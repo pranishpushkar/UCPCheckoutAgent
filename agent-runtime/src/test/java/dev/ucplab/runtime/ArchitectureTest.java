@@ -10,6 +10,7 @@ import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.domain.JavaMethodCall;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.core.importer.ImportOption;
+import dev.ucplab.core.agent.ModelKey;
 import dev.ucplab.core.approval.ApprovalService;
 import dev.ucplab.core.merchant.MerchantGateway;
 import java.io.IOException;
@@ -94,5 +95,13 @@ class ArchitectureTest {
     private static DescribedPredicate<JavaMethodCall> target(Class<?> owner, String method) {
         return DescribedPredicate.describe(owner.getSimpleName() + "." + method,
                 call -> call.getTargetOwner().isAssignableTo(owner) && call.getName().equals(method));
+    }
+
+    // Covers: I8 (the model key is handed out only in agent-adk's gemini package; nothing here reads it)
+    @Test
+    void architecture_noCallToModelKeyReveal_always() {
+        noClasses()
+                .should().callMethod(ModelKey.class, "reveal")
+                .check(PRODUCTION_CLASSES);
     }
 }
