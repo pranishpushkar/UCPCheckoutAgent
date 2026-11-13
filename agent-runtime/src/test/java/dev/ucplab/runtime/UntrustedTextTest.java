@@ -34,12 +34,27 @@ class UntrustedTextTest {
         assertThat(wrap(" \u0007​ ")).as("only removed or collapsed characters").isEqualTo(OPEN + CLOSE);
     }
 
-    // Covers: 6.4 (control characters, Cc, are removed: NUL, BEL, ESC, DEL, C1 controls, and tab and newline too)
+    // Covers: 6.4 (control characters, Cc, that are not whitespace are removed: NUL, BEL, ESC, DEL, C1 controls)
     @Test
     void wrap_controlCharacters_areRemoved() {
-        assertThat(inner(wrap("a\u0000b\u0007c\u001Bd\u007Fe\u0085f\u009Fg"))).isEqualTo("abcdefg");
-        assertThat(inner(wrap("one\ntwo\tthree\r\nfour"))).as("Cc is removed before whitespace is collapsed")
-                .isEqualTo("onetwothreefour");
+        assertThat(inner(wrap("a\u0000b\u0007c\u001Bd\u007Fe\u0080f\u009Fg"))).isEqualTo("abcdefg");
+    }
+
+    // Covers: 6.4 (control characters that are whitespace become a space, so the words they separate stay apart)
+    @Test
+    void wrap_whitespaceControls_keepWordsApart() {
+        assertThat(inner(wrap("one\ntwo"))).isEqualTo("one two");
+        assertThat(inner(wrap("a\tb"))).isEqualTo("a b");
+        assertThat(inner(wrap("x\r\ny"))).isEqualTo("x y");
+        assertThat(inner(wrap("p\u0085q"))).isEqualTo("p q");
+        assertThat(inner(wrap("v\u000Bw\fx\u001Cy\u001Dz\u001E0\u001F1"))).isEqualTo("v w x y z 0 1");
+        assertThat(inner(wrap("one\ntwo\tthree\r\nfour"))).isEqualTo("one two three four");
+    }
+
+    // Covers: 6.4, 9.3 L2 (a format character is not whitespace: a zero-width space between letters still joins them)
+    @Test
+    void wrap_zeroWidthBetweenLetters_stillJoinsThem() {
+        assertThat(inner(wrap("blue\u200Bmug"))).isEqualTo("bluemug");
     }
 
     // Covers: 6.4, 9.3 L2 (format characters, Cf, are removed: bidi overrides and isolates, zero-width, BOM, soft

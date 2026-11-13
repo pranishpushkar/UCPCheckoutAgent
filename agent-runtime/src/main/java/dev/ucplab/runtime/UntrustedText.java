@@ -23,8 +23,9 @@ public final class UntrustedText {
     }
 
     /**
-     * In order: removes every code point of category Cc (control) and Cf (format: bidi controls, zero-width characters);
-     * collapses runs of whitespace to one space and strips both ends; truncates to {@value #MAX_CODE_POINTS} code points
+     * In order: turns the control characters that are whitespace ({@code \t \n \u000B \f \r}, {@code \u001C} to
+     * {@code \u001F} and {@code \u0085}) into a space, so the words they separate stay apart, and removes every other
+     * code point of category Cc (control) and Cf (format: bidi controls, zero-width characters); collapses runs of whitespace to one space and strips both ends; truncates to {@value #MAX_CODE_POINTS} code points
      * (never splitting a surrogate pair), marking the cut; turns any {@code <untrusted} or {@code </untrusted}, in any
      * case, into {@code &lt;untrusted} or {@code &lt;/untrusted} so the text cannot close the wrapper; and wraps the
      * result as {@code <untrusted source="..." field="...">...</untrusted>}.
@@ -38,7 +39,7 @@ public final class UntrustedText {
         checkAttribute("source", source);
         checkAttribute("field", field);
         Objects.requireNonNull(text, "text");
-        String kept = truncate(collapseWhitespace(removeControlAndFormat(text)));
+        String kept = truncate(collapseWhitespace(spaceOrRemoveControlAndFormat(text)));
         String neutral = DELIMITER.matcher(kept).replaceAll(m -> "&lt;" + Matcher.quoteReplacement(m.group(1)));
         return "<untrusted source=\"" + source + "\" field=\"" + field + "\">" + neutral + "</untrusted>";
     }
@@ -50,12 +51,21 @@ public final class UntrustedText {
         }
     }
 
-    private static String removeControlAndFormat(String s) {
+    private static String spaceOrRemoveControlAndFormat(String s) {
         StringBuilder out = new StringBuilder(s.length());
-        s.codePoints()
-                .filter(cp -> Character.getType(cp) != Character.CONTROL && Character.getType(cp) != Character.FORMAT)
-                .forEach(out::appendCodePoint);
+        s.codePoints().forEach(cp -> {
+            if (isControlWhitespace(cp)) {
+                out.append(' ');
+            } else if (Character.getType(cp) != Character.CONTROL && Character.getType(cp) != Character.FORMAT) {
+                out.appendCodePoint(cp);
+            }
+        });
         return out.toString();
+    }
+
+    /** The Cc code points that are whitespace: tab, line feed, vertical tab, form feed, CR, the separators, NEL. */
+    private static boolean isControlWhitespace(int cp) {
+        return (cp >= '\t' && cp <= '\r') || (cp >= 0x1C && cp <= 0x1F) || cp == 0x85;
     }
 
     private static String collapseWhitespace(String s) {
