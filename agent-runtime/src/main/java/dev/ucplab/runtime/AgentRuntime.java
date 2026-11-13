@@ -138,6 +138,9 @@ public final class AgentRuntime {
                 } catch (ScriptDriftException e) {
                     throw e;
                 } catch (RuntimeException e) {
+                    // The trace keeps the failure's fixed code, so a 503, a timeout and a hang can be told apart;
+                    // the record's reason stays model_error.
+                    trace.llmCallFailed(meter.modelCalls(), Duration.between(before, clock.instant()), e);
                     return new RunOutcome.Failed("model_error");
                 }
                 meter.afterTurn(turn.usage());

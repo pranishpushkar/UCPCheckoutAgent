@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import dev.ucplab.core.MutableClock;
 import dev.ucplab.core.agent.InMemoryRunRepository;
 import dev.ucplab.core.agent.ModelClient;
+import dev.ucplab.core.agent.ModelFailure;
 import dev.ucplab.core.agent.RunId;
 import dev.ucplab.core.agent.RunRecord;
 import dev.ucplab.core.agent.ToolEvent;
@@ -207,6 +208,65 @@ class AgentRuntimeTest {
         assertThat(outcome).isEqualTo(new RunOutcome.Failed("model_error"));
         assertThat(calls).hasValue(1);
         assertThat(record().outcome()).contains("failed");
+    }
+
+    /** A model failure with a fixed code, as GeminiException is; its message must never reach the trace. */
+    private static final class CodedFailure extends RuntimeException implements ModelFailure {
+        private final String code;
+
+        CodedFailure(String code) {
+            super("SECRET-MODEL-FAILURE-DETAIL https://example.invalid/?key=SECRET-KEY");
+            this.code = code;
+        }
+
+        @Override
+        public String code() {
+            return code;
+        }
+    }
+
+    private RunTrace failedRun(RuntimeException failure) {
+        RunTrace trace = new RunTrace(RUN);
+        ModelClient failing = (conversation, tools) -> {
+            clock.advance(Duration.ofMillis(7_250));
+            throw failure;
+        };
+        assertThat(runtime(failing).run(Stubs.ALICE, RUN, "m", SILENT, trace))
+                .isEqualTo(new RunOutcome.Failed("model_error"));
+        assertThat(record().reason()).contains("model_error");
+        return trace;
+    }
+
+    // Covers: 11 (D7), 6.5, I8, m5-stage5b (a failed model call leaves an llm.call line with its index, its duration
+    // and the failure's fixed code as the outcome, never its message; the record's reason stays model_error)
+    @Test
+    void run_modelFailureWithACode_llmCallLineWithTheCode() {
+        RunTrace trace = failedRun(new CodedFailure("SERVER_ERROR"));
+
+        assertThat(trace.lines()).hasSize(2);
+        assertThat(trace.lines().getFirst()).contains("\"span\":\"llm.call\"").contains("\"index\":1")
+                .contains("\"duration_ms\":7250").contains("\"outcome\":\"SERVER_ERROR\"");
+        assertThat(trace.lines().get(1)).contains("\"span\":\"agent.run\"");
+        assertThat(trace.jsonl()).doesNotContain("SECRET").doesNotContain("example.invalid");
+    }
+
+    // Covers: 11 (D7), I8, m5-stage5b (a failure that carries no code is "unknown")
+    @Test
+    void run_modelFailureWithoutACode_llmCallLineUnknown() {
+        RunTrace trace = failedRun(new IllegalStateException("SECRET-503 from the model"));
+
+        assertThat(trace.lines().getFirst()).contains("\"span\":\"llm.call\"").contains("\"index\":1")
+                .contains("\"duration_ms\":7250").contains("\"outcome\":\"unknown\"");
+        assertThat(trace.jsonl()).doesNotContain("SECRET");
+    }
+
+    // Covers: 11 (D7), I8, m5-stage5b (a code that is not an identifier is "unknown", so no text reaches the trace)
+    @Test
+    void run_modelFailureCodeNotAnIdentifier_llmCallLineUnknown() {
+        RunTrace trace = failedRun(new CodedFailure("SECRET text, not a code"));
+
+        assertThat(trace.lines().getFirst()).contains("\"outcome\":\"unknown\"");
+        assertThat(trace.jsonl()).doesNotContain("SECRET");
     }
 
     // Covers: m5-plan section 4 (a tool that fails unexpectedly ends the run as Failed; the message is not kept)

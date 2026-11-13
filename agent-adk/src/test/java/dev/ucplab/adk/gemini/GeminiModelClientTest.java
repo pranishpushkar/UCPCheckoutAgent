@@ -8,6 +8,7 @@ import dev.ucplab.core.agent.Conversation;
 import dev.ucplab.core.agent.Message;
 import dev.ucplab.core.agent.ModelClient;
 import dev.ucplab.core.agent.ModelClientSettings;
+import dev.ucplab.core.agent.ModelFailure;
 import dev.ucplab.core.agent.ModelKey;
 import dev.ucplab.core.agent.ModelTurn;
 import dev.ucplab.core.agent.ToolSpec;
@@ -155,6 +156,15 @@ class GeminiModelClientTest {
                     .isInstanceOfSatisfying(GeminiException.class, e -> assertThat(e.reason()).isEqualTo(c.getValue()));
             sent++;
             assertThat(stub.received()).as("one attempt for HTTP %d", c.getKey()).hasSize(sent);
+        }
+    }
+
+    // Covers: 11, m5-stage5b (every GeminiException is a ModelFailure whose code is its reason's name)
+    @Test
+    void geminiException_isAModelFailure_codeIsTheReasonName() {
+        for (Reason reason : Reason.values()) {
+            assertThat(new GeminiException(reason)).isInstanceOf(ModelFailure.class)
+                    .extracting(e -> ((ModelFailure) e).code()).isEqualTo(reason.name());
         }
     }
 

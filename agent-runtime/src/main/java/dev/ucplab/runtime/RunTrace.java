@@ -1,5 +1,6 @@
 package dev.ucplab.runtime;
 
+import dev.ucplab.core.agent.ModelFailure;
 import dev.ucplab.core.agent.RunId;
 import dev.ucplab.core.json.CanonicalJson;
 import java.time.Duration;
@@ -8,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.regex.Pattern;
 
 /**
  * A run's spans as JSON lines, written to {@code trace.jsonl} by the harness (11, D7), with the section 11 span names:
@@ -15,6 +17,11 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * the prompt, model text, tool arguments or tool results, and never a tool name the model made up.
  */
 public final class RunTrace {
+
+    /** The outcome of a failed model call whose failure carries no code. */
+    public static final String UNKNOWN_FAILURE = "unknown";
+
+    private static final Pattern CODE = Pattern.compile("[A-Za-z0-9_.-]{1,64}");
 
     private final RunId runId;
     private final List<String> lines = new CopyOnWriteArrayList<>();
@@ -30,6 +37,20 @@ public final class RunTrace {
         span.put("input_tokens", inputTokens);
         span.put("output_tokens", outputTokens);
         span.put("tool_calls", toolCalls);
+        lines.add(CanonicalJson.write(span));
+    }
+
+    /**
+     * A model call that threw: its index, how long it took, and the failure's fixed code as the outcome, or
+     * {@link #UNKNOWN_FAILURE} when it carries none ({@link ModelFailure}) or the code is not an identifier. Never the
+     * exception's message.
+     */
+    void llmCallFailed(int index, Duration took, RuntimeException failure) {
+        Map<String, Object> span = span("llm.call");
+        span.put("index", index);
+        span.put("duration_ms", took.toMillis());
+        span.put("outcome", failure instanceof ModelFailure f && f.code() != null && CODE.matcher(f.code()).matches()
+                ? f.code() : UNKNOWN_FAILURE);
         lines.add(CanonicalJson.write(span));
     }
 

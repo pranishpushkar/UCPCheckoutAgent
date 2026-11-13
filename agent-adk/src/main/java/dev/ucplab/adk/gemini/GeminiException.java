@@ -1,13 +1,14 @@
 package dev.ucplab.adk.gemini;
 
+import dev.ucplab.core.agent.ModelFailure;
 import java.util.Objects;
 
 /**
  * Every failure that leaves {@link GeminiModelClient} (I8, ADR 0004): one of our fixed {@link Reason}s, never the
  * SDK's message, a URL, a header or a response body. It has no cause and no suppressed exceptions, so a logged stack
- * trace cannot carry them either.
+ * trace cannot carry them either. As a {@link ModelFailure}, its code is the reason's name.
  */
-public final class GeminiException extends RuntimeException {
+public final class GeminiException extends RuntimeException implements ModelFailure {
 
     private static final long serialVersionUID = 1L;
 
@@ -54,5 +55,11 @@ public final class GeminiException extends RuntimeException {
 
     public Reason reason() {
         return reason;
+    }
+
+    /** The reason's name, such as {@code TIMEOUT} or {@code SERVER_ERROR}, for the trace's {@code llm.call} line. */
+    @Override
+    public String code() {
+        return reason.name();
     }
 }
