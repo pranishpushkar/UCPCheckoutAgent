@@ -8,13 +8,13 @@ import dev.ucplab.service.config.ServiceProperties;
 import jakarta.servlet.http.HttpServletRequest;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.random.RandomGenerator;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -32,7 +32,7 @@ import org.springframework.web.util.HtmlUtils;
  * under {@code local}; in {@code prod} these routes are 404 and every {@code /api} route is 401.
  *
  * <p>{@code POST /auth/dev-login} takes {@code {user}} as JSON or as a form. It checks {@code Origin} against
- * {@code PUBLIC_ORIGIN} first (login CSRF: there is no session yet to carry a token), refuses a name not in
+ * {@code PUBLIC_ORIGIN} (a list) first (login CSRF: there is no session yet to carry a token), refuses a name not in
  * {@code LOCAL_USERS} with 422 and no id in the body, upserts {@code app_user}, deletes the session the request already
  * carried (a new id at every sign-in, 18.5), and opens a new one: 32 random bytes for the cookie, stored only as their
  * hash, and 32 more, drawn separately, for the CSRF token. Then it redirects to the cleaned {@code return_to}.
@@ -49,10 +49,10 @@ final class DevSignInController {
     private final SessionRepository sessions;
     private final UserRepository users;
     private final Clock clock;
-    private final RandomGenerator random;
+    private final SecureRandom random;
 
     DevSignInController(ServiceProperties properties, SessionRepository sessions, UserRepository users, Clock clock,
-                        RandomGenerator random) {
+                        SecureRandom random) {
         this.properties = Objects.requireNonNull(properties, "properties");
         this.sessions = Objects.requireNonNull(sessions, "sessions");
         this.users = Objects.requireNonNull(users, "users");
@@ -97,7 +97,7 @@ final class DevSignInController {
     }
 
     private ResponseEntity<Void> signIn(Optional<Object> user, Optional<Object> returnTo, HttpServletRequest request) {
-        if (!properties.publicOrigin().equals(request.getHeader(HttpHeaders.ORIGIN))) {
+        if (!properties.publicOrigins().contains(request.getHeader(HttpHeaders.ORIGIN))) {
             throw ApiException.of(ErrorCode.CSRF_FAILED);
         }
         String name = user.filter(String.class::isInstance).map(String.class::cast)

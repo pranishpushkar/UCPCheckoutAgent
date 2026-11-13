@@ -6,7 +6,6 @@ import dev.ucplab.core.identity.AuthContext;
 import dev.ucplab.core.intent.IntentCursor;
 import dev.ucplab.core.intent.IntentCursorCodec;
 import dev.ucplab.core.intent.IntentEvent;
-import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentPage;
 import dev.ucplab.core.intent.IntentQueries;
 import dev.ucplab.core.intent.IntentRepository;
@@ -115,7 +114,7 @@ final class IntentController {
     }
 
     private PurchaseIntent owned(AuthContext auth, String id) {
-        return intents.find(auth.user(), new IntentId(id)).orElseThrow(() -> ApiException.of(ErrorCode.NOT_FOUND));
+        return intents.find(auth.user(), IntentIds.parse(id)).orElseThrow(() -> ApiException.of(ErrorCode.NOT_FOUND));
     }
 
     private static IntentState state(String name) {

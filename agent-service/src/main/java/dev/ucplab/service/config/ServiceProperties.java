@@ -25,9 +25,9 @@ import java.util.regex.Pattern;
  * and in prod not a {@code change-me} placeholder, 9.2); {@code POLICY_FILE} (optional, {@link PolicyFile}; prod refuses
  * {@code approval_required: false}, P6); {@code MERCHANT_URL}, the one merchant of M6 as the agent reaches it (25.4:
  * "M6 configures its one merchant directly"; default the proxy at {@code http://127.0.0.1:9101}); {@code LOCAL_USERS},
- * the names the local dev sign-in offers (18.8, default {@code alice,bob}); {@code PUBLIC_ORIGIN}, the origin a
- * browser shows for this service, which the dev sign-in checks {@code Origin} against (m6-plan section 4, default
- * {@code http://localhost:8080}).
+ * the names the local dev sign-in offers (18.8, default {@code alice,bob}); {@code PUBLIC_ORIGIN}, a
+ * comma-separated list of the origins a browser shows for this service, which the dev sign-in checks {@code Origin}
+ * against (m6-plan section 4; default {@code http://localhost:8080,http://127.0.0.1:8080}).
  */
 public final class ServiceProperties {
 
@@ -47,6 +47,8 @@ public final class ServiceProperties {
 
     private static final String SQLITE = "jdbc:sqlite:";
     private static final String DEFAULT_DATABASE = SQLITE + "data/ucplab.db";
+    /** Both loopback spellings of the console's address, so either works in a browser (Stage 3 review, point 2). */
+    private static final String DEFAULT_ORIGINS = "http://localhost:8080,http://127.0.0.1:8080";
     private static final String DEFAULT_MERCHANT_URL = "http://127.0.0.1:9101";
     private static final Pattern LOCAL_NAME = Pattern.compile("[a-z][a-z0-9]{0,31}");
 
@@ -57,11 +59,11 @@ public final class ServiceProperties {
     private final PolicyConfig policy;
     private final MerchantEntry merchant;
     private final List<String> localUsers;
-    private final String publicOrigin;
+    private final List<String> publicOrigins;
 
     private ServiceProperties(AgentProfile profile, Path databaseFile, byte[] approvalSecret, ApprovalSecret approvalKey,
                               PolicyConfig policy, MerchantEntry merchant, List<String> localUsers,
-                              String publicOrigin) {
+                              List<String> publicOrigins) {
         this.profile = profile;
         this.databaseFile = databaseFile;
         this.approvalSecret = approvalSecret;
@@ -69,7 +71,7 @@ public final class ServiceProperties {
         this.policy = policy;
         this.merchant = merchant;
         this.localUsers = localUsers;
-        this.publicOrigin = publicOrigin;
+        this.publicOrigins = publicOrigins;
     }
 
     /** Reads and checks every setting; throws {@link IllegalStateException} with a fixed message on the first refusal. */
@@ -133,7 +135,12 @@ public final class ServiceProperties {
         }
 
         return new ServiceProperties(profile, databaseFile, secretBytes, approvalKey, policy, merchant, localUsers,
-                origin(env.get("PUBLIC_ORIGIN").orElse("http://localhost:8080")));
+                origins(env.get("PUBLIC_ORIGIN").orElse(DEFAULT_ORIGINS)));
+    }
+
+    private static List<String> origins(String value) {
+        return Arrays.stream(value.split(",", -1)).map(String::trim).map(ServiceProperties::origin).distinct()
+                .toList();
     }
 
     private static String origin(String value) {
@@ -176,9 +183,9 @@ public final class ServiceProperties {
         return localUsers;
     }
 
-    /** The origin a browser shows for this service, as {@code scheme://host[:port]}. */
-    public String publicOrigin() {
-        return publicOrigin;
+    /** The origins a browser shows for this service, each as {@code scheme://host[:port]}. */
+    public List<String> publicOrigins() {
+        return publicOrigins;
     }
 
     /** The key for approval tokens, built with {@code ofProduction} in prod (9.2). */

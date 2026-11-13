@@ -109,3 +109,6 @@ org.junit.jupiter:junit-jupiter:jar:6.1.3:test
   (m6-plan Decisions item 4). `DefaultOrchestrator.propose` evaluates policy, then inserts, in separate repository
   calls (`PolicyUsage`'s `TODO(M3)`). In M6 the service allows one active run per user, so the agent cannot race its
   own proposals; with several instances (M7) the check must move inside the insert's write transaction.
+- **Tomcat answers an encoded slash (`%2F`) in a path with its own minimal error page before our handler runs**, so that
+  one response is not the `{code, message, request_id}` JSON shape. `ErrorShapeTest.containerRejection_leaksNothing`
+  proves the page leaks no exception, class name, path or server banner. Accepted for M6.

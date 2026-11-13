@@ -47,7 +47,7 @@ final class ApprovalController {
 
     @GetMapping("/api/intents/{id}/approval")
     Map<String, Object> pending(AuthContext auth, @PathVariable("id") String id) {
-        PendingApproval pending = approvals.pending(auth, new IntentId(id))
+        PendingApproval pending = approvals.pending(auth, IntentIds.parse(id))
                 .orElseThrow(() -> ApiException.of(ErrorCode.NOT_FOUND));
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("snapshot", QuoteCard.of(pending.snapshot()));
@@ -59,6 +59,7 @@ final class ApprovalController {
     @PostMapping("/api/intents/{id}/approval")
     Map<String, Object> decide(AuthContext auth, @PathVariable("id") String id,
                                @RequestBody Map<String, Object> body) {
+        IntentId intentId = IntentIds.parse(id);
         String token = body.get("token") instanceof String t && !t.isBlank() && t.length() <= MAX_TOKEN_LENGTH
                 ? t : null;
         Object decided = body.get("decision");
@@ -67,7 +68,6 @@ final class ApprovalController {
         if (token == null || approve.isEmpty()) {
             throw ApiException.of(ErrorCode.VALIDATION_FAILED, BAD_BODY);
         }
-        IntentId intentId = new IntentId(id);
         ApprovalDecision decision;
         try {
             decision = approvals.decide(auth, intentId, token, approve.get());

@@ -40,9 +40,9 @@ public final class EventCatalogue {
     public static final Set<String> NESTED = Set.of("item_id", "quantity");
 
     /**
-     * Keys deliberately kept out of the console: model text, internal ids and hashes, amounts the quote card already
-     * shows from the snapshot, and counters. Redacted by the allowlist's default.
+     * Keys deliberately kept out of the console: model text, internal ids and hashes, and the attempt list. The counters
+     * and the approval's amounts are allowed (Stage 3 review, point 4). Redacted by the allowlist's default.
      */
-    public static final Set<String> REDACTED = Set.of("rationale", "cause", "snapshot_hash", "total_minor",
-            "max_total_minor", "attempt_id", "resend", "attempts", "attempt", "probe", "probes");
+    public static final Set<String> REDACTED = Set.of("rationale", "cause", "snapshot_hash", "attempt_id",
+            "attempts");
 }

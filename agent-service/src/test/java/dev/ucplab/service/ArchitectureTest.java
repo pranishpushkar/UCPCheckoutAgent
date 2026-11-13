@@ -18,6 +18,7 @@ import dev.ucplab.persistence.SqlIntentRepository;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
@@ -122,6 +123,18 @@ class ArchitectureTest {
     void sessionInterceptor_buildsTheAuthContext() {
         assertThat(PRODUCTION_CLASSES.get(SESSION_INTERCEPTOR).getConstructorCallsFromSelf())
                 .anyMatch(call -> call.getTargetOwner().isEquivalentTo(AuthContext.class));
+    }
+
+    // Covers: 18.5, Stage 3 review point 3 (session and CSRF tokens come from a SecureRandom by type: the sign-in
+    // controller takes one, and nothing else random)
+    @Test
+    void devSignInController_takesASecureRandom() {
+        var controller = PRODUCTION_CLASSES.get("dev.ucplab.service.web.DevSignInController");
+
+        assertThat(controller.getConstructors()).hasSize(1);
+        assertThat(controller.getConstructors().iterator().next().getRawParameterTypes())
+                .anyMatch(t -> t.isEquivalentTo(SecureRandom.class))
+                .noneMatch(t -> t.getName().equals("java.util.random.RandomGenerator"));
     }
 
     // Covers: 7.8 (no synchronized block or method anywhere in agent-service's main source)

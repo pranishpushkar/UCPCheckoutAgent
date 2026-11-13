@@ -216,6 +216,24 @@ class IntentsApiTest {
         assertThat(state(alice, id)).as("bob's approve changed nothing").isEqualTo("AWAITING_APPROVAL");
     }
 
+    // Covers: T6, 23.5 (a blank or malformed intent id is 404 not_found on every intent route, never a 500)
+    @Test
+    void blankIntentId_is404OnEveryRoute() throws IOException {
+        start();
+        Session alice = api.signIn("alice");
+        HttpResponse<String> missing = api.get(alice, "/api/intents/no-such-intent");
+
+        for (String path : List.of("/api/intents/%20", "/api/intents/%20/events", "/api/intents/%20/approval")) {
+            assertSameNotFound("GET " + path, api.get(alice, path), api.get(alice, path.replace("%20",
+                    "no-such-intent")));
+        }
+        HttpResponse<String> post = api.post(alice, "/api/intents/%20/approval",
+                "{\"token\":\"t\",\"decision\":\"approve\"}");
+        assertSameNotFound("POST approval", post, api.post(alice, "/api/intents/no-such-intent/approval",
+                "{\"token\":\"t\",\"decision\":\"approve\"}"));
+        assertThat(missing.statusCode()).isEqualTo(404);
+    }
+
     private static void assertSameNotFound(String what, HttpResponse<String> theirs, HttpResponse<String> missing) {
         assertThat(theirs.statusCode()).as(what).isEqualTo(404);
         assertThat(missing.statusCode()).as(what).isEqualTo(404);

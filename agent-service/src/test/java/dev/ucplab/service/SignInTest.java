@@ -260,6 +260,21 @@ class SignInTest {
         }
     }
 
+    // Covers: m6-plan section 4, Stage 3 review point 2 (in local both loopback origins sign in; another origin is 403)
+    @Test
+    void devLogin_bothLoopbackOrigins_areAccepted() throws IOException {
+        start();
+
+        for (String origin : List.of("http://localhost:8080", "http://127.0.0.1:8080")) {
+            HttpResponse<String> r = api.send("POST", "/auth/dev-login", Optional.of("{\"user\":\"alice\"}"),
+                    "Origin", origin, "Content-Type", "application/json");
+            assertThat(r.statusCode()).as(origin).isEqualTo(303);
+        }
+        HttpResponse<String> other = api.send("POST", "/auth/dev-login", Optional.of("{\"user\":\"alice\"}"),
+                "Origin", "http://localhost:9090", "Content-Type", "application/json");
+        assertThat(other.statusCode()).isEqualTo(403);
+    }
+
     // Covers: 18.8, T1 (an unknown local user is 422 and the body names no user id; LOCAL_USERS decides who exists)
     @Test
     void devLogin_unknownUser_is422WithoutAnId() throws IOException {

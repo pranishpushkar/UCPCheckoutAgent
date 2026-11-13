@@ -167,8 +167,13 @@ class ServicePropertiesTest {
         Map<String, String> custom = env("local");
         custom.put("PUBLIC_ORIGIN", "https://lab.example:8443");
 
-        assertThat(from(env("local")).publicOrigin()).isEqualTo("http://localhost:8080");
-        assertThat(from(custom).publicOrigin()).isEqualTo("https://lab.example:8443");
+        Map<String, String> two = env("local");
+        two.put("PUBLIC_ORIGIN", "https://a.example, http://b.example:81");
+
+        assertThat(from(env("local")).publicOrigins())
+                .containsExactly("http://localhost:8080", "http://127.0.0.1:8080");
+        assertThat(from(custom).publicOrigins()).containsExactly("https://lab.example:8443");
+        assertThat(from(two).publicOrigins()).containsExactly("https://a.example", "http://b.example:81");
         for (String bad : new String[] {"localhost:8080", "http://localhost:8080/", "http://u@localhost",
                 "http://localhost/?q", "ftp://localhost"}) {
             Map<String, String> env = env("local");

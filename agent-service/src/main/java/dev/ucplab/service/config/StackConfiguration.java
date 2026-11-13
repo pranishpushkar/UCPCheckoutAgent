@@ -79,7 +79,7 @@ public class StackConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    RandomGenerator random() {
+    SecureRandom random() {
         return new SecureRandom();
     }
 

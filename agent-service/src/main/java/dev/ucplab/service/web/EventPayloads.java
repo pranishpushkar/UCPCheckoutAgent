@@ -18,7 +18,8 @@ final class EventPayloads {
 
     static final Set<String> ALLOWED = Set.of("from", "to", "event", "guard", "stage", "allowed", "rule", "reason",
             "merchant_id", "lines", "item_id", "quantity", "approval_id", "decision", "decided_by", "outcome",
-            "http_status", "code", "codes", "status", "approval_status", "hash_matches");
+            "http_status", "code", "codes", "status", "approval_status", "hash_matches", "attempt", "probe", "probes",
+            "resend", "total_minor", "max_total_minor");
 
     private EventPayloads() {
     }
