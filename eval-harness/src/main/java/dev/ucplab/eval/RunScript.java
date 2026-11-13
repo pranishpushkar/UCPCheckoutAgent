@@ -1,6 +1,8 @@
 package dev.ucplab.eval;
 
 import dev.ucplab.core.agent.InMemoryRunRepository;
+import dev.ucplab.core.agent.ModelClient;
+import dev.ucplab.core.agent.ToolSpec;
 import dev.ucplab.core.agent.RunId;
 import dev.ucplab.core.agent.RunRecord;
 import dev.ucplab.core.id.SequentialIdGenerator;
@@ -20,6 +22,7 @@ import dev.ucplab.runtime.RunOutcome;
 import dev.ucplab.runtime.RunTrace;
 import dev.ucplab.runtime.ScriptDriftException;
 import dev.ucplab.runtime.ScriptedModel;
+import dev.ucplab.runtime.ToolRegistry;
 import java.io.IOException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -442,7 +445,15 @@ public final class RunScript {
         RunId runId = new RunId("run-" + name);
         RunTrace trace = new RunTrace(runId);
         ScriptedUser user = new ScriptedUser(spec.userAnswers(), () -> stack.intentCount(signedIn.user()));
-        AgentRuntime runtime = new AgentRuntime(model, "scripted", stack.toolPorts(), runs, AgentBudget.DEFAULT,
+        // I6 on every model call: the tools offered are exactly the five, taken from what the model was handed.
+        AtomicLong offList = new AtomicLong();
+        ModelClient checked = (conversation, tools) -> {
+            if (!tools.stream().map(ToolSpec::name).toList().equals(ToolRegistry.NAMES)) {
+                offList.incrementAndGet();
+            }
+            return model.generate(conversation, tools);
+        };
+        AgentRuntime runtime = new AgentRuntime(checked, "scripted", stack.toolPorts(), runs, AgentBudget.DEFAULT,
                 ASK_TIMEOUT, clock);
         Optional<RunOutcome> outcome = Optional.empty();
         Optional<String> abort = Optional.empty();
@@ -462,6 +473,10 @@ public final class RunScript {
                 breach, user.asks(), user.intentsAtFirstAsk()));
         if (record.isEmpty()) {
             abort = abort.or(() -> Optional.of("agent run left no run record"));
+        }
+        if (offList.get() > 0) {
+            abort = abort.or(() -> Optional.of("I6: " + offList.get() + " model call(s) offered tools other than "
+                    + ToolRegistry.NAMES));
         }
         return new AgentResult(record.map(RunRecord::intentIds).orElse(List.of()), abort, evidence);
     }

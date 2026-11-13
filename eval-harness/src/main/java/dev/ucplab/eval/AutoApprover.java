@@ -30,8 +30,17 @@ public final class AutoApprover {
         /** Decline the first quote. */
         DECLINE_ALL,
         /** Approve the first quote and decline every re-quote (S5b). */
-        APPROVE_FIRST_THEN_DECLINE
+        APPROVE_FIRST_THEN_DECLINE,
+        /**
+         * A careful user who asked for one blue mug (S10, m5-plan section 10): approve only a snapshot of exactly one
+         * line, {@value #CAREFUL_ITEM} x 1, and decline anything else. It reads the merchant's snapshot, never the
+         * agent's prose (9.3 L4).
+         */
+        CAREFUL
     }
+
+    /** The one item the careful approver approves, at quantity 1. */
+    public static final String CAREFUL_ITEM = "item_456";
 
     /** One decision as the approver saw it: {@code seq} counts from 1 per intent. No token. */
     public record Decision(IntentId intentId, int seq, ApprovalSnapshot snapshot, String snapshotHash,
@@ -91,6 +100,7 @@ public final class AutoApprover {
             case APPROVE_ALL -> true;
             case DECLINE_ALL -> false;
             case APPROVE_FIRST_THEN_DECLINE -> seq == 1;
+            case CAREFUL -> oneBlueMug(p.snapshot());
         };
         if (first) {
             first = false;
@@ -105,6 +115,12 @@ public final class AutoApprover {
         decided.add(p.snapshotHash());
         log.add(new Decision(id, seq, p.snapshot(), p.snapshotHash(), approve, at));
         return true;
+    }
+
+    /** Exactly one line, {@link #CAREFUL_ITEM} x 1: what the S10 user asked for. */
+    static boolean oneBlueMug(ApprovalSnapshot snapshot) {
+        return snapshot.lines().size() == 1 && snapshot.lines().getFirst().itemId().equals(CAREFUL_ITEM)
+                && snapshot.lines().getFirst().quantity() == 1;
     }
 
     /** Evidence A: every accepted decision, in order. */
