@@ -32,8 +32,9 @@
         <archunit.version>1.5.1</archunit.version>
         <sqlite-jdbc.version>3.54.1.0</sqlite-jdbc.version>
         <flyway.version>13.12.1</flyway.version>
-        <!-- ADK for Java (R2, ADR 0004): 1.13.0, not 1.14.0, which was under two weeks old on 2026-11-13. -->
-        <google-adk.version>1.13.0</google-adk.version>
+        <!-- The Gemini SDK (R2, ADR 0004): 1.80.0 (2026-10-29), the newest release at least two weeks old on 2026-11-13;
+             2.0.0 to 2.3.0 came out 2026-11-06 to 2026-11-12. ADK for Java was evaluated and not used. -->
+        <google-genai.version>1.80.0</google-genai.version>
 
         <maven-compiler-plugin.version>3.16.0</maven-compiler-plugin.version>
         <maven-surefire-plugin.version>3.6.1</maven-surefire-plugin.version>
@@ -92,9 +93,9 @@
                 <version>${flyway.version}</version>
             </dependency>
             <dependency>
-                <groupId>com.google.adk</groupId>
-                <artifactId>google-adk</artifactId>
-                <version>${google-adk.version}</version>
+                <groupId>com.google.genai</groupId>
+                <artifactId>google-genai</artifactId>
+                <version>${google-genai.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.junit</groupId>

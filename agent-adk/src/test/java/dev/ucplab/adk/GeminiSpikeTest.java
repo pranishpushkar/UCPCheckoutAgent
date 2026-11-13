@@ -3,14 +3,12 @@ package dev.ucplab.adk;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.google.adk.models.Gemini;
-import com.google.adk.models.LlmRequest;
-import com.google.adk.models.LlmResponse;
 import com.google.genai.Client;
 import com.google.genai.types.Content;
 import com.google.genai.types.FunctionCall;
 import com.google.genai.types.FunctionDeclaration;
 import com.google.genai.types.GenerateContentConfig;
+import com.google.genai.types.GenerateContentResponse;
 import com.google.genai.types.HttpOptions;
 import com.google.genai.types.HttpRetryOptions;
 import com.google.genai.types.Part;
@@ -30,12 +28,12 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * The ADK spike (C1, ADR 0004, R2), offline: ADK's {@code Gemini} model makes one model turn against a loopback stub
- * of the Gemini API, outside ADK's runner. It offers one function declaration, gets a function call back unexecuted,
- * and sends a function response back by name. The key travels only in the {@code x-goog-api-key} header, never in the
- * URL, and a failed call is sent exactly once when retries are set to one attempt.
+ * The Gemini spike (C1, ADR 0004, R2), offline: one {@code client.models.generateContent} call against a loopback stub
+ * of the Gemini API, with the base URL overridden. It offers one function declaration and gets the function call back
+ * unexecuted, with token counts. The key travels only in the {@code x-goog-api-key} header, never in the URL, and a
+ * failed call is sent exactly once when retries are set to one attempt.
  */
-class AdkSpikeTest {
+class GeminiSpikeTest {
 
     private static final String MODEL = "spike-model";
     private static final String GENERATE = "/v1beta/models/" + MODEL + ":generateContent";
@@ -76,9 +74,9 @@ class AdkSpikeTest {
         return "canary-" + HexFormat.of().formatHex(b);
     }
 
-    /** ADK's Gemini model over an explicit genai client: key, base URL and backend all set, none read from the environment. */
-    private Gemini model() {
-        Client client = Client.builder()
+    /** An explicit client: key, base URL, backend and retries all set, none taken from the environment. */
+    private Client client() {
+        return Client.builder()
                 .apiKey(key)
                 .vertexAI(false)
                 .httpOptions(HttpOptions.builder()
@@ -86,7 +84,6 @@ class AdkSpikeTest {
                         .retryOptions(HttpRetryOptions.builder().attempts(1).build())
                         .build())
                 .build();
-        return new Gemini(MODEL, client);
     }
 
     private static GenerateContentConfig withGetTime() {
@@ -102,22 +99,24 @@ class AdkSpikeTest {
                 .build();
     }
 
-    // Covers: 6.5, R2 (one model turn outside ADK's runner: the function call comes back unexecuted, with token counts)
+    private static List<Content> ask(String text) {
+        return List.of(Content.fromParts(Part.fromText(text)));
+    }
+
+    // Covers: 6.5, R2 (one call: the function call comes back unexecuted, with token counts, and the request carries
+    // the declaration)
     @Test
-    void oneTurn_functionDeclaration_returnsTheCallUnexecutedWithUsage() {
+    void oneCall_functionDeclaration_returnsTheCallUnexecutedWithUsage() {
         reply = """
                 {"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"get_time",\
                 "args":{"zone":"UTC"}}}]},"finishReason":"STOP"}],\
                 "usageMetadata":{"promptTokenCount":42,"candidatesTokenCount":7,"totalTokenCount":49}}""";
-        LlmRequest request = LlmRequest.builder()
-                .contents(List.of(Content.fromParts(Part.fromText("What time is it in UTC?"))))
-                .config(withGetTime())
-                .build();
 
-        LlmResponse response = model().generateContent(request, false).blockingFirst();
+        GenerateContentResponse response = client().models.generateContent(MODEL, ask("What time is it in UTC?"),
+                withGetTime());
 
-        List<FunctionCall> calls = response.content().orElseThrow().parts().orElseThrow().stream()
-                .flatMap(p -> p.functionCall().stream()).toList();
+        List<FunctionCall> calls = response.candidates().orElseThrow().getFirst().content().orElseThrow()
+                .parts().orElseThrow().stream().flatMap(p -> p.functionCall().stream()).toList();
         assertThat(calls).singleElement().satisfies(c -> {
             assertThat(c.name()).hasValue("get_time");
             assertThat(c.args()).hasValue(Map.of("zone", "UTC"));
@@ -128,32 +127,32 @@ class AdkSpikeTest {
         });
         assertThat(received).singleElement().satisfies(r -> {
             assertThat(r.method()).isEqualTo("POST");
-            assertThat(r.uri()).isEqualTo(GENERATE);
             assertThat(r.body()).contains("\"functionDeclarations\"").contains("\"get_time\"")
                     .contains("\"parametersJsonSchema\"");
         });
     }
 
-    // Covers: 6.5, R2 (the function response goes back as a functionResponse part matched by name)
+    // Covers: R2 (the base URL override sends the call to the stub, on the generateContent path, and the function
+    // response goes back by name)
     @Test
-    void secondTurn_functionResponseByName_modelAnswersInText() {
+    void baseUrlOverride_reachesTheStub_functionResponseByName() {
         reply = """
                 {"candidates":[{"content":{"role":"model","parts":[{"text":"It is 12:00 in UTC."}]},\
                 "finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":60,"candidatesTokenCount":9}}""";
-        LlmRequest request = LlmRequest.builder()
-                .contents(List.of(
-                        Content.fromParts(Part.fromText("What time is it in UTC?")),
-                        Content.builder().role("model")
-                                .parts(List.of(Part.fromFunctionCall("get_time", Map.of("zone", "UTC")))).build(),
-                        Content.fromParts(Part.fromFunctionResponse("get_time", Map.of("time", "12:00")))))
-                .config(withGetTime())
-                .build();
+        List<Content> contents = List.of(
+                Content.fromParts(Part.fromText("What time is it in UTC?")),
+                Content.builder().role("model")
+                        .parts(List.of(Part.fromFunctionCall("get_time", Map.of("zone", "UTC")))).build(),
+                Content.fromParts(Part.fromFunctionResponse("get_time", Map.of("time", "12:00"))));
 
-        LlmResponse response = model().generateContent(request, false).blockingFirst();
+        GenerateContentResponse response = client().models.generateContent(MODEL, contents, withGetTime());
 
-        assertThat(response.content().orElseThrow().text()).isEqualTo("It is 12:00 in UTC.");
-        assertThat(received).singleElement().satisfies(r -> assertThat(r.body())
-                .contains("\"functionResponse\"").contains("\"name\":\"get_time\"").contains("\"12:00\""));
+        assertThat(response.text()).isEqualTo("It is 12:00 in UTC.");
+        assertThat(received).singleElement().satisfies(r -> {
+            assertThat(r.uri()).isEqualTo(GENERATE);
+            assertThat(r.body()).contains("\"functionResponse\"").contains("\"name\":\"get_time\"")
+                    .contains("\"12:00\"");
+        });
     }
 
     // Covers: I8, R2 (the key is sent in the x-goog-api-key header only: never in the URL or the body)
@@ -161,8 +160,8 @@ class AdkSpikeTest {
     void apiKey_travelsInTheHeaderOnly_neverInTheUrlOrBody() {
         reply = """
                 {"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]}}]}""";
-        model().generateContent(LlmRequest.builder()
-                .contents(List.of(Content.fromParts(Part.fromText("hi")))).build(), false).blockingFirst();
+
+        client().models.generateContent(MODEL, ask("hi"), null);
 
         assertThat(received).singleElement().satisfies(r -> {
             assertThat(r.keyHeader()).isEqualTo(key);
@@ -171,16 +170,16 @@ class AdkSpikeTest {
         });
     }
 
-    // Covers: 6.3, I8, R2 (with one attempt a 503 is sent once, not retried behind the budget's back, and the error
-    // does not carry the key)
+    // Covers: 6.3, I8, R2 (with one attempt a 503 is sent once, not retried behind the budget's back, and no message
+    // in the exception chain holds the key)
     @Test
     void serverError_oneAttempt_sentOnceAndTheErrorHoldsNoKey() {
         status = 503;
         reply = """
                 {"error":{"code":503,"message":"overloaded","status":"UNAVAILABLE"}}""";
+        Client client = client();
 
-        assertThatThrownBy(() -> model().generateContent(LlmRequest.builder()
-                .contents(List.of(Content.fromParts(Part.fromText("hi")))).build(), false).blockingFirst())
+        assertThatThrownBy(() -> client.models.generateContent(MODEL, ask("hi"), null))
                 .satisfies(e -> {
                     for (Throwable t = e; t != null; t = t.getCause()) {
                         assertThat(String.valueOf(t.getMessage())).doesNotContain(key);

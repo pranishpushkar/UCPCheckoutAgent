@@ -18,10 +18,10 @@
             <groupId>dev.ucplab</groupId>
             <artifactId>agent-core</artifactId>
         </dependency>
-        <!-- The only module that imports ADK or Gemini SDK types (5.2, ADR 0004). -->
+        <!-- The only module that imports Gemini SDK (or ADK) types (5.2, ADR 0004). -->
         <dependency>
-            <groupId>com.google.adk</groupId>
-            <artifactId>google-adk</artifactId>
+            <groupId>com.google.genai</groupId>
+            <artifactId>google-genai</artifactId>
         </dependency>
     </dependencies>
 

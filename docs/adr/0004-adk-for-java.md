@@ -1,19 +1,49 @@
 # ADR 0004: ADK for Java, and what the live model client is built on
 
-Status: proposed (M5, C1). The version and the dependency are in place for the spike. **The choice between ADK
-single-turn and `google-genai` single-call is open**, and is decided at the gate after C1.
+Status: accepted (M5). C1 evaluated ADK for Java; the gate after C1 (2026-11-13) chose `google-genai` single-call, and
+the first commit of Stage 2 removed ADK. The ADK findings below are kept as the record of that evaluation.
 
-## Decision so far
+## Decision
 
-- `com.google.adk:google-adk` **1.13.0**, pinned in the parent pom (`google-adk.version`) and added to `agent-adk` as
-  an ordinary compile dependency. agent-adk is the only module that imports ADK or Gemini SDK types (5.2). Every other
-  module's ArchUnit test forbids `com.google.adk..` and `com.google.genai..`; agent-core's JDK-only rule already did.
-- **Why 1.13.0:** the versions on Maven Central (`maven-metadata.xml`, read 2026-11-13) are 1.0.0-rc.1, 1.0.0
-  (2026-03-30), then 1.1.0 to 1.14.0. 1.14.0 (2026-11-02) was under two weeks old, so the newest release older than
-  that, 1.13.0, is pinned.
-- **Our loop owns every tool call** (6.3, I6). ADK's agents, runner, sessions and flows are not used.
+- **`GeminiModelClient` is built directly on the Gemini API with `com.google.genai:google-genai`, single call**
+  (`client.models.generateContent(model, contents, config)`). ADK for Java was evaluated and is not used.
+- **Why:** ADK can make one model turn outside its runner (item 1 below), but its `Gemini` model class is a thin wrapper
+  over genai's `models.generateContent`. It would cost about 178 extra jars, including a Docker client, the Anthropic
+  SDK, BigQuery, Arrow with Netty and an OpenTelemetry SDK, and a Jackson databind/core mismatch. Our loop owns every
+  tool call (6.3, I6), so ADK's agents, runner, sessions and flows would never be used. 6.5 allows building directly on
+  the Gemini API.
+- **Version: `google-genai` 1.80.0** (2026-10-29), pinned in the parent pom (`google-genai.version`). It is the newest
+  release at least two weeks old on 2026-11-13: `maven-metadata.xml` lists 1.77.0 (2026-10-13), 1.78.0, 1.79.0, 1.80.0,
+  then 2.0.0 (2026-11-06) to 2.3.0 (2026-11-12). The 2.x line is a new major, newer than two weeks; it is not used yet.
+- **The module keeps the name `agent-adk`.** It is the only module that imports Gemini SDK (or ADK) types (5.2).
+  Every other module's ArchUnit test forbids `com.google.adk..` and `com.google.genai..`. agent-adk's own test allows
+  the JDK, core and `com.google.genai..` only.
+- **The spike tests run on genai:**
+  - `GeminiSpikeTest` (offline, loopback stub) shows one call returning the function call unexecuted with usage; the
+    base URL override and the function response by name; the key in the `x-goog-api-key` header only; and a 503 sent
+    once with one attempt, with no key in any exception message;
+  - `GeminiLiveSpikeIT` runs under `-Plive-spike` with `GEMINI_API_KEY` set.
 
-## The dependency tree
+### The dependency tree after the swap
+
+| Item | ADK 1.13.0 (C1) | google-genai 1.80.0 |
+| --- | --- | --- |
+| agent-adk runtime classpath | 216 jars, about 198 MB | **51 jars, about 37 MB** |
+| Jackson | databind 2.20.2 with core 2.18.2 (mismatch) | databind, core, annotations and both datatypes all 2.18.11; **no mismatch** |
+| Other notable dependencies | see below | OkHttp 4.12 with the Kotlin standard library, Guava 33.4 (android), google-auth |
+| Conflicts omitted by Maven | many (Jackson 2.17 to 2.20) | none |
+
+The genai findings in items 2 to 6 were read in the 1.77.0 sources and re-checked in the 1.80.0 sources: the key
+header, the eager environment read, `GOOGLE_GEMINI_BASE_URL`, `GOOGLE_GENAI_CLIENT_MODE` and the 5-attempt retry
+default are unchanged. `GeminiSpikeTest` passes on 1.80.0.
+
+## The ADK evaluation (C1, kept as the record)
+
+- `com.google.adk:google-adk` **1.13.0** was pinned for the spike. Maven Central had 1.0.0-rc.1, 1.0.0 (2026-03-30),
+  then 1.1.0 to 1.14.0; 1.14.0 (2026-11-02) was under two weeks old.
+- The spike tests were `AdkSpikeTest` and `AdkLiveSpikeIT`, now `GeminiSpikeTest` and `GeminiLiveSpikeIT` on genai.
+
+### ADK's dependency tree
 
 `./mvnw dependency:tree -pl agent-adk` (kept outside the repo):
 
@@ -26,7 +56,7 @@ single-turn and `google-genai` single-call is open**, and is decided at the gate
 | Clash with what is already on the classpath | None. `flyway-core` 13.12.1 and `sqlite-jdbc` 3.54.1.0 bring no transitive dependencies, so there is no Jackson, Guava, Netty or OpenTelemetry to clash with. agent-service, which depends on both agent-persistence and agent-adk, now inherits the whole tree, with Jackson 2.17 to 2.20 versions omitted for conflict |
 | Build | Compiles and tests on Java 21; the enforcer rule (JDK 21) passes. No exclusion was added |
 
-## Items 1 to 6 (m5-plan section 2)
+### Items 1 to 6 (m5-plan section 2)
 
 Sources: the ADK 1.13.0 sources jar (`google-adk-1.13.0-sources.jar` from Maven Central) and the `google-genai`
 1.77.0 sources jar, both read 2026-11-13, and `AdkSpikeTest`, which runs both against a loopback stub.
@@ -97,7 +127,7 @@ contents, config)`: one call, no runner, no automatic function calling for decla
 
 ## The live round trip
 
-`AdkLiveSpikeIT` runs only under `-Plive-spike` with `GEMINI_API_KEY` set:
+`GeminiLiveSpikeIT` runs only under `-Plive-spike` with `GEMINI_API_KEY` set:
 
 ```
 GEMINI_API_KEY=... ./mvnw -B -ntp -pl agent-adk verify -Plive-spike
@@ -106,38 +136,26 @@ GEMINI_API_KEY=... ./mvnw -B -ntp -pl agent-adk verify -Plive-spike
 - **Model:** `gemini-3.8-flash`, the stable Flash model listed at https://aistudio.google.com/docs/models (where
   https://ai.google.dev/gemini-api/docs/models redirects) on 2026-11-13. `-Dspike.model` overrides it. The agent's
   model is pinned in C15.
-- **What it does:** our loop, not ADK's runner, sends the tool result back.
-- **What it prints:** turns, the tool call with its id, input and output tokens, and the answer's length. Never the key,
-  a URL or a header.
+- **What it does:** our loop sends the tool result back.
+- **What it prints:** turns, the tool call with its id, input, output and thinking tokens, and the answer's length.
+  Never the key, a URL or a header.
 
 Status: not run yet (no key in the build environment).
 
-## Recommendation
+## Recommendation at the gate (C1, kept as the record)
 
-**`google-genai` single-call**, with ADK removed from the build before C15. The reasons:
-
-- **ADK's model class adds nothing we use.** `Gemini.generateContent` is a thin wrapper around genai's
-  `models.generateContent`. What it adds is request preparation: stripping `adk-` call ids, making sure the last content
-  is the user's, and tracking headers. None of that is needed when our loop builds the request.
-- **The cost of ADK is the other 178 jars and 177 MB.** They include a Docker client, the Anthropic SDK, BigQuery,
-  Arrow with Netty and an OpenTelemetry SDK, on agent-adk's and agent-service's classpaths. They bring a Jackson
-  databind/core mismatch we would have to manage, and a release roughly every two weeks to track.
-- **6.5 already allows it:** "If the ADK API blocks progress, implement `ModelClient` directly on the Gemini API.
-  Nothing else changes."
-  - ADK does not block progress (item 1 works), so taking the fallback is a judgement on weight and risk, not
-    necessity. It needs your decision and a 6.5 wording change (D8 would name `google-genai` instead).
-
-**If ADK stays**, C15:
-- builds `GeminiModelClient` on `new Gemini(model, client)` with an explicit genai `Client`;
-- manages `jackson-core` to databind's version in agent-adk, with a test;
-- documents the classpath weight in agent-service.
+The C1 recommendation was `google-genai` single-call, for the reasons now under Decision, with this caveat. ADK did not
+block progress (item 1 works), so taking 6.5's fallback was a judgement on weight and risk, not necessity. The gate
+accepted it.
 
 ## Consequences
 
-- agent-service inherits ADK's whole tree while ADK is a compile dependency of agent-adk.
+- agent-adk and agent-service no longer carry ADK's tree. agent-adk carries genai's 51 jars, and agent-service inherits
+  them through agent-adk.
 - Every module's ArchUnit test forbids `com.google.genai..` as well as `com.google.adk..`.
-- C15's `GeminiModelClient` must, whichever library is chosen:
+- C15's `GeminiModelClient` must:
   - set `vertexAI(false)`, `baseUrl` and `retryOptions(attempts 1)` explicitly;
   - set a per-call `timeout` from the remaining budget;
   - refuse to start if `GOOGLE_GENAI_CLIENT_MODE` is set;
-  - replace every exception message with a fixed reason.
+  - replace every exception message with a fixed reason;
+  - decide whether thinking tokens (`thoughtsTokenCount`) count against the budget and the price table.
