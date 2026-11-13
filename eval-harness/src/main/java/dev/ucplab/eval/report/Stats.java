@@ -55,6 +55,11 @@ public final class Stats {
         return k == 0 ? new Bound("rule_of_three", ruleOfThree(n)) : new Bound("wilson", wilson(k, n).high());
     }
 
+    /** The nearest-rank percentile {@code p} (0 to 100] of counts; empty if there are none. */
+    public static Optional<Long> percentileOf(List<Long> values, int p) {
+        return percentile(values.stream().map(Duration::ofNanos).toList(), p).map(Duration::toNanos);
+    }
+
     /** The nearest-rank percentile {@code p} (0 to 100] of {@code values}; empty if there are none. */
     public static Optional<Duration> percentile(List<Duration> values, int p) {
         if (p <= 0 || p > 100) {

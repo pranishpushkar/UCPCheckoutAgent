@@ -1,9 +1,17 @@
 {
-  "schema": "ucplab.eval.report/1",
+  "schema": "ucplab.eval.report/2",
   "banner": "REDUCED: 3 runs per scenario, time scale 4 — not an acceptance report",
   "generatedAt": "2026-11-12T12:00:00Z",
   "mode": "scripted",
-  "driver": "orchestrator-direct (M4, no model)",
+  "modes": ["orchestrator-direct", "agent-scripted", "agent-live"],
+  "prices": {
+    "model": "fixture-model-not-real",
+    "date": "2026-01-01",
+    "currency": "USD",
+    "inputPerMillionTokens": "1.00",
+    "outputPerMillionTokens": "10",
+    "source": "test fixture: invented prices, not a real model's"
+  },
   "reduced": true,
   "commit": {
     "sha": "0123456789abcdef0123456789abcdef01234567",
@@ -47,10 +55,11 @@
     },
     "runtime": ["Java 21.0.5 (Test)", "TestOS 1.0 x86_64"]
   },
-  "method": ["Scripted, orchestrator-direct (13.1 M4 note): each run calls Orchestrator.propose with the scenario's fixed basket; an automatic approver decides through the approval service; the recovery worker drives the intent. There is no model, so model calls, tokens, cost and traces read n/a: no agent until M5.", "Real time throughout, every duration divided by the time scale k = 4 (13.1); approval lifetime and sign-in age are not scaled.", "Each run gets a fresh database, gateway, circuit breakers, worker id and user, and the merchant is reset before it; runs in one lane are sequential, lanes share nothing.", "Policy usage is a harness stub with no earlier spend or proposals: every run has a user of its own, so there is nothing to count. A real PolicyUsage is out of scope for M4 (it belongs with agent-service in M6).", "Invariants are checked on ground truth the agent does not control: O (/_lab/orders), G (the merchant's own GET of each order's session), L (the fault proxy's log in front of the merchant, including Idempotency-Key and a keyed body hash) and A (the approver's own decisions). An aborted run fails every check.", "Terminal states, the expected outcome and reconciliation times come from the agent's stored state (D), which is what they describe; time to terminal is the harness's own observation.", "I1 (at most one order per run, and each order's session is completed with that order): O (/_lab/orders) and G (the merchant's GET of each order's session); D is not read.", "I2 (every order matches the snapshot the user approved for its key: merchant, session, lines, currency, and an amount not above the approved maximum): O, G (lines and currency of each order's session), L (which key produced the order, and when it was first sent) and A (the approved snapshot); D is not read.", "I3 (every complete follows an unexpired approval of the same session by the owner, matched by revision, with no decline in between): L (every complete, its key and arrival) and A (the decisions); D only for the stored approval row's status and decided_by, which I3 is about.", "I4 (after the first complete, no create for the intent and no request to another session, and the stored session id is the completed one): L (every request after the intent's first complete); D only for the final stored session_id, which I4 is about.", "I5 (every intent is terminal with no cancel owed, and no state outlasted its 7.6 bound): D for the end state and the time in each state (I5 is about the agent's state), L and the harness's own terminal observation for the last complete stretch.", "I7 (one key and one byte-identical body per approval, a new key for each new approval): L (keys and bodyHmac of every complete) and A (the approval in force); D only as a cross-check that L's body hash is the hash of the agent's frozen body."],
+  "method": ["Orchestrator-direct rows (13.1 M4 note): each run calls Orchestrator.propose with the scenario's fixed basket; an automatic approver decides through the approval service; the recovery worker drives the intent. There is no model, so the agent columns read n/a (orchestrator-direct).", "Agent rows (13.1 D6, m5-plan section 9): the agent runtime proposes, driven by a ScriptedModel (agent-scripted) or a live model (agent-live); the approver and the recovery worker then act as in the orchestrator-direct rows. Model and tool calls are the run record's counts. Tokens and cost per completed purchase are for live rows only (scripted rows read n/a (scripted model)): tokens times the price file, with its model and date (13.3, 13.4). Trace links are each run's trace.jsonl, for runs with an evidence folder.", "Real time throughout, every duration divided by the time scale k = 4 (13.1); approval lifetime and sign-in age are not scaled.", "Each run gets a fresh database, gateway, circuit breakers, worker id and user, and the merchant is reset before it; runs in one lane are sequential, lanes share nothing.", "Policy usage is a harness stub with no earlier spend or proposals: every run has a user of its own, so there is nothing to count. A real PolicyUsage is out of scope for M4 (it belongs with agent-service in M6).", "Invariants are checked on ground truth the agent does not control: O (/_lab/orders), G (the merchant's own GET of each order's session), L (the fault proxy's log in front of the merchant, including Idempotency-Key and a keyed body hash) and A (the approver's own decisions). An aborted run fails every check.", "Terminal states, the expected outcome and reconciliation times come from the agent's stored state (D), which is what they describe; time to terminal is the harness's own observation.", "I1 (at most one order per run, and each order's session is completed with that order): O (/_lab/orders) and G (the merchant's GET of each order's session); D is not read.", "I2 (every order matches the snapshot the user approved for its key: merchant, session, lines, currency, and an amount not above the approved maximum): O, G (lines and currency of each order's session), L (which key produced the order, and when it was first sent) and A (the approved snapshot); D is not read.", "I3 (every complete follows an unexpired approval of the same session by the owner, matched by revision, with no decline in between): L (every complete, its key and arrival) and A (the decisions); D only for the stored approval row's status and decided_by, which I3 is about.", "I4 (after the first complete, no create for the intent and no request to another session, and the stored session id is the completed one): L (every request after the intent's first complete); D only for the final stored session_id, which I4 is about.", "I5 (every intent is terminal with no cancel owed, and no state outlasted its 7.6 bound): D for the end state and the time in each state (I5 is about the agent's state), L and the harness's own terminal observation for the last complete stretch.", "I7 (one key and one byte-identical body per approval, a new key for each new approval): L (keys and bodyHmac of every complete) and A (the approval in force); D only as a cross-check that L's body hash is the hash of the agent's frozen body."],
   "scenarios": [
     {
       "id": "S0",
+      "mode": "orchestrator-direct",
       "title": "no fault",
       "fault": "none",
       "expected": ["COMPLETED"],
@@ -94,11 +103,11 @@
           "p95": 60
         }
       },
-      "modelCalls": null,
-      "tokens": null,
-      "costPerCompletedPurchase": null,
-      "traces": null,
-      "deferred": "n/a: no agent until M5",
+      "modelCalls": "n/a (orchestrator-direct)",
+      "toolCalls": "n/a (orchestrator-direct)",
+      "tokens": "n/a (orchestrator-direct)",
+      "costPerCompletedPurchase": "n/a (orchestrator-direct)",
+      "traces": "n/a (orchestrator-direct)",
       "failures": [
         {
           "run": 2,
@@ -113,6 +122,7 @@
     },
     {
       "id": "S4",
+      "mode": "orchestrator-direct",
       "title": "the same proposal submitted twice",
       "fault": "none; propose twice with the same basket (sequential in even runs, concurrent in odd runs)",
       "expected": ["COMPLETED"],
@@ -156,11 +166,11 @@
           "p95": null
         }
       },
-      "modelCalls": null,
-      "tokens": null,
-      "costPerCompletedPurchase": null,
-      "traces": null,
-      "deferred": "n/a: no agent until M5",
+      "modelCalls": "n/a (orchestrator-direct)",
+      "toolCalls": "n/a (orchestrator-direct)",
+      "tokens": "n/a (orchestrator-direct)",
+      "costPerCompletedPurchase": "n/a (orchestrator-direct)",
+      "traces": "n/a (orchestrator-direct)",
       "failures": [
         {
           "run": 1,
@@ -174,6 +184,7 @@
     },
     {
       "id": "S11",
+      "mode": "orchestrator-direct",
       "title": "merchant host not on the allowlist",
       "fault": "none; the proposal names a merchant missing from the registry",
       "expected": ["REJECTED"],
@@ -217,11 +228,11 @@
           "p95": null
         }
       },
-      "modelCalls": null,
-      "tokens": null,
-      "costPerCompletedPurchase": null,
-      "traces": null,
-      "deferred": "n/a: no agent until M5",
+      "modelCalls": "n/a (orchestrator-direct)",
+      "toolCalls": "n/a (orchestrator-direct)",
+      "tokens": "n/a (orchestrator-direct)",
+      "costPerCompletedPurchase": "n/a (orchestrator-direct)",
+      "traces": "n/a (orchestrator-direct)",
       "failures": [
         {
           "run": 1,
@@ -232,74 +243,207 @@
           "evidence": "evidence/S11/run-1"
         }
       ]
+    },
+    {
+      "id": "A-S0",
+      "mode": "agent-scripted",
+      "title": "agent, scripted: search, then propose 1 Blue Mug",
+      "fault": "none; the agent proposes",
+      "expected": ["COMPLETED"],
+      "requiredInvariants": ["I1", "I2", "I3"],
+      "alsoChecked": ["I4", "I5", "I7"],
+      "runs": 3,
+      "aborted": 0,
+      "terminal": {
+        "COMPLETED": 3,
+        "REJECTED": 0,
+        "FAILED_NOT_CHARGED": 0,
+        "ESCALATED": 0
+      },
+      "expectedOutcome": {
+        "k": 3,
+        "n": 3,
+        "rate": 1.0,
+        "wilson95": [0.4385, 1.0]
+      },
+      "violations": {
+        "I1": 0,
+        "I2": 0,
+        "I3": 0,
+        "I4": 0,
+        "I5": 0,
+        "I7": 0
+      },
+      "violationUpperBound95": {
+        "method": "rule_of_three",
+        "value": 1.0
+      },
+      "timeToTerminalMs": {
+        "p50": 151,
+        "p95": 152,
+        "max": 152
+      },
+      "reconciliation": {
+        "runs": 0,
+        "timeToResolveMs": {
+          "p50": null,
+          "p95": null
+        }
+      },
+      "modelCalls": {
+        "p50": 3,
+        "p95": 3
+      },
+      "toolCalls": {
+        "p50": 2,
+        "p95": 3
+      },
+      "tokens": "n/a (scripted model)",
+      "costPerCompletedPurchase": "n/a (scripted model)",
+      "traces": ["evidence/A-S0/run-1/trace.jsonl"],
+      "failures": []
+    },
+    {
+      "id": "A-S12",
+      "mode": "agent-live",
+      "title": "agent, scripted: ambiguous request",
+      "fault": "none; the user asks for one of the products; ask_user is answered \"the blue mug\"",
+      "expected": ["COMPLETED"],
+      "requiredInvariants": ["I1", "I2", "I3"],
+      "alsoChecked": ["I4", "I5", "I7"],
+      "runs": 3,
+      "aborted": 0,
+      "terminal": {
+        "COMPLETED": 2,
+        "REJECTED": 1,
+        "FAILED_NOT_CHARGED": 0,
+        "ESCALATED": 0
+      },
+      "expectedOutcome": {
+        "k": 2,
+        "n": 3,
+        "rate": 0.6667,
+        "wilson95": [0.2077, 0.9385]
+      },
+      "violations": {
+        "I1": 0,
+        "I2": 0,
+        "I3": 0,
+        "I4": 0,
+        "I5": 0,
+        "I7": 0
+      },
+      "violationUpperBound95": {
+        "method": "rule_of_three",
+        "value": 1.0
+      },
+      "timeToTerminalMs": {
+        "p50": 151,
+        "p95": 152,
+        "max": 152
+      },
+      "reconciliation": {
+        "runs": 0,
+        "timeToResolveMs": {
+          "p50": null,
+          "p95": null
+        }
+      },
+      "modelCalls": {
+        "p50": 4,
+        "p95": 5
+      },
+      "toolCalls": {
+        "p50": 3,
+        "p95": 4
+      },
+      "tokens": {
+        "p50": 10500,
+        "p95": 12600
+      },
+      "costPerCompletedPurchase": {
+        "amount": "0.023",
+        "currency": "USD"
+      },
+      "traces": "n/a (evidence for failed runs only)",
+      "failures": [
+        {
+          "run": 2,
+          "seed": 44,
+          "lane": 0,
+          "kind": "unexpected",
+          "detail": "ended REJECTED with 1 intent(s); expected [COMPLETED]",
+          "evidence": null
+        }
+      ]
     }
   ],
   "invariants": [
     {
       "id": "I1",
-      "scenarios": 3,
-      "runs": 9,
+      "scenarios": 5,
+      "runs": 15,
       "violations": 2,
       "upperBound95": {
         "method": "wilson",
-        "value": 0.5474
+        "value": 0.3788
       }
     },
     {
       "id": "I2",
-      "scenarios": 3,
-      "runs": 9,
+      "scenarios": 5,
+      "runs": 15,
       "violations": 1,
       "upperBound95": {
         "method": "wilson",
-        "value": 0.435
+        "value": 0.2982
       }
     },
     {
       "id": "I3",
-      "scenarios": 3,
-      "runs": 9,
+      "scenarios": 5,
+      "runs": 15,
       "violations": 1,
       "upperBound95": {
         "method": "wilson",
-        "value": 0.435
+        "value": 0.2982
       }
     },
     {
       "id": "I4",
-      "scenarios": 3,
-      "runs": 9,
+      "scenarios": 5,
+      "runs": 15,
       "violations": 1,
       "upperBound95": {
         "method": "wilson",
-        "value": 0.435
+        "value": 0.2982
       }
     },
     {
       "id": "I5",
-      "scenarios": 3,
-      "runs": 9,
+      "scenarios": 5,
+      "runs": 15,
       "violations": 1,
       "upperBound95": {
         "method": "wilson",
-        "value": 0.435
+        "value": 0.2982
       }
     },
     {
       "id": "I7",
-      "scenarios": 3,
-      "runs": 9,
+      "scenarios": 5,
+      "runs": 15,
       "violations": 1,
       "upperBound95": {
         "method": "wilson",
-        "value": 0.435
+        "value": 0.2982
       }
     }
   ],
   "exit": {
     "code": 1,
     "violations": 2,
-    "unexpectedOutcomes": 1,
+    "unexpectedOutcomes": 2,
     "aborted": 1
   }
 }

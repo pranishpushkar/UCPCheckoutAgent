@@ -2,7 +2,7 @@
 
 # Scripted evaluation report
 
-- **Mode:** scripted, orchestrator-direct (M4, no model)
+- **Mode:** scripted; rows: orchestrator-direct, agent-scripted, agent-live
 - **Commit:** `0123456789abcdef0123456789abcdef01234567` on feature/m4-fault-proxy, from git
 - **Generated:** 2026-11-12T12:00:00Z
 - **Runs per scenario:** 3
@@ -10,25 +10,28 @@
 - **Lanes:** 2
 - **Base seed:** 42
 - **Runtime:** Java 21.0.5 (Test); TestOS 1.0 x86_64
+- **Prices:** fixture-model-not-real, 1.00 / 10 USD per million input / output tokens, as of 2026-01-01 (test fixture: invented prices, not a real model's)
 
 ## Scenarios
 
-| ID | Fault | Expected | Runs | Terminal states | Expected outcome (Wilson 95%) | Violations | 95% upper bound | Time to terminal p50/p95 | Reconciliations, resolve p50/p95 | Model calls | Tokens | Cost |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| S0 | none | COMPLETED | 3 | COMPLETED 3 | 3/3 (0.4385–1.0) | 1 | 0.7923 (wilson) | 120/140 ms | 1, 60/60 ms | n/a (no agent until M5) | n/a (no agent until M5) | n/a (no agent until M5) |
-| S4 | none; propose twice with the same basket (sequential in even runs, concurrent in odd runs) | COMPLETED | 3 | COMPLETED 2, aborted 1 | 2/3 (0.2077–0.9385) | 1 | 0.7923 (wilson) | 110/130 ms | 0, – | n/a (no agent until M5) | n/a (no agent until M5) | n/a (no agent until M5) |
-| S11 | none; the proposal names a merchant missing from the registry | REJECTED | 3 | COMPLETED 1, REJECTED 2 | 2/3 (0.2077–0.9385) | 0 | 1.0 (rule_of_three) | 25/90 ms | 0, – | n/a (no agent until M5) | n/a (no agent until M5) | n/a (no agent until M5) |
+| ID | Mode | Fault | Expected | Runs | Terminal states | Expected outcome (Wilson 95%) | Violations | 95% upper bound | Time to terminal p50/p95 | Reconciliations, resolve p50/p95 | Model calls p50/p95 | Tool calls p50/p95 | Tokens p50/p95 | Cost per completed purchase | Trace links |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| S0 | orchestrator-direct | none | COMPLETED | 3 | COMPLETED 3 | 3/3 (0.4385–1.0) | 1 | 0.7923 (wilson) | 120/140 ms | 1, 60/60 ms | n/a (orchestrator-direct) | n/a (orchestrator-direct) | n/a (orchestrator-direct) | n/a (orchestrator-direct) | n/a (orchestrator-direct) |
+| S4 | orchestrator-direct | none; propose twice with the same basket (sequential in even runs, concurrent in odd runs) | COMPLETED | 3 | COMPLETED 2, aborted 1 | 2/3 (0.2077–0.9385) | 1 | 0.7923 (wilson) | 110/130 ms | 0, – | n/a (orchestrator-direct) | n/a (orchestrator-direct) | n/a (orchestrator-direct) | n/a (orchestrator-direct) | n/a (orchestrator-direct) |
+| S11 | orchestrator-direct | none; the proposal names a merchant missing from the registry | REJECTED | 3 | COMPLETED 1, REJECTED 2 | 2/3 (0.2077–0.9385) | 0 | 1.0 (rule_of_three) | 25/90 ms | 0, – | n/a (orchestrator-direct) | n/a (orchestrator-direct) | n/a (orchestrator-direct) | n/a (orchestrator-direct) | n/a (orchestrator-direct) |
+| A-S0 | agent-scripted | none; the agent proposes | COMPLETED | 3 | COMPLETED 3 | 3/3 (0.4385–1.0) | 0 | 1.0 (rule_of_three) | 151/152 ms | 0, – | 3/3 | 2/3 | n/a (scripted model) | n/a (scripted model) | [evidence/A-S0/run-1/trace.jsonl](evidence/A-S0/run-1/trace.jsonl) |
+| A-S12 | agent-live | none; the user asks for one of the products; ask_user is answered "the blue mug" | COMPLETED | 3 | COMPLETED 2, REJECTED 1 | 2/3 (0.2077–0.9385) | 0 | 1.0 (rule_of_three) | 151/152 ms | 0, – | 4/5 | 3/4 | 10500/12600 | 0.023 USD | n/a (evidence for failed runs only) |
 
 ## Invariants
 
 | Invariant | Scenarios | Runs | Violations | 95% upper bound (method) |
 |---|---|---|---|---|
-| I1 | 3 | 9 | 2 | 0.5474 (wilson) |
-| I2 | 3 | 9 | 1 | 0.435 (wilson) |
-| I3 | 3 | 9 | 1 | 0.435 (wilson) |
-| I4 | 3 | 9 | 1 | 0.435 (wilson) |
-| I5 | 3 | 9 | 1 | 0.435 (wilson) |
-| I7 | 3 | 9 | 1 | 0.435 (wilson) |
+| I1 | 5 | 15 | 2 | 0.3788 (wilson) |
+| I2 | 5 | 15 | 1 | 0.2982 (wilson) |
+| I3 | 5 | 15 | 1 | 0.2982 (wilson) |
+| I4 | 5 | 15 | 1 | 0.2982 (wilson) |
+| I5 | 5 | 15 | 1 | 0.2982 (wilson) |
+| I7 | 5 | 15 | 1 | 0.2982 (wilson) |
 
 ## Failure analysis
 
@@ -50,9 +53,16 @@
 - ended COMPLETED with 1 intent(s); expected [REJECTED]
 - Evidence: `evidence/S11/run-1`
 
+### A-S12 run 2: unexpected
+
+- Seed 44, lane 0
+- ended REJECTED with 1 intent(s); expected [COMPLETED]
+- Evidence: not written
+
 ## Method
 
-- Scripted, orchestrator-direct (13.1 M4 note): each run calls Orchestrator.propose with the scenario's fixed basket; an automatic approver decides through the approval service; the recovery worker drives the intent. There is no model, so model calls, tokens, cost and traces read n/a: no agent until M5.
+- Orchestrator-direct rows (13.1 M4 note): each run calls Orchestrator.propose with the scenario's fixed basket; an automatic approver decides through the approval service; the recovery worker drives the intent. There is no model, so the agent columns read n/a (orchestrator-direct).
+- Agent rows (13.1 D6, m5-plan section 9): the agent runtime proposes, driven by a ScriptedModel (agent-scripted) or a live model (agent-live); the approver and the recovery worker then act as in the orchestrator-direct rows. Model and tool calls are the run record's counts. Tokens and cost per completed purchase are for live rows only (scripted rows read n/a (scripted model)): tokens times the price file, with its model and date (13.3, 13.4). Trace links are each run's trace.jsonl, for runs with an evidence folder.
 - Real time throughout, every duration divided by the time scale k = 4 (13.1); approval lifetime and sign-in age are not scaled.
 - Each run gets a fresh database, gateway, circuit breakers, worker id and user, and the merchant is reset before it; runs in one lane are sequential, lanes share nothing.
 - Policy usage is a harness stub with no earlier spend or proposals: every run has a user of its own, so there is nothing to count. A real PolicyUsage is out of scope for M4 (it belongs with agent-service in M6).
@@ -114,9 +124,9 @@
 }
 ```
 
-Exit code 1: 2 runs with violations, 1 unexpected outcomes, 1 aborted.
+Exit code 1: 2 runs with violations, 2 unexpected outcomes, 1 aborted.
 
 ## Deferred
 
-- Model calls, tokens, cost per completed purchase and trace links: n/a (no agent until M5).
-- The I8 canary grep across logs and traces: M5, with the agent runtime.
+- Live agent rows (agent-live) and their tokens and cost: the live report (M5 C16, C18).
+- The I8 canary grep across logs and traces: M5 C14.

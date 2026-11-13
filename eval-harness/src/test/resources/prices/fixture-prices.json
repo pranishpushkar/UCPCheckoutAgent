@@ -1,0 +1,8 @@
+{
+  "model": "fixture-model-not-real",
+  "date": "2026-01-01",
+  "currency": "USD",
+  "inputPerMillionTokens": "1.00",
+  "outputPerMillionTokens": 10,
+  "source": "test fixture: invented prices, not a real model's"
+}
