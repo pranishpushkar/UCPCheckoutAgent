@@ -293,4 +293,81 @@ class AgentRuntimeTest {
                 .doesNotContain("alice").contains("\"name\":\"unknown\"").contains("\"outcome\":\"done\"");
         assertThat(all.lines()).hasSize(5);
     }
+
+    // Covers: 23.1, I8, m5-stage4 item 1 (the waiting_for_approval check throwing after a successful propose still ends
+    // the record, as failed with reason internal_error, and the exception is thrown on; its message is kept nowhere)
+    @Test
+    void run_statusThrowsInTheFinishCheck_recordEndsFailedInternalErrorAndRethrows() {
+        IntentId intent = new IntentId("intent-1");
+        AtomicInteger statusCalls = new AtomicInteger();
+        // The first status call is propose_purchase's own (no quote in the stub's proposal); the next is the finish
+        // path's waiting_for_approval check, and that one throws.
+        Stubs.RecordingOrchestrator throwing = new Stubs.RecordingOrchestrator() {
+            @Override
+            public IntentStatus status(dev.ucplab.core.identity.AuthContext auth, IntentId id) {
+                if (statusCalls.incrementAndGet() == 1) {
+                    return super.status(auth, id);
+                }
+                throw new IllegalStateException("SECRET-DB-DETAIL");
+            }
+        };
+        throwing.proposal = new ProposalResult(intent, IntentState.AWAITING_APPROVAL, Optional.empty());
+        throwing.statuses = Map.of(intent, new IntentStatus(intent, IntentState.AWAITING_APPROVAL, Optional.empty(),
+                Optional.empty()));
+        ScriptedModel model = script("""
+                {"call": [{"tool": "propose_purchase", "args": {"merchant_id": "shop-1",
+                           "items": [{"item_id": "item_456", "quantity": 1}], "rationale": "r"}}]},
+                {"text": "Please approve."}""");
+        AgentRuntime runtime = new AgentRuntime(model, "scripted", Stubs.ports(catalog, throwing), runs,
+                AgentBudget.DEFAULT, Duration.ofMinutes(5), clock);
+        RunTrace trace = new RunTrace(RUN);
+
+        assertThatThrownBy(() -> runtime.run(Stubs.ALICE, RUN, "m", SILENT, trace))
+                .isInstanceOf(IllegalStateException.class).hasMessage("SECRET-DB-DETAIL");
+
+        assertThat(record().outcome()).contains("failed");
+        assertThat(record().reason()).contains("internal_error");
+        assertThat(record().endedAt()).isPresent();
+        assertThat(record().intentIds()).containsExactly(intent);
+        assertThat(record().toolEvents()).extracting(ToolEvent::summary).containsExactly("ok");
+        assertThat(statusCalls).as("the finish check ran and threw").hasValue(2);
+        assertThat(record().toString()).doesNotContain("SECRET");
+        assertThat(trace.jsonl()).contains("\"outcome\":\"failed\"")
+                .contains("\"detail\":\"internal_error\"").doesNotContain("SECRET");
+    }
+
+    // Covers: 23.1, I8, m5-stage4 item 1 (an exception escaping the loop outside a model or tool call, here a model
+    // client breaking ModelClient's contract by returning no turn, ends the record as failed, internal_error, and is
+    // thrown on)
+    @Test
+    void run_exceptionOutsideModelAndToolCalls_recordEndsFailedInternalErrorAndRethrows() {
+        ModelClient broken = (conversation, tools) -> null;
+        RunTrace trace = new RunTrace(RUN);
+
+        assertThatThrownBy(() -> runtime(broken).run(Stubs.ALICE, RUN, "m", SILENT, trace))
+                .isInstanceOf(NullPointerException.class);
+
+        assertThat(record().outcome()).contains("failed");
+        assertThat(record().reason()).contains("internal_error");
+        assertThat(record().endedAt()).isPresent();
+        assertThat(trace.jsonl()).contains("\"outcome\":\"failed\"")
+                .contains("\"detail\":\"internal_error\"");
+    }
+
+    // Covers: 23.1, m5-stage4 item 1 (the record keeps the failure reason and the budget limit; a done run has none)
+    @Test
+    void run_reasons_areRecorded() {
+        runtime(script("{\"text\":\"hi\"}")).run(Stubs.ALICE, RUN, "m", SILENT);
+        assertThat(record().reason()).isEmpty();
+
+        RunId second = new RunId("run-2");
+        runtime(script(String.join(",", java.util.Collections.nCopies(7, calls(1))))).run(Stubs.ALICE, second, "m",
+                SILENT);
+        assertThat(runs.find(Stubs.ALICE.user(), second).orElseThrow().reason()).contains("MODEL_CALLS");
+
+        RunId third = new RunId("run-3");
+        assertThatThrownBy(() -> runtime(script(calls(1))).run(Stubs.ALICE, third, "m", SILENT))
+                .isInstanceOf(ScriptDriftException.class);
+        assertThat(runs.find(Stubs.ALICE.user(), third).orElseThrow().reason()).contains("script_drift");
+    }
 }

@@ -126,8 +126,8 @@ class AgentPortRecordsTest {
         assertThatThrownBy(() -> new ToolEvent("t", null, Duration.ZERO)).isInstanceOf(NullPointerException.class);
     }
 
-    // Covers: section 10 agent_run, 23.1 (a run has no nulls, no negative counts, and an outcome exactly when it has
-    // ended, not before it started)
+    // Covers: section 10 agent_run, 23.1 (a run has no nulls, no negative counts, an outcome exactly when it has
+    // ended, not before it started, and a reason only once it has ended)
     @Test
     void runRecord_invalidFields_areRefused() {
         UserId alice = new UserId("alice");
@@ -138,16 +138,21 @@ class AgentPortRecordsTest {
 
         assertThatThrownBy(() -> RunRecord.started(id, null, "scripted", T0))
                 .isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new RunRecord(id, alice, "m", T0, Optional.empty(), Optional.empty(), -1, 0, 0, 0,
-                List.of(), List.of())).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new RunRecord(id, alice, "m", T0, Optional.empty(), Optional.empty(), Optional.empty(),
+                -1, 0, 0, 0, List.of(), List.of())).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new RunRecord(id, alice, "m", T0, Optional.of(T0.minusSeconds(1)),
-                Optional.of("done"), 0, 0, 0, 0, List.of(), List.of())).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new RunRecord(id, alice, "m", T0, Optional.of(T0), Optional.empty(), 0, 0, 0, 0,
-                List.of(), List.of())).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new RunRecord(id, alice, "m", T0, Optional.empty(), Optional.of("done"), 0, 0, 0, 0,
-                List.of(), List.of())).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new RunRecord(id, alice, "m", T0, Optional.empty(), Optional.empty(), 0, 0, 0, 0,
-                null, List.of())).isInstanceOf(NullPointerException.class);
+                Optional.of("done"), Optional.empty(), 0, 0, 0, 0, List.of(), List.of()))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new RunRecord(id, alice, "m", T0, Optional.of(T0), Optional.empty(), Optional.empty(),
+                0, 0, 0, 0, List.of(), List.of())).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new RunRecord(id, alice, "m", T0, Optional.empty(), Optional.of("done"),
+                Optional.empty(), 0, 0, 0, 0, List.of(), List.of())).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new RunRecord(id, alice, "m", T0, Optional.empty(), Optional.empty(),
+                Optional.of("internal_error"), 0, 0, 0, 0, List.of(), List.of()))
+                .as("a reason only once ended").isInstanceOf(IllegalArgumentException.class);
+        assertThat(started.reason()).isEmpty();
+        assertThatThrownBy(() -> new RunRecord(id, alice, "m", T0, Optional.empty(), Optional.empty(), Optional.empty(),
+                0, 0, 0, 0, null, List.of())).isInstanceOf(NullPointerException.class);
     }
 
     // Covers: D2 (a map with a null key cannot be copied into a tool call's arguments)

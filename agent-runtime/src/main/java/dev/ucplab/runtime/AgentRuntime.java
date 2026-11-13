@@ -38,8 +38,14 @@ import java.util.Optional;
  * runs can go on side by side, and nothing is held across a model or merchant call (7.8). A
  * {@link ScriptDriftException} from a scripted model ends the record as failed and is thrown on to the harness, which
  * counts the run as aborted.
+ *
+ * <p>The record always ends, whatever way {@code run} leaves. Any other {@link RuntimeException} that escapes the loop,
+ * or that the {@code waiting_for_approval} check throws while the run is finishing, ends the record as failed with
+ * reason {@code internal_error}, and is then thrown on. Its message goes into neither the record nor the trace.
  */
 public final class AgentRuntime {
+
+    private static final String INTERNAL_ERROR = "internal_error";
 
     private final ModelClient model;
     private final String modelName;
@@ -81,10 +87,18 @@ public final class AgentRuntime {
         try {
             outcome = run.loop(userMessage);
         } catch (ScriptDriftException e) {
-            run.finish(new RunOutcome.Failed("script_drift"));
+            run.finishFailed("script_drift", e);
+            throw e;
+        } catch (RuntimeException e) {
+            run.finishFailed(INTERNAL_ERROR, e);
             throw e;
         }
-        run.finish(outcome);
+        try {
+            run.finish(outcome);
+        } catch (RuntimeException e) {
+            run.finishFailed(INTERNAL_ERROR, e);
+            throw e;
+        }
         return outcome;
     }
 
@@ -176,10 +190,28 @@ public final class AgentRuntime {
                 case RunOutcome.Failed f -> f.reason();
                 default -> "";
             };
+            end(status, detail);
+        }
+
+        /**
+         * Ends the record as failed with {@code reason}, without the {@code waiting_for_approval} check. If writing the
+         * record or the trace throws too, that is added to {@code cause} as suppressed, so the caller rethrows
+         * {@code cause}.
+         */
+        void finishFailed(String reason, RuntimeException cause) {
+            try {
+                end("failed", reason);
+            } catch (RuntimeException e) {
+                cause.addSuppressed(e);
+            }
+        }
+
+        private void end(String status, String detail) {
             Instant end = clock.instant();
             Instant ended = end.isBefore(start) ? start : end;
+            Optional<String> reason = detail.isEmpty() ? Optional.empty() : Optional.of(detail);
             runs.update(auth.user(), new RunRecord(context.runId(), auth.user(), modelId, start, Optional.of(ended),
-                    Optional.of(status), meter.modelCalls(), meter.toolCalls(), meter.usage().inputTokens(),
+                    Optional.of(status), reason, meter.modelCalls(), meter.toolCalls(), meter.usage().inputTokens(),
                     meter.usage().outputTokens(), intents, events));
             trace.run(status, detail, meter.modelCalls(), meter.toolCalls(), meter.usage().inputTokens(),
                     meter.usage().outputTokens(), Duration.between(start, ended));

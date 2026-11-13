@@ -36,7 +36,7 @@ public abstract class RunRepositoryContract {
 
     private static RunRecord ended(String id, UserId owner, List<IntentId> intents) {
         return new RunRecord(new RunId(id), owner, "scripted", T0, Optional.of(T0.plusSeconds(3)),
-                Optional.of("waiting_for_approval"), 3, 4, 1200, 300, intents,
+                Optional.of("waiting_for_approval"), Optional.empty(), 3, 4, 1200, 300, intents,
                 List.of(new ToolEvent("search_catalog", "ok", Duration.ofMillis(40)),
                         new ToolEvent("propose_purchase", "ok", Duration.ofMillis(90))));
     }
