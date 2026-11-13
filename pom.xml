@@ -16,6 +16,7 @@
         <module>agent-core</module>
         <module>agent-ucp</module>
         <module>agent-persistence</module>
+        <module>agent-runtime</module>
         <module>agent-adk</module>
         <module>agent-service</module>
         <module>fault-proxy</module>
