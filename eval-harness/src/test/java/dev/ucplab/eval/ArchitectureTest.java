@@ -67,4 +67,13 @@ class ArchitectureTest {
                 .should().callMethod(ModelKey.class, "reveal")
                 .check(ALL_HARNESS_CLASSES);
     }
+
+    // Covers: section 5.2 (only agent-service may import Spring, Jakarta Servlet or Jackson 3 types; m6-plan 2.2)
+    @Test
+    void architecture_noSpringTypes_outsideAgentService() {
+        noClasses()
+                .should().dependOnClassesThat()
+                .resideInAnyPackage("org.springframework..", "jakarta.servlet..", "tools.jackson..")
+                .check(ALL_HARNESS_CLASSES);
+    }
 }

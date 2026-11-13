@@ -1,0 +1,48 @@
+# The lab stack (DESIGN 21.1 and 25.3, M6). C3 brings up the merchant and the proxy; agent-service joins in C20.
+#
+# The merchant and the proxy bind 127.0.0.1 only (Appendix A, section 12), so every lab container shares the network
+# namespace of lab-net, which never restarts and so outlives a `docker kill` of any other service (25.5 step 8).
+# /_lab and the proxy admin API are reachable only inside that namespace. lab-net publishes 8080 on the host's
+# loopback only, for agent-service (C20).
+#
+# Build the jars first: ./mvnw -B -ntp -DskipTests package
+name: ucplab
+
+services:
+  lab-net:
+    image: eclipse-temurin:21.0.13_9-jre-noble@sha256:0d57a8e90c2bb844c5a8e1b2b71e11eff06dad7edcfd803cd21ed4ae203b2515
+    command: ["sleep", "infinity"]
+    init: true
+    ports:
+      - "127.0.0.1:8080:8080"
+
+  merchant-a:
+    image: ucplab/merchant:local
+    build:
+      context: .
+      dockerfile: docker/merchant.Dockerfile
+    network_mode: service:lab-net
+    depends_on:
+      - lab-net
+    command: ["9001"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:9001/.well-known/ucp"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  fault-proxy:
+    image: ucplab/fault-proxy:local
+    build:
+      context: .
+      dockerfile: docker/fault-proxy.Dockerfile
+    network_mode: service:lab-net
+    depends_on:
+      merchant-a:
+        condition: service_healthy
+    command: ["--port", "9101", "--upstream", "http://127.0.0.1:9001"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:9101/.well-known/ucp"]
+      interval: 2s
+      timeout: 2s
+      retries: 15

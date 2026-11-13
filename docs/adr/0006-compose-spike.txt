@@ -1,0 +1,25 @@
+# scripts/compose-spike.sh, run 2026-11-13 on Docker Desktop 29.9.3 (arm64), Compose v5.5.1.
+# Build and per-container progress lines trimmed; every check line is as printed.
+== build the jars
+== docker compose up
+SERVICE       STATE     <no value>   PORTS
+fault-proxy   running   healthy      
+lab-net       running                127.0.0.1:8080->8080/tcp
+merchant-a    running   healthy      
+== (1) discovery through the proxy, from inside the namespace
+{"ucp":{"version":"2026-08-25","services":{"dev.ucp.shopping":[{"version":"2026-08-25","spec":"https://ucp.dev/2026-08-25/specification/overview","transport":"rest","schema":"https://ucp.dev/2026-08-25/services/shopping/rest.openapi.json","endpoint":"http://127.0.0.1:9101/ucp/v1"}]},"capabilities":{"dev.ucp.shopping.checkout":[{"version":"2026-08-25","spec":"https://ucp.dev/2026-08-25/specificatio
+proxy log: [{"seq":1,"at":"2026-11-13T17:48:25.860420050Z","method":"GET","path":"/.well-known/ucp","requestId":null,"idempotencyKey":null,"bodyHmac":null,"forwarded":true,"forwards":1,"merchantStatus":200,"action":null,"ruleId":null,"upstreamError":false,"clientGone":false,"settled":true,"rewrite":null},{"seq":2,"at":"2026-11-13T17:48:26.516384884Z","method":"GET","path":"/.well-known/ucp","reque
+ok: discovery went through the proxy to the merchant
+== (2) nothing of the lab is reachable from outside the namespace
+host -> http://127.0.0.1:9001/_lab/orders: unreachable
+host -> http://127.0.0.1:9101/_proxy/log: unreachable
+host -> http://127.0.0.1:9101/.well-known/ucp: unreachable
+compose network 172.18.0.2:9001: unreachable
+compose network 172.18.0.2:9101: unreachable
+inside the namespace, /_lab/orders is served (ground truth for the agent):
+{"count":0,"orders":[]}
+and the proxy refuses /_lab (section 12):
+404
+== (3) docker compose down -v
+ok: no container or volume of project ucplab is left
+SPIKE PASSED

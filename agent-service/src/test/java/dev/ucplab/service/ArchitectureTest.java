@@ -1,26 +1,51 @@
 package dev.ucplab.service;
 
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
+import static org.assertj.core.api.Assertions.assertThat;
 
+import com.tngtech.archunit.base.DescribedPredicate;
 import com.tngtech.archunit.core.domain.JavaClasses;
+import com.tngtech.archunit.core.domain.JavaMethodCall;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.core.importer.ImportOption;
 import dev.ucplab.core.agent.ModelKey;
+import dev.ucplab.core.agent.RunRepository;
+import dev.ucplab.core.approval.ApprovalRepository;
+import dev.ucplab.core.intent.IntentRepository;
+import dev.ucplab.persistence.SqlIntentRepository;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Instant;
+import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+import java.util.regex.Pattern;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 
+/**
+ * agent-service's rules (5.2, m6-plan section 2.2). The rules for the CLI package (C19) and the lab package's profile
+ * (C15) arrive with those packages.
+ */
 class ArchitectureTest {
+
+    /** The one class that reads the environment, so {@code GEMINI_API_KEY} has one way in (I8, C9). */
+    private static final String ENVIRONMENT = "dev.ucplab.service.config.Environment";
+    /** The one class that may take the system clock and ids directly; everything else is given them (7.8, C9). */
+    private static final String STACK_CONFIGURATION = "dev.ucplab.service.config.StackConfiguration";
 
     private static final JavaClasses PRODUCTION_CLASSES = new ClassFileImporter()
             .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
             .importPackages("dev.ucplab.service");
 
-    // Covers: section 5.2 (only agent-adk may import ADK types)
+    // Covers: section 5.2 (only agent-adk may import ADK or Gemini SDK types; agent-adk itself is runtime scope here)
     @Test
     void architecture_noAdkTypes_outsideAgentAdk() {
         noClasses()
-                .should().dependOnClassesThat().resideInAnyPackage("com.google.adk..", "com.google.genai..")
-                // The module has no classes yet.
-                .allowEmptyShould(true)
+                .should().dependOnClassesThat().resideInAnyPackage("com.google.adk..", "com.google.genai..",
+                        "dev.ucplab.adk..")
                 .check(PRODUCTION_CLASSES);
     }
 
@@ -29,8 +54,72 @@ class ArchitectureTest {
     void architecture_noCallToModelKeyReveal_always() {
         noClasses()
                 .should().callMethod(ModelKey.class, "reveal")
-                // The module has no classes yet.
-                .allowEmptyShould(true)
                 .check(PRODUCTION_CLASSES);
+    }
+
+    // Covers: T2, T6, I9 (service code calls only owner-scoped repository methods; the system reads are for
+    // RecoveryWorker, the orchestrator's step and the eval harness, which are not service classes)
+    @Test
+    void architecture_noSystemRepositoryReads_inService() {
+        noClasses()
+                .should().callMethodWhere(target(IntentRepository.class,
+                        Set.of("findForSystem", "attempts", "claim", "claimRecoverable")))
+                .orShould().callMethodWhere(target(ApprovalRepository.class,
+                        Set.of("findLatestForSystem", "listForSystem")))
+                .orShould().callMethodWhere(target(RunRepository.class, Set.of("findForSystem")))
+                .orShould().callMethodWhere(target(SqlIntentRepository.class, Set.of("events")))
+                .check(PRODUCTION_CLASSES);
+    }
+
+    // Covers: section 20 (no cache of any kind: no Spring cache, no ETag filter) and I8 (no actuator, so no /env)
+    @Test
+    void architecture_noCachingOrActuator_always() {
+        noClasses()
+                .should().dependOnClassesThat().resideInAnyPackage("org.springframework.cache..",
+                        "org.springframework.boot.actuate..")
+                .orShould().dependOnClassesThat()
+                .haveFullyQualifiedName("org.springframework.web.filter.ShallowEtagHeaderFilter")
+                .check(PRODUCTION_CLASSES);
+    }
+
+    // Covers: I8 (the environment, and so GEMINI_API_KEY, is read by one class only)
+    @Test
+    void architecture_environmentReadByOneClass_only() {
+        noClasses()
+                .that().doNotHaveFullyQualifiedName(ENVIRONMENT)
+                .should().callMethod(System.class, "getenv", String.class)
+                .orShould().callMethod(System.class, "getenv")
+                .check(PRODUCTION_CLASSES);
+    }
+
+    // Covers: 7.8 (Clock and IdGenerator are injected; only the wiring takes the system clock or a random UUID)
+    @Test
+    void architecture_noSystemClockOrRandomIds_outsideTheWiring() {
+        noClasses()
+                .that().doNotHaveFullyQualifiedName(STACK_CONFIGURATION)
+                .should().callMethod(Instant.class, "now")
+                .orShould().callMethod(Clock.class, "systemUTC")
+                .orShould().callMethod(UUID.class, "randomUUID")
+                .check(PRODUCTION_CLASSES);
+    }
+
+    // Covers: 7.8 (no synchronized block or method anywhere in agent-service's main source)
+    @Test
+    void source_hasNoSynchronized_always() throws IOException {
+        Pattern word = Pattern.compile("\\bsynchronized\\b");
+        List<Path> sources;
+        try (Stream<Path> files = Files.walk(Path.of("src/main/java"))) {
+            sources = files.filter(p -> p.toString().endsWith(".java")).toList();
+        }
+
+        assertThat(sources).isNotEmpty();
+        for (Path source : sources) {
+            assertThat(word.matcher(Files.readString(source)).find()).as(source.toString()).isFalse();
+        }
+    }
+
+    private static DescribedPredicate<JavaMethodCall> target(Class<?> owner, Set<String> methods) {
+        return DescribedPredicate.describe(owner.getSimpleName() + "." + methods,
+                call -> call.getTargetOwner().isAssignableTo(owner) && methods.contains(call.getName()));
     }
 }

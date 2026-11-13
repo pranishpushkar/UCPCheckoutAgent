@@ -77,6 +77,32 @@ org.junit.jupiter:junit-jupiter:jar:6.1.3:test
 - **agent-service's ArchitectureTest** (no ADK or Gemini types, no `ModelKey.reveal`) passes with agent-adk at runtime
   scope.
 
+## Images and the Compose network namespace (C3)
+
+- **Base image:** `eclipse-temurin:21.0.13_9-jre-noble`, pinned by its multi-arch OCI index digest
+  `sha256:0d57a8e90c2bb844c5a8e1b2b71e11eff06dad7edcfd803cd21ed4ae203b2515` (`docker buildx imagetools inspect`,
+  2026-11-13; built 2026-11-11 on `ubuntu:24.04`, linux/amd64 and linux/arm64). The index digest, not one platform's
+  manifest, so the same line serves the Mac (arm64) and the GitHub runner (amd64). It is Temurin 21.0.13+9, the JDK
+  the M4 CI runner used. It has bash, curl and wget (m6-plan risk 8 assumed curl might be missing), so healthchecks
+  use curl.
+- **Copy-only Dockerfiles** (`docker/merchant.Dockerfile`, `docker/fault-proxy.Dockerfile`): one `RUN` that adds the
+  non-root user 10001, a `COPY` of the jar `./mvnw package` built, `USER 10001`, the entrypoint. No `ARG`, no `ENV`
+  of ours (`docker image inspect` shows the base image's variables only). `.dockerignore` is an allowlist: the
+  Dockerfiles and the built jars, nothing else.
+- **The shared network namespace works** (m6-plan risk 2). The merchant (`MerchantServer.java:40`) and the proxy bind
+  127.0.0.1 only, and merchant/src is unchanged. `lab-net` (the base image running `sleep infinity`) owns the namespace
+  and publishes `127.0.0.1:8080`; `merchant-a` and `fault-proxy` join it with `network_mode: service:lab-net`.
+  `scripts/compose-spike.sh`, run by hand, showed (output: `docs/adr/0006-compose-spike.txt`):
+  1. discovery through the proxy works from inside the namespace, with the endpoint rewritten to `127.0.0.1:9101`,
+     and the proxy log records it;
+  2. the merchant's `/_lab/orders`, the proxy's admin API and the proxy itself are unreachable from the host and from
+     the namespace's own Compose network address; inside it, `/_lab/orders` is served and the proxy refuses `/_lab`
+     with 404 (section 12);
+  3. `docker compose down -v` leaves no container or volume of the project.
+
+  Not yet shown, for C20: a `docker kill` and restart of a joined service while `lab-net` stays up (25.5 step 8), and
+  the same on the GitHub runner's Docker.
+
 ## Known gaps left for later
 
 - **21.3's rule that P3 and P5 are checked and updated in the same transaction as the intent insert is left for M7**
