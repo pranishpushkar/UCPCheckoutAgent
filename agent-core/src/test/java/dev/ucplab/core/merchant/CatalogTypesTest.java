@@ -46,4 +46,14 @@ class CatalogTypesTest {
         assertThatThrownBy(() -> new CatalogSearch("mug", 11)).isInstanceOf(IllegalArgumentException.class);
         assertThat(new CatalogSearch("", 10).limit()).isEqualTo(10);
     }
+
+    // Covers: FR1, 6.2 get_product (the description is optional and never null; the short form has none)
+    @Test
+    void product_description_isOptionalAndNeverNull() {
+        assertThatThrownBy(() -> new CatalogProduct("p", "Mug", null, List.of(VARIANT)))
+                .isInstanceOf(NullPointerException.class);
+        assertThat(new CatalogProduct("p", "Mug", List.of(VARIANT)).description()).isEmpty();
+        assertThat(new CatalogProduct("p", "Mug", Optional.of("A blue mug"), List.of(VARIANT)).description())
+                .contains("A blue mug");
+    }
 }

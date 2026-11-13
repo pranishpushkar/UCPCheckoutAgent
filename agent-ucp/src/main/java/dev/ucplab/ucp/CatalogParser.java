@@ -23,12 +23,15 @@ import java.util.Optional;
  * {@code id}, {@code title}, and at least one variant with {@code id}, {@code title} and {@code price} (an integer
  * {@code amount} in minor units and a three-letter {@code currency}). {@code availability} is optional; a variant
  * without it is not available (see {@link Availability}). Unknown fields, including {@code null}s and decimals in fields
- * not used, are ignored. Titles and statuses are merchant text: control characters are replaced and they are cut to a
- * fixed length, because they reach the model and the logs.
+ * not used, are ignored. A product's {@code description} is optional: the 2026-08-25 shape is an object keyed by
+ * format, and only its {@code plain} text is read; any other shape or format reads as no description. Titles,
+ * descriptions and statuses are merchant text: control characters are replaced and they are cut to a fixed length,
+ * because they reach the model and the logs.
  */
 final class CatalogParser {
 
     private static final int MAX_TEXT = 200;
+    private static final int MAX_DESCRIPTION = 2000;
 
     private CatalogParser() {
     }
@@ -131,7 +134,14 @@ final class CatalogParser {
             }
             out.add(variant(v));
         }
-        return new CatalogProduct(text(p, "id"), cleanText(p, "title"), out);
+        return new CatalogProduct(text(p, "id"), cleanText(p, "title"), description(p.get("description")), out);
+    }
+
+    private static Optional<String> description(Object value) {
+        if (value instanceof Map<?, ?> d && d.get("plain") instanceof String s && !s.isBlank()) {
+            return Optional.of(clean(s, MAX_DESCRIPTION));
+        }
+        return Optional.empty();
     }
 
     private static CatalogVariant variant(Map<?, ?> v) {

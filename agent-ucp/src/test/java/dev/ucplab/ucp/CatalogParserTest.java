@@ -136,4 +136,39 @@ class CatalogParserTest {
 
         assertThat(parsed).isEqualTo(new CatalogParser.Parsed.Found<>(List.<CatalogProduct>of()));
     }
+
+    // Covers: FR1, 6.2 get_product (the 2026-08-25 description is an object keyed by format; its plain text is read)
+    @Test
+    void parseSearch_plainDescription_isRead() {
+        CatalogPage page = page(CatalogParser.parseSearch(bytes("{\"products\":[" + product("a", "A", "") + "]}")));
+
+        assertThat(page.products().get(0).description()).contains("x");
+    }
+
+    // Covers: FR1, 8.4 (a missing description, another shape, or a format other than plain reads as none; the
+    // product still parses)
+    @Test
+    void parseSearch_descriptionMissingOrOtherShape_readsAsNone() {
+        String base = product("a", "A", "");
+        for (String replacement : List.of("", "\"description\":\"flat\",", "\"description\":{\"html\":\"<b>x</b>\"},",
+                "\"description\":{\"plain\":\"  \"},", "\"description\":{\"plain\":7},", "\"description\":null,")) {
+            String body = "{\"products\":[" + base.replace("\"description\":{\"plain\":\"x\"},", replacement) + "]}";
+
+            CatalogPage page = page(CatalogParser.parseSearch(bytes(body)));
+
+            assertThat(page.products().get(0).description()).as(replacement).isEmpty();
+        }
+    }
+
+    // Covers: 6.4, I8 (a description is merchant text: control characters are replaced and it is cut to a fixed length)
+    @Test
+    void parseSearch_description_isCleanedAndBounded() {
+        String body = "{\"products\":[" + product("a", "A", "")
+                .replace("{\"plain\":\"x\"}", "{\"plain\":\"one\\u0007two" + "y".repeat(5000) + "\"}") + "]}";
+
+        String description = page(CatalogParser.parseSearch(bytes(body))).products().get(0).description()
+                .orElseThrow();
+
+        assertThat(description).startsWith("one two").hasSize(2000).doesNotContain("\u0007");
+    }
 }
