@@ -49,7 +49,7 @@ import java.util.stream.Collectors;
  */
 public final class SqlIntentRepository implements IntentRepository {
 
-    private static final String INTENT_COLUMNS = "id, user_id, merchant_id, dedupe_key, lines_json, buyer_email, state,"
+    static final String INTENT_COLUMNS = "id, user_id, merchant_id, dedupe_key, lines_json, buyer_email, state,"
             + " version, session_id, approved_snapshot_hash, requote_count, order_id, failure_reason, uncertain_since,"
             + " cancel_pending, lease_owner, lease_until, created_at, updated_at";
 
@@ -571,7 +571,7 @@ public final class SqlIntentRepository implements IntentRepository {
         }
     }
 
-    private static PurchaseIntent intent(ResultSet r) throws SQLException {
+    static PurchaseIntent intent(ResultSet r) throws SQLException {
         return new PurchaseIntent(
                 new IntentId(r.getString("id")),
                 new UserId(r.getString("user_id")),

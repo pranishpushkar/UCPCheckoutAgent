@@ -47,8 +47,10 @@ public abstract class IntentQueriesContract {
         PurchaseIntent intent = PurchaseIntent.proposed(new IntentId(id), owner, SHOP, "dedupe-" + id,
                 List.of(new ProposedLine("item_123", 1)), owner.value() + "@example.com", createdAt)
                 .withState(state, createdAt);
-        intents.insert(intent);
-        return intent;
+        // The SQL schema requires an order for COMPLETED (section 10, V4).
+        PurchaseIntent stored = state == IntentState.COMPLETED ? intent.withOrderId("order-" + id) : intent;
+        intents.insert(stored);
+        return stored;
     }
 
     private static List<String> ids(IntentPage page) {
