@@ -91,10 +91,10 @@ final class ChildProcess implements AutoCloseable {
      * kill -9: {@link Process#destroyForcibly()}, which on macOS and Linux sends SIGKILL, then waits for the exit and
      * returns its value ({@value #SIGKILL_EXIT} for SIGKILL).
      *
-     * <p>TODO(VERIFY): the {@code Process} javadoc promises only that a process from {@code ProcessBuilder.start()} is
-     * "forcibly terminated", and {@code ProcessHandleImpl.destroy0} documents "SIGKILL vs SIGTERM"; the exit value of
-     * 128 + 9 comes from native code that src.zip does not hold. The S9 and S28 tests assert 137, which checks it on
-     * macOS; Linux CI is unchecked until the tests run there.
+     * <p>The {@code Process} javadoc promises only that a process from {@code ProcessBuilder.start()} is "forcibly
+     * terminated", and {@code ProcessHandleImpl.destroy0} documents "SIGKILL vs SIGTERM"; the exit value of 128 + 9
+     * comes from native code that src.zip does not hold. The S9 and S28 tests assert 137, and it held on macOS and on
+     * Linux (CI run https://github.com/pranishpushkar/UCPCheckoutAgent/actions/runs/43337144864, ubuntu-26.04, Temurin 21.0.13).
      */
     int kill() throws IOException, InterruptedException {
         process.destroyForcibly();

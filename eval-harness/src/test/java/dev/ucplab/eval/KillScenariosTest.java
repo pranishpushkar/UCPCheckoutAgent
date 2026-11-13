@@ -65,8 +65,8 @@ class KillScenariosTest {
         RunEvidence.Child killed = e.children().get(0);
         RunEvidence.Child restarted = e.children().get(1);
         assertThat(killed.killed()).isTrue();
-        // TODO(VERIFY): 137 = 128 + SIGKILL is the JDK's native exit mapping (ChildProcess#kill); asserted on macOS
-        // here, unchecked on Linux until CI runs this test.
+        // 137 = 128 + SIGKILL is the JDK's native exit mapping (ChildProcess#kill); seen on macOS and on Linux (CI run
+        // https://github.com/pranishpushkar/UCPCheckoutAgent/actions/runs/43337144864).
         assertThat(killed.exitValue()).as("%s run %d: exit value after destroyForcibly", s.id(), run)
                 .isEqualTo(ChildProcess.SIGKILL_EXIT);
         assertThat(restarted.killed()).isFalse();
