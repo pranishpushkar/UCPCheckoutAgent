@@ -96,7 +96,7 @@ final class Stubs {
     }
 
     /** An orchestrator that records every call and answers from fixed values. */
-    static final class RecordingOrchestrator implements Orchestrator {
+    static class RecordingOrchestrator implements Orchestrator {
         final List<String> calls = new CopyOnWriteArrayList<>();
         final List<UserId> users = new CopyOnWriteArrayList<>();
         ProposalResult proposal = new ProposalResult(new IntentId("intent-1"), IntentState.REJECTED, Optional.empty());

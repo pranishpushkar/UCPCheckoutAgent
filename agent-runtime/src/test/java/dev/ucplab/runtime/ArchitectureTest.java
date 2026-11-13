@@ -12,8 +12,14 @@ import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.core.importer.ImportOption;
 import dev.ucplab.core.approval.ApprovalService;
 import dev.ucplab.core.merchant.MerchantGateway;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 
 class ArchitectureTest {
@@ -60,6 +66,29 @@ class ArchitectureTest {
                 .orShould().callMethodWhere(target(MerchantGateway.class, "complete"))
                 .orShould().callMethodWhere(target(MerchantGateway.class, "cancel"))
                 .check(PRODUCTION_CLASSES);
+    }
+
+    // Covers: 7.8 (the loop takes no lock of any kind, so none can be held across a model or merchant call)
+    @Test
+    void architecture_runtimeUsesNoLocks_always() {
+        noClasses()
+                .should().dependOnClassesThat().resideInAPackage("java.util.concurrent.locks..")
+                .check(PRODUCTION_CLASSES);
+    }
+
+    // Covers: 7.8 (no synchronized block or method anywhere in agent-runtime's main source)
+    @Test
+    void source_hasNoSynchronized_always() throws IOException {
+        Pattern word = Pattern.compile("\\bsynchronized\\b");
+        List<Path> sources;
+        try (Stream<Path> files = Files.walk(Path.of("src/main/java"))) {
+            sources = files.filter(p -> p.toString().endsWith(".java")).toList();
+        }
+
+        assertThat(sources).isNotEmpty();
+        for (Path source : sources) {
+            assertThat(word.matcher(Files.readString(source)).find()).as(source.toString()).isFalse();
+        }
     }
 
     private static DescribedPredicate<JavaMethodCall> target(Class<?> owner, String method) {
