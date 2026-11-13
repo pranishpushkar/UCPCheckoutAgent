@@ -86,11 +86,12 @@ public final class RunScript {
     private final Consumer<String> tokenSeen;
     private final Consumer<List<RaceOutcome>> raceSeen;
     private final Semaphore childSlots;
+    private final String canary;
     /** Run by a fault window's clearer just before its DELETE; only a test sets it, to make a late clear late. */
     private volatile Runnable beforeClear = () -> { };
 
     public RunScript(Lane lane, TimeScale scale) {
-        this(lane, scale, t -> { }, r -> { }, new Semaphore(ChildProcess.MAX_CHILDREN));
+        this(lane, scale, t -> { }, r -> { }, new Semaphore(ChildProcess.MAX_CHILDREN), Canary.generate());
     }
 
     /**
@@ -98,22 +99,34 @@ public final class RunScript {
      *     for its whole length, so at most {@link ChildProcess#MAX_CHILDREN} child JVMs run at once
      */
     public RunScript(Lane lane, TimeScale scale, Semaphore childSlots) {
-        this(lane, scale, t -> { }, r -> { }, childSlots);
+        this(lane, scale, t -> { }, r -> { }, childSlots, Canary.generate());
     }
 
-    /** @param tokenSeen given every approval token the approver uses (the redaction test only) */
-    RunScript(Lane lane, TimeScale scale, Consumer<String> tokenSeen, Semaphore childSlots) {
-        this(lane, scale, tokenSeen, r -> { }, childSlots);
+    /**
+     * @param tokenSeen given every approval token the approver uses (the redaction test only)
+     * @param canary the evaluation's I8 canary: every run's session id, and appended to the approval secret
+     */
+    RunScript(Lane lane, TimeScale scale, Consumer<String> tokenSeen, Semaphore childSlots, String canary) {
+        this(lane, scale, tokenSeen, r -> { }, childSlots, canary);
     }
 
     /** @param raceSeen given the outcome of every racer of an S14 run (its test only) */
     RunScript(Lane lane, TimeScale scale, Consumer<String> tokenSeen, Consumer<List<RaceOutcome>> raceSeen,
               Semaphore childSlots) {
+        this(lane, scale, tokenSeen, raceSeen, childSlots, Canary.generate());
+    }
+
+    private RunScript(Lane lane, TimeScale scale, Consumer<String> tokenSeen, Consumer<List<RaceOutcome>> raceSeen,
+                      Semaphore childSlots, String canary) {
         this.lane = Objects.requireNonNull(lane, "lane");
         this.scale = Objects.requireNonNull(scale, "scale");
         this.tokenSeen = Objects.requireNonNull(tokenSeen, "tokenSeen");
         this.raceSeen = Objects.requireNonNull(raceSeen, "raceSeen");
         this.childSlots = Objects.requireNonNull(childSlots, "childSlots");
+        if (!Canary.FORMAT.matcher(canary).matches()) {
+            throw new IllegalArgumentException("not a canary");
+        }
+        this.canary = canary;
     }
 
     public TimeScale scale() {
@@ -154,6 +167,13 @@ public final class RunScript {
     }
 
     private RunEvidence run(Scenario scenario, int run, long seed, Optional<KillPoint> killPoint) {
+        // run.log: what JUL receives on this thread and the threads the run starts (section 11).
+        try (RunLog runLog = RunLog.open()) {
+            return run(scenario, run, seed, killPoint, runLog);
+        }
+    }
+
+    private RunEvidence run(Scenario scenario, int run, long seed, Optional<KillPoint> killPoint, RunLog runLog) {
         Instant startedAt = Instant.now();
         String name = "L" + lane.index() + "-" + scenario.id() + "-r" + run;
         lane.merchant().reset();
@@ -174,9 +194,10 @@ public final class RunScript {
         Optional<RunEvidence.AgentRun> agentRun = Optional.empty();
         try (AgentStack stack = new AgentStack(lane.agentFacingUrl(), lane.newDatabase(name), scale, seed,
                 new SequentialIdGenerator(name), scenario.paymentToken(),
-                race || killPoint.isPresent() ? AgentStack.DECISION_ONLY : scale.orchestrator().lease())) {
+                race || killPoint.isPresent() ? AgentStack.DECISION_ONLY : scale.orchestrator().lease(), canary)) {
+            // The session id stands for a credential reference: it is the evaluation's canary (I8, section 11).
             Supplier<AuthContext> auth = () -> new AuthContext(user, user.value() + "@eval.example",
-                    stack.clock.instant(), "eval-session-" + name);
+                    stack.clock.instant(), canary);
             // The window opens before the decision, as the merchant changes do: after it the loop may send the first
             // complete at any moment. The clear timer starts when the rules are installed.
             AutoApprover approver = new AutoApprover(stack.approvalService, scenario.approver(), auth, stack.clock,
@@ -305,7 +326,8 @@ public final class RunScript {
         List<LogEntry> log = lane.proxy().log(startSeq);
         lane.proxyLogMark();
         return new RunEvidence(scenario.id(), run, seed, lane.index(), user, aborted, proposed, persisted, orders, sessions,
-                log, decisions, startedAt, terminalSeenAt, children.kills(), children.records(), agentRun);
+                log, decisions, startedAt, terminalSeenAt, children.kills(), children.records(), agentRun,
+                runLog.text());
     }
 
     /**

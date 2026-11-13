@@ -34,12 +34,15 @@ import java.util.Optional;
  *
  * <p>An agent row (M5) also gets {@code run.json}, its run record (names, counts, codes), and {@code trace.jsonl}, the
  * run's spans (section 11, D7), next to {@code intents.json}. Neither holds the model's text, the agent's question,
- * the user's message or answers, tool arguments or tool results.
+ * the user's message or answers, tool arguments or tool results. Every folder gets {@code run.log}, what was logged
+ * through JUL on the run's threads, as it was logged: the redaction test searches it like every other file.
  */
 public final class EvidenceWriter {
 
     /** An agent run's record, in its evidence folder. */
     public static final String RUN_FILE = "run.json";
+    /** What JUL received on the run's threads (section 11), in every evidence folder. */
+    public static final String RUN_LOG = "run.log";
     /** An agent run's spans, in its evidence folder (section 11, D7). */
     public static final String TRACE_FILE = "trace.jsonl";
 
@@ -59,6 +62,7 @@ public final class EvidenceWriter {
             Files.writeString(dir.resolve("child-" + (i + 1) + ".log"), e.children().get(i).log(),
                     StandardCharsets.UTF_8);
         }
+        Files.writeString(dir.resolve(RUN_LOG), e.runLog(), StandardCharsets.UTF_8);
         if (e.agentRun().isPresent()) {
             put(dir, RUN_FILE, run(e.agentRun().get().record()));
             Files.writeString(dir.resolve(TRACE_FILE), e.agentRun().get().traceJsonl(), StandardCharsets.UTF_8);

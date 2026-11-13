@@ -38,6 +38,8 @@ import java.util.stream.Stream;
  * run, writes the evidence of the runs that failed (or of every run), and writes {@code report.json} and
  * {@code report.md} under the output folder.
  *
+ * <p>The I8 canary ({@link Canary}) is generated here once and handed to every lane's runs (section 11).
+ *
  * <p>The {@code bodyHmac} key is generated here, held in memory only, and handed to every lane's proxy and to the
  * checks. The lanes' database files hold the agent's frozen bodies (and so the mock card tokens); they live in a
  * temporary folder outside the output folder and are deleted at the end. So do the agent child processes' log files;
@@ -61,10 +63,11 @@ public final class Evaluation {
     private final Consumer<String> tokenSeen;
     private final Consumer<RunEvidence> evidenceSeen;
     private final byte[] hmacKey;
+    private final String canary;
 
     public Evaluation(EvalConfig config, List<Scenario> scenarios, OptionalInt onlyRun, Path out,
                       EvidenceMode evidence) {
-        this(config, scenarios, onlyRun, out, evidence, t -> { }, e -> { }, randomKey());
+        this(config, scenarios, onlyRun, out, evidence, t -> { }, e -> { }, randomKey(), Canary.generate());
     }
 
     /**
@@ -73,6 +76,12 @@ public final class Evaluation {
      */
     Evaluation(EvalConfig config, List<Scenario> scenarios, OptionalInt onlyRun, Path out, EvidenceMode evidence,
                Consumer<String> tokenSeen, Consumer<RunEvidence> evidenceSeen, byte[] hmacKey) {
+        this(config, scenarios, onlyRun, out, evidence, tokenSeen, evidenceSeen, hmacKey, Canary.generate());
+    }
+
+    /** @param canary the evaluation's I8 canary (section 11); the redaction test chooses it to search for it */
+    Evaluation(EvalConfig config, List<Scenario> scenarios, OptionalInt onlyRun, Path out, EvidenceMode evidence,
+               Consumer<String> tokenSeen, Consumer<RunEvidence> evidenceSeen, byte[] hmacKey, String canary) {
         this.config = Objects.requireNonNull(config, "config");
         this.scenarios = List.copyOf(scenarios);
         if (this.scenarios.isEmpty()) {
@@ -92,6 +101,7 @@ public final class Evaluation {
             throw new IllegalArgumentException("the bodyHmac key must be 32 bytes: " + hmacKey.length);
         }
         this.hmacKey = hmacKey.clone();
+        this.canary = Objects.requireNonNull(canary, "canary");
     }
 
     private static byte[] randomKey() {
@@ -137,7 +147,7 @@ public final class Evaluation {
                 try {
                     List<Future<?>> running = new ArrayList<>();
                     for (Lane lane : lanes) {
-                        RunScript script = new RunScript(lane, config.timeScale(), tokenSeen, childSlots);
+                        RunScript script = new RunScript(lane, config.timeScale(), tokenSeen, childSlots, canary);
                         running.add(pool.submit(() -> drain(tasks, script, checks, results)));
                     }
                     for (Future<?> f : running) {

@@ -30,6 +30,7 @@ import dev.ucplab.ucp.Sleeper;
 import dev.ucplab.ucp.UcpConfig;
 import dev.ucplab.ucp.UcpHttpGateway;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.sql.PreparedStatement;
@@ -37,6 +38,7 @@ import java.sql.ResultSet;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -89,9 +91,11 @@ final class AgentStack implements AutoCloseable {
      * @param approvalLease how long a decision holds the intent for this stack's worker. The orchestrator's lease, so
      *     the first complete follows at once; S9, S14 and S28 decide as a separate process would (the REST API in M6)
      *     and pass a lease of {@link #DECISION_ONLY}, so other workers can take the APPROVED intent at once
+     * @param canary the evaluation's I8 canary ({@link Canary}), appended to the approval secret's bytes: it changes
+     *     only the HMAC, and must never appear in any output
      */
     AgentStack(URI merchantUrl, Path dbFile, TimeScale scale, long seed, IdGenerator ids, String paymentToken,
-               Duration approvalLease) {
+               Duration approvalLease, String canary) {
         this.dbFile = dbFile;
         this.scale = scale;
         this.seed = seed;
@@ -104,9 +108,13 @@ final class AgentStack implements AutoCloseable {
         policy = new RuleBasedPolicyEngine(policyConfig,
                 m -> m.equals(Scenarios.SHOP) ? Optional.of(shop) : Optional.empty(), new FreshUserUsage(), clock);
         String workerId = RecoveryWorker.newWorkerId(ids);
-        byte[] secret = new byte[ApprovalSecret.MIN_BYTES];
-        new SecureRandom().nextBytes(secret);
+        byte[] random = new byte[ApprovalSecret.MIN_BYTES];
+        new SecureRandom().nextBytes(random);
+        byte[] planted = canary.getBytes(StandardCharsets.US_ASCII);
+        byte[] secret = Arrays.copyOf(random, random.length + planted.length);
+        System.arraycopy(planted, 0, secret, random.length, planted.length);
         tokens = new ApprovalTokens(ApprovalSecret.of(secret));
+        Arrays.fill(secret, (byte) 0);
         instrument = PaymentInstrument.mockCard("pi_eval", paymentToken);
         approvalService = new DefaultApprovalService(intents, approvals, tokens, clock, ids, workerId, approvalLease,
                 DefaultApprovalService.DEFAULT_TTL, DefaultApprovalService.DEFAULT_MAX_AUTH_AGE);
@@ -123,6 +131,11 @@ final class AgentStack implements AutoCloseable {
             return t;
         });
         loop = new RecoveryLoop(worker, scale.recovery(), scheduler);
+    }
+
+    AgentStack(URI merchantUrl, Path dbFile, TimeScale scale, long seed, IdGenerator ids, String paymentToken,
+               Duration approvalLease) {
+        this(merchantUrl, dbFile, scale, seed, ids, paymentToken, approvalLease, "");
     }
 
     AgentStack(URI merchantUrl, Path dbFile, TimeScale scale, long seed, IdGenerator ids, String paymentToken) {

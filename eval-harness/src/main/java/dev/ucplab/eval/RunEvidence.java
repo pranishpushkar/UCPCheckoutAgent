@@ -27,6 +27,7 @@ import java.util.Optional;
  * @param crashes how many times the agent process was killed during the run (S9, S28): each extends a 7.6 bound
  * @param children every agent child process of the run, in start order, with its log
  * @param agentRun what the agent runtime did, for an agent row (M5): its run record and trace (m5-plan section 9)
+ * @param runLog what was logged through JUL on the run's threads (section 11), written as {@code run.log}
  */
 public record RunEvidence(
         String scenarioId,
@@ -45,7 +46,8 @@ public record RunEvidence(
         Optional<Instant> terminalSeenAt,
         int crashes,
         List<Child> children,
-        Optional<AgentRun> agentRun) {
+        Optional<AgentRun> agentRun,
+        String runLog) {
 
     /**
      * One agent run as evidence: the stored {@link RunRecord}, the run's {@code trace.jsonl}, and how it ended as
@@ -109,6 +111,7 @@ public record RunEvidence(
         }
         children = List.copyOf(children);
         Objects.requireNonNull(agentRun, "agentRun");
+        Objects.requireNonNull(runLog, "runLog");
     }
 
     /** A run with no agent runtime: an orchestrator-direct row. */
@@ -118,7 +121,7 @@ public record RunEvidence(
                        List<AutoApprover.Decision> approvals, Instant startedAt, Optional<Instant> terminalSeenAt,
                        int crashes, List<Child> children) {
         this(scenarioId, run, seed, lane, owner, aborted, proposed, intents, orders, sessions, proxyLog, approvals,
-                startedAt, terminalSeenAt, crashes, children, Optional.empty());
+                startedAt, terminalSeenAt, crashes, children, Optional.empty(), "");
     }
 
     /** A run of the agent in this process: no crash, no child. */
