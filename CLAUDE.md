@@ -5,7 +5,7 @@
   test and a TODO(VERIFY) comment. Do not guess UCP or ADK APIs.
 - Java 21, Maven multi-module, package root dev.ucplab. Records for DTOs, sealed interfaces
   for outcomes, no Lombok, no null returns, inject Clock and IdGenerator.
-- agent-core depends on the JDK only. Only agent-adk may import ADK types.
+- agent-core depends on the JDK only. Only agent-adk may import ADK or Gemini SDK types.
 - Never block inside synchronized. Never hold a lock across network I/O.
 - Don't modify merchant/src except the M2 catalog addition; never change the original 46 SelfTest checks.
 - Never log credentials, tokens, Authorization headers or approval tokens.
