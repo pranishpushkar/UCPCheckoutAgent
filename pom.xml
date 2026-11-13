@@ -36,6 +36,9 @@
         <!-- The Gemini SDK (R2, ADR 0004): 1.80.0 (2026-10-29), the newest release at least two weeks old on 2026-11-13;
              2.0.0 to 2.3.0 came out 2026-11-06 to 2026-11-12. ADK for Java was evaluated and not used. -->
         <google-genai.version>1.80.0</google-genai.version>
+        <!-- Spring Boot (M6, ADR 0006): 4.1.2 (2026-10-22), the newest release at least two weeks old on 2026-11-13.
+             Its BOM is imported by agent-service alone; no other module sees Boot's versions. -->
+        <spring-boot.version>4.1.2</spring-boot.version>
 
         <maven-compiler-plugin.version>3.16.0</maven-compiler-plugin.version>
         <maven-surefire-plugin.version>3.6.1</maven-surefire-plugin.version>
