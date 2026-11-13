@@ -1,0 +1,8 @@
+{
+  "name": "l2-read-product",
+  "expectToolSequence": ["get_product"],
+  "turns": [
+    { "call": [{ "tool": "get_product", "args": { "item_id": "item_456" } }] },
+    { "when": { "tool": "get_product" }, "text": "read" }
+  ]
+}

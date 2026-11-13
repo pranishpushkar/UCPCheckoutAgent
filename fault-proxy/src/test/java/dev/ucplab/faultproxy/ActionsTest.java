@@ -9,6 +9,7 @@ import dev.ucplab.faultproxy.Action.DuplicateRequest;
 import dev.ucplab.faultproxy.Action.FailBeforeForward;
 import dev.ucplab.faultproxy.Action.ForwardThenDelayResponse;
 import dev.ucplab.faultproxy.Action.ForwardThenDropResponse;
+import dev.ucplab.faultproxy.Action.ForwardThenRewriteResponse;
 import java.io.IOException;
 import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
@@ -274,6 +275,85 @@ class ActionsTest extends ProxyTestBase {
         assertThatThrownBy(() -> Json.read(r.body())).isInstanceOf(IllegalArgumentException.class);
         assertThat(upstream.count("POST", COMPLETE)).isEqualTo(1);
         assertLogged(only(), "corrupt_response", 1, OptionalInt.of(200));
+    }
+
+    // Covers: §12 forward_then_rewrite_response, S10 (forwarded once; every occurrence of the literal is replaced, the
+    // body stays JSON and Content-Length matches the new length; the log says a replacement happened, I8: the log holds
+    // neither the body nor the strings)
+    @Test
+    void forwardThenRewriteResponse_replacesEveryOccurrenceAndFixesContentLength() throws Exception {
+        String merchantBody = "{\"title\":\"Blue Mug\",\"description\":{\"plain\":\"Blue Mug\"}}";
+        upstream.respondWith((ex, a) -> EchoUpstream.send(ex, 200, merchantBody));
+        rule(new ForwardThenRewriteResponse("Blue Mug", "SECRET-REPLACEMENT longer than the find"));
+
+        HttpResponse<String> r = complete();
+
+        String expected = merchantBody.replace("Blue Mug", "SECRET-REPLACEMENT longer than the find");
+        assertThat(r.statusCode()).isEqualTo(200);
+        assertThat(r.body()).isEqualTo(expected);
+        assertThat(r.headers().firstValueAsLong("Content-Length"))
+                .hasValue(expected.getBytes(StandardCharsets.UTF_8).length);
+        assertThat(Json.readObject(r.body())).containsEntry("title", "SECRET-REPLACEMENT longer than the find");
+        assertThat(upstream.count("POST", COMPLETE)).isEqualTo(1);
+        LogEntry e = only();
+        assertLogged(e, "forward_then_rewrite_response", 1, OptionalInt.of(200));
+        assertThat(e.rewrite()).contains("replaced");
+        String logJson = Json.write(e.toJson());
+        assertThat(logJson).contains("\"rewrite\":\"replaced\"").doesNotContain("SECRET").doesNotContain("Blue Mug");
+    }
+
+    // Covers: §12 forward_then_rewrite_response (a JSON body without the literal is returned unchanged, logged no_match)
+    @Test
+    void forwardThenRewriteResponse_noMatch_isUnchangedAndLogged() throws Exception {
+        String merchantBody = "{\"title\":\"Red Shirt\"}";
+        upstream.respondWith((ex, a) -> EchoUpstream.send(ex, 200, merchantBody));
+        rule(new ForwardThenRewriteResponse("Blue Mug", "hostile"));
+
+        HttpResponse<String> r = complete();
+
+        assertThat(r.body()).isEqualTo(merchantBody);
+        assertThat(r.headers().firstValueAsLong("Content-Length")).hasValue(merchantBody.length());
+        assertThat(upstream.count("POST", COMPLETE)).isEqualTo(1);
+        assertThat(only().rewrite()).contains("no_match");
+    }
+
+    // Covers: §12 forward_then_rewrite_response (a body that is not JSON is returned unchanged, even when it holds the
+    // literal, and logged not_json)
+    @Test
+    void forwardThenRewriteResponse_notJson_isUnchangedAndLogged() throws Exception {
+        String merchantBody = "Blue Mug, as plain text";
+        upstream.respondWith((ex, a) -> {
+            byte[] bytes = merchantBody.getBytes(StandardCharsets.UTF_8);
+            ex.getResponseHeaders().set("Content-Type", "text/plain");
+            ex.sendResponseHeaders(200, bytes.length);
+            try (var os = ex.getResponseBody()) {
+                os.write(bytes);
+            }
+        });
+        rule(new ForwardThenRewriteResponse("Blue Mug", "hostile"));
+
+        HttpResponse<String> r = complete();
+
+        assertThat(r.body()).isEqualTo(merchantBody);
+        assertThat(upstream.count("POST", COMPLETE)).isEqualTo(1);
+        assertThat(only().rewrite()).contains("not_json");
+    }
+
+    // Covers: §12 forward_then_rewrite_response (find and replace are both non-empty)
+    @Test
+    void forwardThenRewriteResponse_emptyStrings_areRefused() {
+        assertThatThrownBy(() -> new ForwardThenRewriteResponse("", "x")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new ForwardThenRewriteResponse("x", "")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new ForwardThenRewriteResponse(null, "x")).isInstanceOf(NullPointerException.class);
+    }
+
+    // Covers: §12 Admin API (an entry with no rewrite rule has no rewrite outcome)
+    @Test
+    void forward_withoutRewriteRule_hasNoRewriteOutcome() throws Exception {
+        complete();
+
+        assertThat(only().rewrite()).isEmpty();
+        assertThat(only().toJson()).containsEntry("rewrite", Json.NULL);
     }
 
     // Covers: §12 Matching (nth 1: only the first matching request is faulted; the next is forwarded and logged

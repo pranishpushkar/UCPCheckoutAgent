@@ -132,4 +132,17 @@ class CatalogContractTest extends ContractTestBase {
             assertThat(stub.requestsTo("POST /ucp/v1/catalog/search")).isEmpty();
         }
     }
+
+    // Covers: FR1, 6.2 get_product (the real merchant's plain description reaches the product, by search and by
+    // lookup)
+    @Test
+    void searchAndLookup_readTheMerchantsPlainDescription() {
+        CatalogClient client = client();
+
+        CatalogProduct searched = value(client.search(new CatalogSearch("blue mug", 5))).products().get(0);
+        CatalogProduct looked = value(client.lookup(List.of("item_456"))).get(0);
+
+        assertThat(searched.description()).contains("Blue Mug");
+        assertThat(looked.description()).contains("Blue Mug");
+    }
 }

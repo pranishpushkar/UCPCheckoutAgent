@@ -1,0 +1,8 @@
+{
+  "model": "gemini-3.6-flash",
+  "date": "2026-11-13",
+  "currency": "USD",
+  "inputPerMillionTokens": "0.75",
+  "outputPerMillionTokens": "3.75",
+  "source": "https://aistudio.google.com/docs/pricing"
+}

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>dev.ucplab</groupId>
+        <artifactId>ucp-checkout-lab</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>agent-runtime</artifactId>
+    <name>Agent runtime</name>
+
+    <dependencies>
+        <!-- Section 5.2: the agent loop, tools, prompts and budgets use the JDK and core only; no ADK, Gemini SDK or
+             JSON library. -->
+        <dependency>
+            <groupId>dev.ucplab</groupId>
+            <artifactId>agent-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>dev.ucplab</groupId>
+            <artifactId>agent-core</artifactId>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+        <!-- Tests only: the tools and the loop run against the reference merchant behind the fault proxy, through the
+             real UCP client (section 14, level 4). Main code never sees these modules; ArchitectureTest checks it. -->
+        <dependency>
+            <groupId>dev.ucplab</groupId>
+            <artifactId>agent-ucp</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>dev.ucplab</groupId>
+            <artifactId>merchant</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>dev.ucplab</groupId>
+            <artifactId>fault-proxy</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

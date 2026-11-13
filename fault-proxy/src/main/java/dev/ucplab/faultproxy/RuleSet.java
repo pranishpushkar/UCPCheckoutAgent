@@ -102,6 +102,11 @@ public record RuleSet(long seed, List<Rule> rules) {
                     default -> throw new IllegalArgumentException(where + ": unknown corrupt_response kind " + kind);
                 });
             }
+            case "forward_then_rewrite_response" -> {
+                allowOnly(a, where + " action", "type", "find", "replace");
+                yield new Action.ForwardThenRewriteResponse(required(a, "find", String.class, where),
+                        required(a, "replace", String.class, where));
+            }
             default -> throw new IllegalArgumentException(where + ": unknown action type " + type);
         };
     }

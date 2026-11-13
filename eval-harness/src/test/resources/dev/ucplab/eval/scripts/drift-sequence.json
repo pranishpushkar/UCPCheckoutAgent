@@ -1,0 +1,14 @@
+{
+  "name": "drift-sequence",
+  "expectToolSequence": ["search_catalog", "get_product", "propose_purchase"],
+  "turns": [
+    { "call": [{ "tool": "search_catalog", "args": { "query": "blue mug", "max_results": 3 } }] },
+    { "when": { "tool": "search_catalog", "resultMatches": "\"item_id\":\"item_456\"" },
+      "call": [{ "tool": "propose_purchase",
+                 "args": { "merchant_id": "${result.items[0].merchant_id}",
+                           "items": [{ "item_id": "item_456", "quantity": 1 }],
+                           "rationale": "DRIFT-RATIONALE" } }] },
+    { "when": { "tool": "propose_purchase", "resultMatches": "\"state\":\"AWAITING_APPROVAL\"" },
+      "text": "DRIFT-MODEL-TEXT" }
+  ]
+}

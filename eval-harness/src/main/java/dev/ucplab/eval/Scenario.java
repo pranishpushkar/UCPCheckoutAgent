@@ -12,8 +12,9 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * One row of the scripted catalogue (13.2) as the harness runs it in M4: the fault (proxy rules built for the run's time
- * scale), what the auto-approver does, how the proposal is driven, and what must come out.
+ * One row of the scripted catalogue (13.2) as the harness runs it: the fault (proxy rules built for the run's time
+ * scale), what the auto-approver does, how the proposal is driven, and what must come out. An agent row (M5,
+ * {@link Driver#AGENT}) carries its {@link AgentSpec}; the agent proposes, and the rest of the run is as in M4.
  *
  * @param target the merchant the proposal names; only {@link Scenarios#SHOP} is in a lane's registry
  * @param paymentToken the mock card token the agent pays with ({@code tok_decline} makes the merchant decline)
@@ -39,7 +40,8 @@ public record Scenario(
         List<ProposedLine> basket,
         String paymentToken,
         MerchantEvent beforeFirstDecision,
-        FaultWindow faultWindow) {
+        FaultWindow faultWindow,
+        Optional<AgentSpec> agent) {
 
     /** The proxy rules of one run, built for the run's time scale; some rows vary by run (S13). */
     @FunctionalInterface
@@ -90,7 +92,12 @@ public record Scenario(
          * on the run's database file, killed with kill -9 at the run's {@link KillPoint} and started again at once
          * with a new worker id (S9, S28).
          */
-        KILL_AND_RESTART
+        KILL_AND_RESTART,
+        /**
+         * The agent runtime proposes (M5, 13.1 D6): {@code AgentRuntime.run} with a {@code ScriptedModel} replaying the
+         * row's script and a {@link ScriptedUser}; the run's intents are then decided and driven as in M4.
+         */
+        AGENT
     }
 
     public Scenario {
@@ -107,9 +114,41 @@ public record Scenario(
         Objects.requireNonNull(paymentToken, "paymentToken");
         Objects.requireNonNull(beforeFirstDecision, "beforeFirstDecision");
         Objects.requireNonNull(faultWindow, "faultWindow");
-        if (expected.isEmpty() || expected.stream().anyMatch(s -> !s.isTerminal())) {
-            throw new IllegalArgumentException(id + ": expected outcomes must be terminal states");
+        Objects.requireNonNull(agent, "agent");
+        if ((driver == Driver.AGENT) != agent.isPresent()) {
+            throw new IllegalArgumentException(id + ": an agent spec goes with Driver.AGENT and only with it");
         }
+        boolean noIntent = agent.isPresent() && agent.get().maxIntents() == 0;
+        if (expected.stream().anyMatch(s -> !s.isTerminal()) || (expected.isEmpty() != noIntent)) {
+            throw new IllegalArgumentException(id + ": expected outcomes must be terminal states, and empty exactly"
+                    + " when the row leaves no intent");
+        }
+    }
+
+    /** An agent row: proposals come from the agent runtime ({@link Driver#AGENT}); no change at the merchant. */
+    public Scenario(String id, String title, String fault, Set<IntentState> expected, List<String> requiredInvariants,
+                    Rules rules, AutoApprover.Policy approver, MerchantId target, String paymentToken,
+                    AgentSpec agent) {
+        this(id, title, fault, expected, requiredInvariants, rules, approver, Driver.AGENT, target, List.of(),
+                paymentToken, MerchantEvent.NONE, FaultWindow.NONE, Optional.of(agent));
+    }
+
+    /** A row with a fault window and no agent. */
+    public Scenario(String id, String title, String fault, Set<IntentState> expected, List<String> requiredInvariants,
+                    Rules rules, AutoApprover.Policy approver, Driver driver, MerchantId target,
+                    List<ProposedLine> basket, String paymentToken, MerchantEvent beforeFirstDecision,
+                    FaultWindow faultWindow) {
+        this(id, title, fault, expected, requiredInvariants, rules, approver, driver, target, basket, paymentToken,
+                beforeFirstDecision, faultWindow, Optional.empty());
+    }
+
+    /** The expected outcome as the report writes it: the terminal states, or that the row leaves no intent. */
+    public String expectedText() {
+        if (expected.isEmpty()) {
+            return "no intent; run " + String.join(" or ", agent.orElseThrow().runOutcomes().stream().sorted()
+                    .toList());
+        }
+        return String.join(" or ", expected.stream().map(Enum::name).sorted().toList());
     }
 
     /** A row with no fault window. */

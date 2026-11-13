@@ -3,7 +3,7 @@ package dev.ucplab.faultproxy;
 import java.util.Objects;
 import java.util.OptionalInt;
 
-/** The six fault actions of §12, with the parameters of §12 "Action parameters". */
+/** The seven fault actions of §12, with the parameters of §12 "Action parameters". */
 public sealed interface Action {
 
     /** The wire name, as in the rule JSON and the log's {@code action} field. */
@@ -102,6 +102,32 @@ public sealed interface Action {
         @Override
         public String type() {
             return "corrupt_response";
+        }
+    }
+
+    /**
+     * Forward, then replace every occurrence of the literal {@code find} in a JSON reply body with {@code replace}, and
+     * send it with a {@code Content-Length} that matches (S10: plants hostile product text without changing the
+     * merchant). A body that is not JSON, or has no {@code find}, goes back unchanged. Neither string is ever logged.
+     */
+    record ForwardThenRewriteResponse(String find, String replace) implements Action {
+        public ForwardThenRewriteResponse {
+            Objects.requireNonNull(find, "find");
+            Objects.requireNonNull(replace, "replace");
+            if (find.isEmpty() || replace.isEmpty()) {
+                throw new IllegalArgumentException("forward_then_rewrite_response needs a non-empty find and replace");
+            }
+        }
+
+        @Override
+        public String type() {
+            return "forward_then_rewrite_response";
+        }
+
+        /** Never the strings: a rule's {@code toString} must not put them in a log (I8). */
+        @Override
+        public String toString() {
+            return "ForwardThenRewriteResponse[find and replace redacted]";
         }
     }
 

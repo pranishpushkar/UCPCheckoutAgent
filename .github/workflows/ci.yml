@@ -4,7 +4,8 @@
 # The full evaluation (-Peval-full) is manual: .github/workflows/eval-full.yml (Decision 1).
 # S9 and S28 assert exit value 137 after kill -9 and start child JVMs from surefire (m4-plan risks 1 and 3);
 # both held on Linux in https://github.com/pranishpushkar/UCPCheckoutAgent/actions/runs/43337144864.
-# TODO(M5): add a manual (workflow_dispatch) live evaluation that reads GEMINI_API_KEY from a repository secret.
+# The live evaluation (-Peval-live) is manual too: .github/workflows/eval-live.yml reads GEMINI_API_KEY from a
+# repository secret (m5-plan section 10). No job here has the key; NoLiveInVerifyTest keeps live calls out of verify.
 name: CI
 
 on:

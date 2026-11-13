@@ -28,6 +28,11 @@
             <groupId>dev.ucplab</groupId>
             <artifactId>agent-persistence</artifactId>
         </dependency>
+        <!-- Decision 1: the agent runtime (JDK and core only), never agent-adk, ADK or the Gemini SDK. -->
+        <dependency>
+            <groupId>dev.ucplab</groupId>
+            <artifactId>agent-runtime</artifactId>
+        </dependency>
         <dependency>
             <groupId>dev.ucplab</groupId>
             <artifactId>fault-proxy</artifactId>
@@ -79,6 +84,73 @@
                                         <argument>--require-full</argument>
                                         <argument>--out</argument>
                                         <argument>${project.build.directory}/eval-full</argument>
+                                    </arguments>
+                                    <classpathScope>runtime</classpathScope>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <!-- C16, m5-plan section 10, Decision 1: the live evaluation. agent-adk joins at runtime scope only, so
+             ModelClients.load("gemini", key) finds its provider through ServiceLoader; the harness never compiles
+             against it. ./mvnw -B -ntp verify -Peval-live -DskipTests -pl eval-harness -am runs EvalMain in live mode on
+             S10 and S12 with GEMINI_API_KEY from the environment (never a property or an argument). The caps default
+             to $5 and 2,000,000 tokens and may only be lowered. -Deval.live.model picks another model with a price
+             file (default: the pinned gemini-3.8-flash). The report goes to target/eval-live. -->
+        <profile>
+            <id>eval-live</id>
+            <properties>
+                <eval.live.model>gemini-3.8-flash</eval.live.model>
+                <eval.live.runs>30</eval.live.runs>
+                <eval.live.lanes>2</eval.live.lanes>
+                <eval.live.maxCostUsd>5</eval.live.maxCostUsd>
+                <eval.live.maxTokensTotal>2000000</eval.live.maxTokensTotal>
+            </properties>
+            <dependencies>
+                <dependency>
+                    <groupId>dev.ucplab</groupId>
+                    <artifactId>agent-adk</artifactId>
+                    <scope>runtime</scope>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>eval-live</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
+                                <configuration>
+                                    <executable>${java.home}/bin/java</executable>
+                                    <arguments>
+                                        <argument>-classpath</argument>
+                                        <classpath/>
+                                        <argument>dev.ucplab.eval.EvalMain</argument>
+                                        <argument>--mode</argument>
+                                        <argument>live</argument>
+                                        <argument>--model</argument>
+                                        <argument>${eval.live.model}</argument>
+                                        <argument>--runs</argument>
+                                        <argument>${eval.live.runs}</argument>
+                                        <argument>--time-scale</argument>
+                                        <argument>1</argument>
+                                        <argument>--lanes</argument>
+                                        <argument>${eval.live.lanes}</argument>
+                                        <argument>--evidence</argument>
+                                        <argument>all</argument>
+                                        <argument>--max-cost-usd</argument>
+                                        <argument>${eval.live.maxCostUsd}</argument>
+                                        <argument>--max-tokens-total</argument>
+                                        <argument>${eval.live.maxTokensTotal}</argument>
+                                        <argument>--out</argument>
+                                        <argument>${project.build.directory}/eval-live</argument>
                                     </arguments>
                                     <classpathScope>runtime</classpathScope>
                                 </configuration>

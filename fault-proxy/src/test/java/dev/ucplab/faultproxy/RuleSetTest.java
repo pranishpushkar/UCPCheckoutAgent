@@ -9,6 +9,7 @@ import dev.ucplab.faultproxy.Action.DuplicateRequest;
 import dev.ucplab.faultproxy.Action.FailBeforeForward;
 import dev.ucplab.faultproxy.Action.ForwardThenDelayResponse;
 import dev.ucplab.faultproxy.Action.ForwardThenDropResponse;
+import dev.ucplab.faultproxy.Action.ForwardThenRewriteResponse;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalDouble;
@@ -52,7 +53,8 @@ class RuleSetTest {
                   {"id": "e", "match": {"probability": 1}, "action": {"type": "duplicate_request"}},
                   {"id": "f", "match": {}, "action": {"type": "duplicate_request", "mode": "sequential"}},
                   {"id": "g", "match": {}, "action": {"type": "corrupt_response", "kind": "truncate"}},
-                  {"id": "h", "match": {}, "action": {"type": "corrupt_response", "kind": "garble"}, "times": 3}
+                  {"id": "h", "match": {}, "action": {"type": "corrupt_response", "kind": "garble"}, "times": 3},
+                  {"id": "i", "match": {}, "action": {"type": "forward_then_rewrite_response", "find": "a", "replace": "b"}}
                 ]}""");
 
         assertThat(set.seed()).isEqualTo(-7);
@@ -64,7 +66,8 @@ class RuleSetTest {
                 new DuplicateRequest(DuplicateRequest.Mode.PARALLEL),
                 new DuplicateRequest(DuplicateRequest.Mode.SEQUENTIAL),
                 new CorruptResponse(CorruptResponse.Kind.TRUNCATE),
-                new CorruptResponse(CorruptResponse.Kind.GARBLE));
+                new CorruptResponse(CorruptResponse.Kind.GARBLE),
+                new ForwardThenRewriteResponse("a", "b"));
         assertThat(set.rules().get(0).match()).isEqualTo(Match.any());
         assertThat(set.rules().get(1).match().method()).contains("GET");
         assertThat(set.rules().get(2).match().pathPattern()).contains(new PathPattern("/ucp/v1/**"));
@@ -74,7 +77,7 @@ class RuleSetTest {
         assertThat(set.rules().get(0).times()).isEmpty();
         assertThat(set.rules()).extracting(r -> r.action().type()).containsExactly("delay", "fail_before_forward",
                 "fail_before_forward", "forward_then_delay_response", "duplicate_request", "duplicate_request",
-                "corrupt_response", "corrupt_response");
+                "corrupt_response", "corrupt_response", "forward_then_rewrite_response");
     }
 
     // Covers: §12 (a rule set that is not exactly valid is refused as a whole, never partly installed), D1/Decision 2
@@ -119,6 +122,10 @@ class RuleSetTest {
             "{\"seed\": 1, \"rules\": [{\"id\": \"a\", \"match\": {}, \"action\": {\"type\": \"duplicate_request\", \"mode\": \"twice\"}}]}",
             "{\"seed\": 1, \"rules\": [{\"id\": \"a\", \"match\": {}, \"action\": {\"type\": \"corrupt_response\"}}]}",
             "{\"seed\": 1, \"rules\": [{\"id\": \"a\", \"match\": {}, \"action\": {\"type\": \"corrupt_response\", \"kind\": \"flip\"}}]}",
+            "{\"seed\": 1, \"rules\": [{\"id\": \"a\", \"match\": {}, \"action\": {\"type\": \"forward_then_rewrite_response\", \"find\": \"x\"}}]}",
+            "{\"seed\": 1, \"rules\": [{\"id\": \"a\", \"match\": {}, \"action\": {\"type\": \"forward_then_rewrite_response\", \"find\": \"\", \"replace\": \"y\"}}]}",
+            "{\"seed\": 1, \"rules\": [{\"id\": \"a\", \"match\": {}, \"action\": {\"type\": \"forward_then_rewrite_response\", \"find\": \"x\", \"replace\": 1}}]}",
+            "{\"seed\": 1, \"rules\": [{\"id\": \"a\", \"match\": {}, \"action\": {\"type\": \"forward_then_rewrite_response\", \"find\": \"x\", \"replace\": \"y\", \"ms\": 1}}]}",
             "{\"seed\": 1, \"rules\": [{\"id\": \"a\", \"match\": {}, \"action\": {\"type\": \"delay\", \"ms\": 1}},"
                     + " {\"id\": \"a\", \"match\": {}, \"action\": {\"type\": \"delay\", \"ms\": 2}}]}",
     })

@@ -1,0 +1,12 @@
+{
+  "name": "a-s11-unlisted-merchant",
+  "expectToolSequence": ["propose_purchase"],
+  "turns": [
+    { "call": [{ "tool": "propose_purchase",
+                 "args": { "merchant_id": "shop-unlisted",
+                           "items": [{ "item_id": "item_456", "quantity": 1 }],
+                           "rationale": "The user asked for a blue mug from shop-unlisted." } }] },
+    { "when": { "tool": "propose_purchase", "resultMatches": "\"state\":\"REJECTED\"" },
+      "text": "That merchant is not one I can buy from." }
+  ]
+}

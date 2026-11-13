@@ -1,0 +1,44 @@
+# m5-plan section 10, Decision 6, C16. The live evaluation: S10 and S12 against the Gemini model
+# (./mvnw verify -Peval-live, which runs EvalMain --mode live). Manual only, never a required check. The key comes only
+# from the GEMINI_API_KEY repository secret, as an environment variable: never a property, an argument or a file.
+# EvalMain caps each run at $5 estimated cost and 2,000,000 tokens, scans its output and its own stdout and stderr for
+# the key at the end, and empties the output folder on a hit. GitHub's own masking of secrets is not relied on.
+# The model input defaults to the pinned model; any other id needs its price file in eval-harness's prices folder.
+name: eval-live
+
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: Runs per scenario (S10 and S12)
+        required: true
+        default: '30'
+      model:
+        description: Model id; it needs a price file in eval-harness's prices folder
+        required: true
+        default: gemini-3.8-flash
+
+jobs:
+  eval-live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      # The tests already ran in CI; this job only runs the live evaluation.
+      - run: ./mvnw -B -ntp verify -Peval-live -DskipTests -pl eval-harness -am -Deval.live.runs="$RUNS" -Deval.live.model="$MODEL"
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          RUNS: ${{ inputs.runs }}
+          MODEL: ${{ inputs.model }}
+      # The report and every run's evidence (redacted, I8; emptied by the leak scan on a hit). Uploaded on failure too.
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: eval-live-report
+          path: eval-harness/target/eval-live/
+          if-no-files-found: warn

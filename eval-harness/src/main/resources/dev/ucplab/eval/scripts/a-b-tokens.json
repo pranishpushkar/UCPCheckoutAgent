@@ -1,0 +1,34 @@
+{
+  "name": "a-b-tokens",
+  "turns": [
+    {
+      "call": [
+        {
+          "tool": "search_catalog",
+          "args": {
+            "query": "mug",
+            "max_results": 1
+          }
+        }
+      ]
+    },
+    {
+      "call": [
+        {
+          "tool": "search_catalog",
+          "args": {
+            "query": "mug",
+            "max_results": 1
+          }
+        }
+      ],
+      "usage": {
+        "inputTokens": 24000,
+        "outputTokens": 1000
+      }
+    },
+    {
+      "text": "never reached"
+    }
+  ]
+}

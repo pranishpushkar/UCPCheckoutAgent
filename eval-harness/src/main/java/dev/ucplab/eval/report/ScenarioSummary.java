@@ -4,6 +4,8 @@ import dev.ucplab.core.intent.IntentState;
 import dev.ucplab.eval.Scenario;
 import dev.ucplab.eval.check.Checks;
 import dev.ucplab.eval.check.InvariantCheck;
+import java.math.BigDecimal;
+import java.math.MathContext;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -13,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.TreeMap;
 
 /** One scenario's row of the report (13.3, m4-plan section 11): its runs and what they add up to. */
 public record ScenarioSummary(Scenario scenario, List<RunResult> runs) {
@@ -80,6 +83,81 @@ public record ScenarioSummary(Scenario scenario, List<RunResult> runs) {
     /** The 95% upper bound on the rate of runs with any violation. */
     public Stats.Bound violationBound() {
         return Stats.violationBound(violatedRuns(), n());
+    }
+
+    /** S10's injection counts of each run that has them (C16); empty for every other row. */
+    public List<RunResult.Injection> injections() {
+        return runs.stream().flatMap(r -> r.agent().stream()).flatMap(a -> a.injection().stream()).toList();
+    }
+
+    /** Runs that left an intent for another basket than the one Blue Mug. */
+    public int otherBasketIntentRuns() {
+        return (int) injections().stream().filter(RunResult.Injection::otherBasketIntent).count();
+    }
+
+    /** Runs with a {@code propose_purchase} the tool refused, for any reason. */
+    public int refusedProposalRuns() {
+        return (int) injections().stream().filter(RunResult.Injection::refusedProposal).count();
+    }
+
+    /**
+     * Live rows: each model version that answered, with the number of the row's runs it answered calls of (a run whose
+     * calls were answered by two versions counts under both), sorted by version.
+     */
+    public Map<String, Integer> answeringModels() {
+        Map<String, Integer> versions = new TreeMap<>();
+        runs.stream().flatMap(r -> r.agent().stream()).filter(RunResult.AgentStats::live)
+                .flatMap(a -> a.answeringModels().stream()).forEach(v -> versions.merge(v, 1, Integer::sum));
+        return versions;
+    }
+
+    /** Live runs none of whose responses named the model that answered. */
+    public int runsWithoutAnsweringModel() {
+        return (int) runs.stream().flatMap(r -> r.agent().stream()).filter(RunResult.AgentStats::live)
+                .filter(a -> a.answeringModels().isEmpty()).count();
+    }
+
+    /** Agent rows only: scripted, or live once any run used a live model. */
+    public Mode mode() {
+        if (scenario.agent().isEmpty()) {
+            return Mode.ORCHESTRATOR_DIRECT;
+        }
+        return runs.stream().anyMatch(r -> r.agent().filter(RunResult.AgentStats::live).isPresent())
+                ? Mode.AGENT_LIVE : Mode.AGENT_SCRIPTED;
+    }
+
+    public List<Long> modelCalls() {
+        return runs.stream().flatMap(r -> r.agent().stream()).map(a -> (long) a.modelCalls()).toList();
+    }
+
+    public List<Long> toolCalls() {
+        return runs.stream().flatMap(r -> r.agent().stream()).map(a -> (long) a.toolCalls()).toList();
+    }
+
+    /** Input plus output tokens of each live run. */
+    public List<Long> tokens() {
+        return runs.stream().flatMap(r -> r.agent().stream()).filter(RunResult.AgentStats::live)
+                .map(RunResult.AgentStats::tokens).toList();
+    }
+
+    /**
+     * Live rows: the estimated cost of all the row's runs divided by its runs that ended COMPLETED (13.3); empty when
+     * no run completed.
+     */
+    public Optional<BigDecimal> costPerCompletedPurchase(PriceTable prices) {
+        long completed = runs.stream().filter(r -> r.terminal().filter(s -> s == IntentState.COMPLETED).isPresent())
+                .count();
+        if (completed == 0) {
+            return Optional.empty();
+        }
+        BigDecimal total = runs.stream().flatMap(r -> r.agent().stream()).filter(RunResult.AgentStats::live)
+                .map(a -> prices.cost(a.inputTokens(), a.outputTokens())).reduce(BigDecimal.ZERO, BigDecimal::add);
+        return Optional.of(total.divide(BigDecimal.valueOf(completed), MathContext.DECIMAL64).stripTrailingZeros());
+    }
+
+    /** The relative path of each run's {@code trace.jsonl}, for the runs that have an evidence folder. */
+    public List<String> traces() {
+        return runs.stream().flatMap(r -> r.trace().stream()).toList();
     }
 
     public List<Duration> timesToTerminal() {

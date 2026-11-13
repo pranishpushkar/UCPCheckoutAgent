@@ -253,7 +253,8 @@ class FaultProxyTest extends ProxyTestBase {
         assertThat(getEntry.at()).isAfterOrEqualTo(post.at());
     }
 
-    // Covers: §12 Admin API (the JSON form carries exactly the contract's fields, absent values as null)
+    // Covers: §12 Admin API (the JSON form carries exactly the contract's fields, absent values as null; rewrite is the
+    // forward_then_rewrite_response outcome of §12 Action parameters, D3)
     @Test
     void adminLog_servesTheContractFields() throws Exception {
         get("/ucp/v1/checkout-sessions/cs_1");
@@ -265,8 +266,9 @@ class FaultProxyTest extends ProxyTestBase {
         Map<String, Object> entry = (Map<String, Object>) ((List<?>) parsed).getFirst();
         assertThat(entry.keySet()).containsExactly("seq", "at", "method", "path", "requestId", "idempotencyKey",
                 "bodyHmac", "forwarded", "forwards", "merchantStatus", "action", "ruleId", "upstreamError",
-                "clientGone", "settled");
+                "clientGone", "settled", "rewrite");
         assertThat(entry.get("settled")).isEqualTo(true);
+        assertThat(entry.get("rewrite")).isEqualTo(Json.NULL);
         assertThat(entry.get("seq")).isEqualTo(1L);
         assertThat(entry.get("bodyHmac")).isEqualTo(Json.NULL);
         assertThat(entry.get("merchantStatus")).isEqualTo(200L);

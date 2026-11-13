@@ -59,11 +59,19 @@ class EvalMainTest {
         assertThat(err()).contains("time scale k = 6 breaks");
     }
 
-    // Covers: 13.5, 13.1 (exit 3: live mode needs the agent runtime)
+    // Covers: 13.5, 13.1, R4 (exit 3: without -Peval-live there is no live provider on the classpath, so live mode
+    // refuses with its fixed message before reading any key)
     @Test
-    void evalMain_liveMode_exitsThree() {
+    void evalMain_liveModeWithoutTheProvider_exitsThree() {
         assertThat(run(CLEAN, "--mode", "live")).isEqualTo(Report.HARNESS_ERROR);
-        assertThat(err()).contains("only scripted runs exist");
+        assertThat(err()).contains(EvalMain.NO_PROVIDER);
+    }
+
+    // Covers: 13.5 (exit 3: an unknown mode)
+    @Test
+    void evalMain_unknownMode_exitsThree() {
+        assertThat(run(CLEAN, "--mode", "replay")).isEqualTo(Report.HARNESS_ERROR);
+        assertThat(err()).contains("--mode takes scripted or live");
     }
 
     // Covers: 13.5 (exit 3: --run needs exactly one scenario)

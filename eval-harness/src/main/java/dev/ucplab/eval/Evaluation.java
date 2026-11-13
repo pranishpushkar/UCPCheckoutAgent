@@ -5,6 +5,7 @@ import dev.ucplab.eval.check.CheckResult;
 import dev.ucplab.eval.check.Checks;
 import dev.ucplab.eval.report.CommitInfo;
 import dev.ucplab.eval.report.EvidenceWriter;
+import dev.ucplab.eval.report.LiveRun;
 import dev.ucplab.eval.report.Report;
 import dev.ucplab.eval.report.ReportJson;
 import dev.ucplab.eval.report.ReportMarkdown;
@@ -22,6 +23,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -37,6 +39,8 @@ import java.util.stream.Stream;
  * One evaluation (13.1, m4-plan section 4): starts the lanes, runs every (scenario, run) once across them, checks each
  * run, writes the evidence of the runs that failed (or of every run), and writes {@code report.json} and
  * {@code report.md} under the output folder.
+ *
+ * <p>The I8 canary ({@link Canary}) is generated here once and handed to every lane's runs (section 11).
  *
  * <p>The {@code bodyHmac} key is generated here, held in memory only, and handed to every lane's proxy and to the
  * checks. The lanes' database files hold the agent's frozen bodies (and so the mock card tokens); they live in a
@@ -61,10 +65,19 @@ public final class Evaluation {
     private final Consumer<String> tokenSeen;
     private final Consumer<RunEvidence> evidenceSeen;
     private final byte[] hmacKey;
+    private final String canary;
+    private final Optional<LiveModel> live;
 
     public Evaluation(EvalConfig config, List<Scenario> scenarios, OptionalInt onlyRun, Path out,
                       EvidenceMode evidence) {
-        this(config, scenarios, onlyRun, out, evidence, t -> { }, e -> { }, randomKey());
+        this(config, scenarios, onlyRun, out, evidence, t -> { }, e -> { }, randomKey(), Canary.generate(),
+                Optional.empty());
+    }
+
+    /** Live mode (C16): every agent run gets {@code live}'s model, under its spending caps. */
+    public Evaluation(EvalConfig config, List<Scenario> scenarios, OptionalInt onlyRun, Path out,
+                      EvidenceMode evidence, String canary, LiveModel live) {
+        this(config, scenarios, onlyRun, out, evidence, t -> { }, e -> { }, randomKey(), canary, Optional.of(live));
     }
 
     /**
@@ -73,6 +86,19 @@ public final class Evaluation {
      */
     Evaluation(EvalConfig config, List<Scenario> scenarios, OptionalInt onlyRun, Path out, EvidenceMode evidence,
                Consumer<String> tokenSeen, Consumer<RunEvidence> evidenceSeen, byte[] hmacKey) {
+        this(config, scenarios, onlyRun, out, evidence, tokenSeen, evidenceSeen, hmacKey, Canary.generate());
+    }
+
+    /** @param canary the evaluation's I8 canary (section 11); the redaction test chooses it to search for it */
+    Evaluation(EvalConfig config, List<Scenario> scenarios, OptionalInt onlyRun, Path out, EvidenceMode evidence,
+               Consumer<String> tokenSeen, Consumer<RunEvidence> evidenceSeen, byte[] hmacKey, String canary) {
+        this(config, scenarios, onlyRun, out, evidence, tokenSeen, evidenceSeen, hmacKey, canary, Optional.empty());
+    }
+
+    /** @param live live mode's model and caps (C16); empty for a scripted evaluation */
+    Evaluation(EvalConfig config, List<Scenario> scenarios, OptionalInt onlyRun, Path out, EvidenceMode evidence,
+               Consumer<String> tokenSeen, Consumer<RunEvidence> evidenceSeen, byte[] hmacKey, String canary,
+               Optional<LiveModel> live) {
         this.config = Objects.requireNonNull(config, "config");
         this.scenarios = List.copyOf(scenarios);
         if (this.scenarios.isEmpty()) {
@@ -92,6 +118,11 @@ public final class Evaluation {
             throw new IllegalArgumentException("the bodyHmac key must be 32 bytes: " + hmacKey.length);
         }
         this.hmacKey = hmacKey.clone();
+        this.canary = Objects.requireNonNull(canary, "canary");
+        this.live = Objects.requireNonNull(live, "live");
+        if (live.isPresent() && this.scenarios.stream().anyMatch(sc -> sc.agent().isEmpty())) {
+            throw new IllegalArgumentException("live mode runs agent rows only");
+        }
     }
 
     private static byte[] randomKey() {
@@ -106,6 +137,21 @@ public final class Evaluation {
     /** Runs the evaluation and writes the report; returns it. */
     public Report run(CommitInfo commit) throws IOException, InterruptedException {
         Files.createDirectories(out);
+        // eval.log: what JUL receives on threads of no run (lane setup, a client's own pool), searched like run.log.
+        try (RunLog.EvaluationLog evalLog = RunLog.openEvaluation()) {
+            try {
+                return runAll(commit);
+            } finally {
+                Files.writeString(out.resolve(EVAL_LOG), evalLog.text(), StandardCharsets.UTF_8);
+            }
+        }
+    }
+
+    /** The evaluation-level log, in the output folder (C16). */
+    public static final String EVAL_LOG = "eval.log";
+
+    private Report runAll(CommitInfo commit) throws IOException, InterruptedException {
+        Optional<LiveSpend> spend = live.map(LiveSpend::new);
         Queue<Task> tasks = new ConcurrentLinkedQueue<>();
         for (Scenario s : scenarios) {
             int index = Scenarios.seedIndex(s);
@@ -137,8 +183,8 @@ public final class Evaluation {
                 try {
                     List<Future<?>> running = new ArrayList<>();
                     for (Lane lane : lanes) {
-                        RunScript script = new RunScript(lane, config.timeScale(), tokenSeen, childSlots);
-                        running.add(pool.submit(() -> drain(tasks, script, checks, results)));
+                        RunScript script = new RunScript(lane, config.timeScale(), tokenSeen, childSlots, canary, live);
+                        running.add(pool.submit(() -> drain(tasks, script, checks, results, spend)));
                     }
                     for (Future<?> f : running) {
                         try {
@@ -164,16 +210,29 @@ public final class Evaluation {
         for (Scenario s : scenarios) {
             rows.add(new ScenarioSummary(s, results.stream().filter(r -> r.scenarioId().equals(s.id())).toList()));
         }
-        Report report = new Report(Instant.now(), commit, config, LabMerchant.UCP_VERSION, runtime(), rows);
+        Optional<LiveRun> liveRun = live.map(l -> new LiveRun(l.model(), l.promptVersion(), l.maxCostUsd(),
+                l.maxTokensTotal(), spend.get().tokens(), spend.get().cost(), spend.get().stopped()));
+        Report report = new Report(Instant.now(), commit, config, LabMerchant.UCP_VERSION, runtime(), rows,
+                live.map(LiveModel::prices), liveRun);
         Files.writeString(out.resolve("report.json"), ReportJson.write(report), StandardCharsets.UTF_8);
         Files.writeString(out.resolve("report.md"), ReportMarkdown.write(report), StandardCharsets.UTF_8);
         return report;
     }
 
-    /** One lane's loop: take the next task until none are left. */
-    private void drain(Queue<Task> tasks, RunScript script, CheckContext checks, Queue<RunResult> results) {
-        for (Task t = tasks.poll(); t != null; t = tasks.poll()) {
+    /**
+     * One lane's loop: take the next task until none are left, or, live, until a spending cap is reached. Each live
+     * run's tokens and estimated cost are added as soon as it ends.
+     */
+    private void drain(Queue<Task> tasks, RunScript script, CheckContext checks, Queue<RunResult> results,
+                       Optional<LiveSpend> spend) {
+        while (spend.flatMap(LiveSpend::stopped).isEmpty()) {
+            Task t = tasks.poll();
+            if (t == null) {
+                return;
+            }
             RunEvidence e = script.run(t.scenario(), t.run(), t.seed());
+            spend.ifPresent(sp -> e.agentRun().ifPresent(
+                    a -> sp.add(a.record().inputTokens(), a.record().outputTokens())));
             evidenceSeen.accept(e);
             // Each kill of the agent process extends the 7.6 bounds of I5 by one takeover.
             CheckResult found = Checks.run(e, checks.withCrashes(e.crashes()));

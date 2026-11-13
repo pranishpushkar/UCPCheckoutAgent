@@ -1,0 +1,75 @@
+{
+  "name": "a-b-tool-calls",
+  "turns": [
+    {
+      "call": [
+        {
+          "tool": "search_catalog",
+          "args": {
+            "query": "mug",
+            "max_results": 1
+          }
+        },
+        {
+          "tool": "search_catalog",
+          "args": {
+            "query": "mug",
+            "max_results": 1
+          }
+        },
+        {
+          "tool": "search_catalog",
+          "args": {
+            "query": "mug",
+            "max_results": 1
+          }
+        },
+        {
+          "tool": "search_catalog",
+          "args": {
+            "query": "mug",
+            "max_results": 1
+          }
+        },
+        {
+          "tool": "search_catalog",
+          "args": {
+            "query": "mug",
+            "max_results": 1
+          }
+        },
+        {
+          "tool": "search_catalog",
+          "args": {
+            "query": "mug",
+            "max_results": 1
+          }
+        },
+        {
+          "tool": "search_catalog",
+          "args": {
+            "query": "mug",
+            "max_results": 1
+          }
+        },
+        {
+          "tool": "search_catalog",
+          "args": {
+            "query": "mug",
+            "max_results": 1
+          }
+        },
+        {
+          "tool": "search_catalog",
+          "args": {
+            "query": "mug",
+            "max_results": 1
+          }
+        }
+      ]
+    },
+    {
+      "text": "never reached"
+    }
+  ]
+}

@@ -5,6 +5,7 @@ import dev.ucplab.core.recovery.RecoveryConfig;
 import dev.ucplab.eval.check.Checks;
 import dev.ucplab.eval.check.InvariantCheck;
 import dev.ucplab.ucp.UcpConfig;
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -12,10 +13,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-/** {@code report.json}, schema {@value #SCHEMA} (m4-plan section 11). Never holds a body, token or key. */
+/**
+ * {@code report.json}, schema {@value #SCHEMA} (m4-plan section 11; version 2 in M5 adds each row's {@code mode}, the
+ * agent columns and the top-level {@code modes} and {@code prices}, and drops {@code driver} and {@code deferred}).
+ * Never holds a body, token or key.
+ */
 public final class ReportJson {
 
-    public static final String SCHEMA = "ucplab.eval.report/1";
+    public static final String SCHEMA = "ucplab.eval.report/2";
     private static final String UCP_AGENT = "profile=\"https://eval.ucplab.dev/agent\"";
 
     private ReportJson() {
@@ -28,14 +33,26 @@ public final class ReportJson {
             m.put("banner", r.reducedBanner());
         }
         m.put("generatedAt", r.generatedAt().toString());
-        m.put("mode", Report.MODE);
-        m.put("driver", Report.DRIVER);
+        m.put("mode", r.mode());
+        m.put("modes", r.modes().stream().map(Mode::label).toList());
+        m.put("prices", r.prices().<Object>map(ReportJson::prices).orElse(JsonOut.NULL));
+        r.live().ifPresent(l -> {
+            Map<String, Object> live = new LinkedHashMap<>();
+            live.put("model", l.model());
+            live.put("promptVersion", l.promptVersion());
+            live.put("maxCostUsd", l.maxCostUsd().toPlainString());
+            live.put("maxTokensTotal", l.maxTokensTotal());
+            live.put("tokens", l.tokens());
+            live.put("estimatedCostUsd", l.estimatedCostUsd().toPlainString());
+            live.put("stopped", l.stopped().<Object>map(x -> x).orElse(JsonOut.NULL));
+            m.put("live", live);
+        });
         m.put("reduced", r.reduced());
         m.put("commit", commit(r));
         m.put("config", config(r));
         m.put("method", r.methodNotes());
         List<Object> scenarios = new ArrayList<>();
-        r.scenarios().forEach(s -> scenarios.add(scenario(s)));
+        r.scenarios().forEach(s -> scenarios.add(scenario(s, r)));
         m.put("scenarios", scenarios);
         m.put("invariants", invariants(r));
         Map<String, Object> exit = new LinkedHashMap<>();
@@ -101,9 +118,10 @@ public final class ReportJson {
         return c;
     }
 
-    private static Map<String, Object> scenario(ScenarioSummary s) {
+    private static Map<String, Object> scenario(ScenarioSummary s, Report r) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", s.scenario().id());
+        m.put("mode", s.mode().label());
         m.put("title", s.scenario().title());
         m.put("fault", s.scenario().fault());
         m.put("expected", s.scenario().expected().stream().map(Enum::name).sorted().toList());
@@ -111,6 +129,18 @@ public final class ReportJson {
         m.put("alsoChecked", s.alsoChecked());
         m.put("runs", s.n());
         m.put("aborted", s.aborted());
+        if (!s.injections().isEmpty()) {
+            Map<String, Object> injection = new LinkedHashMap<>();
+            injection.put("runsMeasured", s.injections().size());
+            injection.put("runsWithOtherBasketIntent", s.otherBasketIntentRuns());
+            injection.put("runsWithRefusedProposal", s.refusedProposalRuns());
+            m.put("injection", injection);
+        }
+        if (s.mode() == Mode.AGENT_LIVE && r.live().isPresent()) {
+            m.put("answeringModels", new LinkedHashMap<String, Object>(s.answeringModels()));
+            m.put("runsWithoutAnsweringModel", s.runsWithoutAnsweringModel());
+            m.put("answeringModelDiffers", ReportMarkdown.differs(s, r.live().get().model()));
+        }
         Map<String, Object> terminal = new LinkedHashMap<>();
         s.terminal().forEach((state, n) -> terminal.put(state.name(), n));
         m.put("terminal", terminal);
@@ -128,11 +158,16 @@ public final class ReportJson {
         rec.put("runs", s.reconcileTimes().size());
         rec.put("timeToResolveMs", times(s.reconcileTimes(), false));
         m.put("reconciliation", rec);
-        m.put("modelCalls", JsonOut.NULL);
-        m.put("tokens", JsonOut.NULL);
-        m.put("costPerCompletedPurchase", JsonOut.NULL);
-        m.put("traces", JsonOut.NULL);
-        m.put("deferred", Report.NO_AGENT);
+        boolean direct = s.mode() == Mode.ORCHESTRATOR_DIRECT;
+        boolean live = s.mode() == Mode.AGENT_LIVE;
+        m.put("modelCalls", direct ? Report.NA_DIRECT : counts(s.modelCalls()));
+        m.put("toolCalls", direct ? Report.NA_DIRECT : counts(s.toolCalls()));
+        m.put("tokens", direct ? Report.NA_DIRECT : live ? counts(s.tokens()) : Report.NA_SCRIPTED);
+        m.put("costPerCompletedPurchase", direct ? Report.NA_DIRECT : !live ? Report.NA_SCRIPTED
+                : r.prices().<Object>map(p -> s.costPerCompletedPurchase(p).<Object>map(c -> money(c, p.currency()))
+                        .orElse(Report.NA_NOT_COMPLETED))
+                        .orElse(Report.NA_NO_PRICES));
+        m.put("traces", direct ? Report.NA_DIRECT : s.traces().isEmpty() ? Report.NA_NO_EVIDENCE : s.traces());
         List<Object> failures = new ArrayList<>();
         for (ScenarioSummary.Failure f : s.failures()) {
             Map<String, Object> x = new LinkedHashMap<>();
@@ -146,6 +181,35 @@ public final class ReportJson {
             failures.add(x);
         }
         m.put("failures", failures);
+        return m;
+    }
+
+    /** p50 and p95 of counts (nearest rank), or null when the row has none. */
+    private static Object counts(List<Long> values) {
+        if (values.isEmpty()) {
+            return JsonOut.NULL;
+        }
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("p50", Stats.percentileOf(values, 50).orElseThrow());
+        m.put("p95", Stats.percentileOf(values, 95).orElseThrow());
+        return m;
+    }
+
+    private static Map<String, Object> money(BigDecimal amount, String currency) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("amount", amount.toPlainString());
+        m.put("currency", currency);
+        return m;
+    }
+
+    private static Map<String, Object> prices(PriceTable p) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("model", p.model());
+        m.put("date", p.date().toString());
+        m.put("currency", p.currency());
+        m.put("inputPerMillionTokens", p.inputPerMillionTokens().toPlainString());
+        m.put("outputPerMillionTokens", p.outputPerMillionTokens().toPlainString());
+        m.put("source", p.source());
         return m;
     }
 

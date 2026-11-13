@@ -25,7 +25,7 @@ class ArchitectureTest {
     @Test
     void architecture_noAdkTypes_outsideAgentAdk() {
         noClasses()
-                .should().dependOnClassesThat().resideInAPackage("com.google.adk..")
+                .should().dependOnClassesThat().resideInAnyPackage("com.google.adk..", "com.google.genai..")
                 .check(PRODUCTION_CLASSES);
     }
 
