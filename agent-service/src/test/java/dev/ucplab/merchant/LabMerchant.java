@@ -42,6 +42,11 @@ public final class LabMerchant implements AutoCloseable {
                 .get("orders");
     }
 
+    /** {@code POST /_lab/price}: sets an item's price, as S5 does between the quote and the complete. */
+    public void setPrice(String itemId, long priceMinor) {
+        lab("POST", "/_lab/price", "{\"item_id\":\"" + itemId + "\",\"price\":" + priceMinor + "}");
+    }
+
     private String lab(String method, String path, String body) {
         try {
             HttpRequest.Builder r = HttpRequest.newBuilder(baseUrl().resolve(path)).timeout(Duration.ofSeconds(5));

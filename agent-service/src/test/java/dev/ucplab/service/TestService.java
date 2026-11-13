@@ -4,6 +4,7 @@ import dev.ucplab.core.recovery.RecoveryConfig;
 import dev.ucplab.faultproxy.FaultProxy;
 import dev.ucplab.merchant.LabMerchant;
 import dev.ucplab.service.config.Environment;
+import dev.ucplab.service.web.IntentDriver;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.security.SecureRandom;
@@ -61,9 +62,17 @@ final class TestService implements AutoCloseable {
         return start(dir, extra, clock, List.of());
     }
 
-    /** @param beans extra bean classes, such as a test-only controller */
     static TestService start(Path dir, Map<String, String> extra, Optional<Clock> clock, List<Class<?>> beans)
             throws IOException {
+        return start(dir, extra, clock, beans, Optional.empty());
+    }
+
+    /**
+     * @param beans extra bean classes, such as a test-only controller
+     * @param driver replaces {@code driveNow} on the approval route, to show what happens when it starts nothing
+     */
+    static TestService start(Path dir, Map<String, String> extra, Optional<Clock> clock, List<Class<?>> beans,
+                             Optional<IntentDriver> driver) throws IOException {
         LabMerchant merchant = LabMerchant.start();
         byte[] hmac = new byte[32];
         new SecureRandom().nextBytes(hmac);
@@ -75,6 +84,7 @@ final class TestService implements AutoCloseable {
             ApplicationContextInitializer<ConfigurableApplicationContext> overrides = context -> {
                 context.getBeanFactory().registerSingleton("testRecoveryConfig", NO_PASSES);
                 clock.ifPresent(c -> context.getBeanFactory().registerSingleton("testClock", c));
+                driver.ifPresent(d -> context.getBeanFactory().registerSingleton("testIntentDriver", d));
                 beans.forEach(b -> ((GenericApplicationContext) context).registerBean(b));
             };
             ConfigurableApplicationContext context = ServiceApplication.start(Environment.of(env), List.of(overrides),

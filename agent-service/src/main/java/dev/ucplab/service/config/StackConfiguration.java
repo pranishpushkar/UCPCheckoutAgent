@@ -24,6 +24,7 @@ import dev.ucplab.persistence.SqlRecoveryScan;
 import dev.ucplab.persistence.SqlRunRepository;
 import dev.ucplab.persistence.SqlSessionRepository;
 import dev.ucplab.persistence.SqlUserRepository;
+import dev.ucplab.service.web.IntentDriver;
 import dev.ucplab.ucp.CircuitBreakers;
 import dev.ucplab.ucp.JdkHttpTransport;
 import dev.ucplab.ucp.Sleeper;
@@ -208,6 +209,13 @@ public class StackConfiguration {
                                   WorkerId workerId) {
         return new RecoveryWorker(intents, new SqlRecoveryScan(db), orchestrator, clock, Thread::sleep,
                 drivers.executor(), recoveryConfig, workerId.value());
+    }
+
+    /** {@code driveNow} for the approval route; a test may register its own. */
+    @Bean
+    @ConditionalOnMissingBean
+    IntentDriver intentDriver(RecoveryWorker recoveryWorker) {
+        return recoveryWorker::driveNow;
     }
 
     @Bean(destroyMethod = "")
