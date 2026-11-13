@@ -3,9 +3,11 @@ package dev.ucplab.eval.report;
 import dev.ucplab.core.intent.IntentEvent;
 import dev.ucplab.core.intent.IntentState;
 import dev.ucplab.core.json.CanonicalJson;
+import dev.ucplab.eval.AgentSpec;
 import dev.ucplab.eval.RunEvidence;
 import dev.ucplab.eval.Scenario;
 import dev.ucplab.eval.check.CheckResult;
+import dev.ucplab.runtime.BudgetLimit;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -40,12 +42,32 @@ public record RunResult(String scenarioId, int run, long seed, int lane, Optiona
     public static RunResult of(Scenario scenario, RunEvidence e, CheckResult checks) {
         Optional<IntentState> terminal = e.intents().isEmpty() ? Optional.empty()
                 : Optional.of(e.intents().getFirst().intent().state());
-        boolean expected = e.aborted().isEmpty() && e.intents().size() == 1
-                && terminal.map(scenario.expected()::contains).orElse(false);
+        boolean expected = scenario.agent().isPresent() ? agentExpected(scenario, e)
+                : e.aborted().isEmpty() && e.intents().size() == 1
+                        && terminal.map(scenario.expected()::contains).orElse(false);
         Optional<Duration> reconcile = e.intents().isEmpty() ? Optional.empty()
                 : reconcileSpan(e.intents().getFirst().events());
         return new RunResult(e.scenarioId(), e.run(), e.seed(), e.lane(), e.aborted(), terminal, e.intents().size(),
                 expected, checks, e.timeToTerminal(), reconcile, Optional.empty());
+    }
+
+    /**
+     * An agent row (m5-plan section 9): not aborted, between the row's fewest and most intents, every intent in an
+     * expected terminal state, the run record's outcome one the row expects, and, when the run's script must breach a
+     * budget limit, that limit.
+     */
+    private static boolean agentExpected(Scenario scenario, RunEvidence e) {
+        AgentSpec spec = scenario.agent().orElseThrow();
+        if (e.aborted().isPresent() || e.agentRun().isEmpty()) {
+            return false;
+        }
+        RunEvidence.AgentRun run = e.agentRun().get();
+        int n = e.intents().size();
+        Optional<BudgetLimit> breach = spec.plan().forRun(e.run()).breach();
+        return n >= spec.minIntents() && n <= spec.maxIntents()
+                && e.intents().stream().allMatch(p -> scenario.expected().contains(p.intent().state()))
+                && run.record().outcome().filter(spec.runOutcomes()::contains).isPresent()
+                && breach.map(b -> run.breach().equals(Optional.of(b.name()))).orElse(true);
     }
 
     public RunResult withEvidence(String path) {

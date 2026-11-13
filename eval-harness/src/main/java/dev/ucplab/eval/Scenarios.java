@@ -7,13 +7,18 @@ import dev.ucplab.faultproxy.Action;
 import dev.ucplab.faultproxy.Match;
 import dev.ucplab.faultproxy.Rule;
 import dev.ucplab.faultproxy.RuleSet;
+import dev.ucplab.runtime.BudgetLimit;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** The M4 scripted scenarios (13.2) that the harness can run so far. */
+/**
+ * The scripted scenarios (13.2) the harness can run: the 15 M4 rows, orchestrator-direct, and the M5 agent rows beside
+ * them (m5-plan section 9: {@code A-} plus the catalogue row they test, and A-B for the budget breaches).
+ */
 public final class Scenarios {
 
     /** The one merchant in every lane's registry. */
@@ -28,7 +33,14 @@ public final class Scenarios {
     /** S5: item_123's price after the change, up from 2500. */
     public static final long S5_NEW_PRICE = 2600;
 
-    private static final Pattern ID = Pattern.compile("S(\\d+)([ab]?)");
+    private static final Pattern ID = Pattern.compile("(A-)?S(\\d+)([ab]?)");
+    /** The seed index of the first agent row: agent rows sit after every catalogue row, so M4 seeds stay the same. */
+    static final int AGENT_SEED_BASE = 1_000;
+    /** A-B's seed index. */
+    static final int BUDGET_SEED_INDEX = 2_000;
+    /** The four breaches of A-B, by run index (section 8). */
+    static final List<BudgetLimit> BREACHES = List.of(BudgetLimit.MODEL_CALLS, BudgetLimit.TOOL_CALLS,
+            BudgetLimit.WALL_CLOCK, BudgetLimit.TOKENS);
 
     private Scenarios() {
     }
@@ -172,9 +184,72 @@ public final class Scenarios {
             AutoApprover.Policy.APPROVE_ALL, Scenario.Driver.ADVANCE_RACE, SHOP, TWO_SHIRTS, PAY_OK,
             (m, t) -> m.setPaymentLatencyMs(t.completeTimeout().dividedBy(4).toMillis()));
 
-    /** Every row the harness can run, in catalogue order. */
+    /** What every agent row but A-S11 and A-B ends as: one intent, its quote waiting for the user's approval. */
+    private static final Set<String> AWAITING = Set.of("waiting_for_approval");
+
+    /** A-S0: the agent searches, then proposes one Blue Mug; COMPLETED as S0. */
+    public static final Scenario A_S0 = new Scenario("A-S0", "agent, scripted: search, then propose 1 Blue Mug",
+            "none; the agent proposes", Set.of(IntentState.COMPLETED), List.of("I1", "I2", "I3"),
+            (t, run) -> RuleSet.empty(), AutoApprover.Policy.APPROVE_ALL, SHOP, PAY_OK,
+            AgentSpec.of("Buy me one blue mug.", "a-s0-buy-blue-mug.json", List.of(), AWAITING, 1, 1, false));
+
+    /** A-S2: as A-S0, with S2's drop rule on the first complete. */
+    public static final Scenario A_S2 = new Scenario("A-S2", "agent, scripted: as A-S0, complete response dropped",
+            "forward_then_drop_response on POST " + COMPLETE + ", nth 1", Set.of(IntentState.COMPLETED),
+            List.of("I1", "I4", "I7"),
+            (t, run) -> rules(run, new Rule("drop-complete", Match.of("POST", COMPLETE).withNth(1),
+                    new Action.ForwardThenDropResponse()).withTimes(1)),
+            AutoApprover.Policy.APPROVE_ALL, SHOP, PAY_OK,
+            AgentSpec.of("Buy me one blue mug.", "a-s0-buy-blue-mug.json", List.of(), AWAITING, 1, 1, false));
+
+    /** A-S4: the model calls propose_purchase twice with the same basket; dedupe keeps one intent. */
+    public static final Scenario A_S4 = new Scenario("A-S4", "agent, scripted: the same proposal twice",
+            "none; the agent calls propose_purchase twice with the same basket", Set.of(IntentState.COMPLETED),
+            List.of("I1"), (t, run) -> RuleSet.empty(), AutoApprover.Policy.APPROVE_ALL, SHOP, PAY_OK,
+            AgentSpec.of("Buy me one blue mug.", "a-s4-propose-twice.json", List.of(), AWAITING, 1, 1, false));
+
+    /** A-S11: the agent proposes at a merchant that is not on the allowlist; P1 rejects it. */
+    public static final Scenario A_S11 = new Scenario("A-S11", "agent, scripted: merchant not on the allowlist",
+            "none; the agent proposes at a merchant missing from the registry", Set.of(IntentState.REJECTED),
+            List.of("I3"), (t, run) -> RuleSet.empty(), AutoApprover.Policy.APPROVE_ALL, UNLISTED, PAY_OK,
+            AgentSpec.of("Buy me a blue mug from shop-unlisted.", "a-s11-unlisted-merchant.json", List.of(),
+                    Set.of("done"), 1, 1, false));
+
+    /** A-S12: an ambiguous request; the agent asks first, then proposes what the user chose. */
+    public static final Scenario A_S12 = new Scenario("A-S12", "agent, scripted: ambiguous request",
+            "none; the user asks for one of the products; ask_user is answered \"the blue mug\"",
+            Set.of(IntentState.COMPLETED), List.of("I1", "I2", "I3"), (t, run) -> RuleSet.empty(),
+            AutoApprover.Policy.APPROVE_ALL, SHOP, PAY_OK,
+            AgentSpec.of("Buy me one of your products.", "a-s12-ask-first.json", List.of("the blue mug"), AWAITING,
+                    1, 1, true));
+
+    /**
+     * A-B: each budget breach of 6.3 in turn, by run index (model calls, tool calls, wall clock, tokens), with section
+     * 8's checks: no intent, no approval, only discovery and catalog reads, no order.
+     */
+    public static final Scenario A_B = new Scenario("A-B", "agent, scripted: each budget breach",
+            "none; the script breaches model calls, tool calls, wall clock or tokens (by run index)", Set.of(),
+            List.of(), (t, run) -> RuleSet.empty(), AutoApprover.Policy.APPROVE_ALL, SHOP, PAY_OK,
+            new AgentSpec("Find me a mug.", run -> {
+                BudgetLimit breach = BREACHES.get(run % BREACHES.size());
+                return new AgentSpec.Script("a-b-" + breach.name().toLowerCase(Locale.ROOT)
+                        .replace('_', '-') + ".json", Optional.of(breach));
+            }, List.of(), Set.of("budget_exceeded"), 0, 0, false, true));
+
+    /** Every row the harness can run: the catalogue rows in catalogue order, then the agent rows. */
     public static List<Scenario> all() {
-        return List.of(S0, S1, S2, S3, S4, S5A, S5B, S6, S7, S8, S9, S11, S13, S14, S28);
+        return List.of(S0, S1, S2, S3, S4, S5A, S5B, S6, S7, S8, S9, S11, S13, S14, S28,
+                A_S0, A_S2, A_S4, A_S11, A_S12, A_B);
+    }
+
+    /** The orchestrator-direct rows of M4. */
+    public static List<Scenario> direct() {
+        return all().stream().filter(s -> s.agent().isEmpty()).toList();
+    }
+
+    /** The agent rows of M5. */
+    public static List<Scenario> agent() {
+        return all().stream().filter(s -> s.agent().isPresent()).toList();
     }
 
     /** Where a run of a {@link Scenario.Driver#KILL_AND_RESTART} row kills the agent. */
@@ -192,14 +267,19 @@ public final class Scenarios {
 
     /**
      * The index a scenario's run seeds are derived from ({@link EvalConfig#seed}): twice its catalogue number, plus one
-     * for a "b" row, so seeds stay the same when rows are added (S0 is 0, S5a 10, S5b 11, S28 56).
+     * for a "b" row, so seeds stay the same when rows are added (S0 is 0, S5a 10, S5b 11, S28 56). An agent row adds
+     * {@link #AGENT_SEED_BASE} (A-S0 is 1000, A-S12 1024), and A-B is {@link #BUDGET_SEED_INDEX}.
      */
     public static int seedIndex(Scenario s) {
+        if (s.id().equals("A-B")) {
+            return BUDGET_SEED_INDEX;
+        }
         Matcher m = ID.matcher(s.id());
         if (!m.matches()) {
             throw new IllegalArgumentException("not a catalogue id: " + s.id());
         }
-        return Integer.parseInt(m.group(1)) * 2 + ("b".equals(m.group(2)) ? 1 : 0);
+        return (m.group(1) == null ? 0 : AGENT_SEED_BASE) + Integer.parseInt(m.group(2)) * 2
+                + ("b".equals(m.group(3)) ? 1 : 0);
     }
 
     public static Optional<Scenario> byId(String id) {

@@ -39,8 +39,8 @@ class ArchitectureTest {
                 .check(ALL_HARNESS_CLASSES);
     }
 
-    // Covers: section 5.2 (D2: the harness embeds core, ucp, persistence and the proxy, never agent-adk, the service
-    // layer or Spring)
+    // Covers: section 5.2 (D2: the harness embeds core, ucp, persistence, the proxy and, since M5, agent-runtime; never
+    // agent-adk, the service layer or Spring), Decision 1 (eval-harness: no dev.ucplab.adk..)
     @Test
     void architecture_harnessNeverUsesAdkServiceOrSpring() {
         noClasses()

@@ -1,10 +1,13 @@
 package dev.ucplab.eval.report;
 
+import dev.ucplab.core.agent.RunRecord;
+import dev.ucplab.core.agent.ToolEvent;
 import dev.ucplab.core.approval.ApprovalRecord;
 import dev.ucplab.core.approval.ApprovalSnapshot;
 import dev.ucplab.core.intent.IntentEvent;
 import dev.ucplab.core.intent.MerchantAttempt;
 import dev.ucplab.core.intent.PurchaseIntent;
+import dev.ucplab.core.json.CanonicalJson;
 import dev.ucplab.eval.AutoApprover;
 import dev.ucplab.eval.GroundTruth;
 import dev.ucplab.eval.RunEvidence;
@@ -28,8 +31,17 @@ import java.util.Optional;
  * response body, a payment or approval token (nor a token's hash), an Authorization value or the {@code bodyHmac} key.
  * A frozen request body appears only as its length. The child logs are written as the child printed them: the child
  * prints nothing secret ({@code AgentMain}), and the redaction test searches them like every other file.
+ *
+ * <p>An agent row (M5) also gets {@code run.json}, its run record (names, counts, codes), and {@code trace.jsonl}, the
+ * run's spans (section 11, D7), next to {@code intents.json}. Neither holds the model's text, the agent's question,
+ * the user's message or answers, tool arguments or tool results.
  */
 public final class EvidenceWriter {
+
+    /** An agent run's record, in its evidence folder. */
+    public static final String RUN_FILE = "run.json";
+    /** An agent run's spans, in its evidence folder (section 11, D7). */
+    public static final String TRACE_FILE = "trace.jsonl";
 
     private EvidenceWriter() {
     }
@@ -46,6 +58,10 @@ public final class EvidenceWriter {
         for (int i = 0; i < e.children().size(); i++) {
             Files.writeString(dir.resolve("child-" + (i + 1) + ".log"), e.children().get(i).log(),
                     StandardCharsets.UTF_8);
+        }
+        if (e.agentRun().isPresent()) {
+            put(dir, RUN_FILE, run(e.agentRun().get().record()));
+            Files.writeString(dir.resolve(TRACE_FILE), e.agentRun().get().traceJsonl(), StandardCharsets.UTF_8);
         }
         return dir;
     }
@@ -81,6 +97,45 @@ public final class EvidenceWriter {
         Map<String, Object> v = new LinkedHashMap<>();
         checks.byInvariant().forEach((id, list) -> v.put(id, list.stream().map(x -> x.detail()).toList()));
         m.put("violations", v);
+        e.agentRun().ifPresent(a -> {
+            Map<String, Object> x = new LinkedHashMap<>();
+            x.put("outcomeType", a.outcomeType());
+            x.put("status", opt(a.record().outcome()));
+            x.put("reason", opt(a.record().reason()));
+            x.put("breach", opt(a.breach()));
+            x.put("asks", a.asks());
+            x.put("intentsAtFirstAsk", a.intentsAtFirstAsk().<Object>map(n -> n).orElse(JsonOut.NULL));
+            x.put("run", RUN_FILE);
+            x.put("trace", TRACE_FILE);
+            m.put("agent", x);
+        });
+        return m;
+    }
+
+    /** The run record: names, counts and codes only (23.1). */
+    private static Map<String, Object> run(RunRecord r) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", r.id().value());
+        m.put("owner", r.owner().value());
+        m.put("model", r.model());
+        m.put("startedAt", r.startedAt().toString());
+        m.put("endedAt", optTime(r.endedAt()));
+        m.put("outcome", opt(r.outcome()));
+        m.put("reason", opt(r.reason()));
+        m.put("modelCalls", r.modelCalls());
+        m.put("toolCalls", r.toolCalls());
+        m.put("inputTokens", r.inputTokens());
+        m.put("outputTokens", r.outputTokens());
+        m.put("intentIds", r.intentIds().stream().map(i -> i.value()).toList());
+        List<Object> events = new ArrayList<>();
+        for (ToolEvent t : r.toolEvents()) {
+            Map<String, Object> x = new LinkedHashMap<>();
+            x.put("tool", t.tool());
+            x.put("summary", t.summary());
+            x.put("ms", t.took().toMillis());
+            events.add(x);
+        }
+        m.put("toolEvents", events);
         return m;
     }
 
@@ -203,8 +258,23 @@ public final class EvidenceWriter {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("type", ev.type());
         m.put("at", ev.at().toString());
-        m.put("payload", ev.payloadJson());
+        m.put("payload", payload(ev.payloadJson()));
         return m;
+    }
+
+    /**
+     * An event's payload, with the model's {@code rationale} (a {@code propose_purchase} argument kept in the
+     * {@code proposed} event) replaced by its length: tool arguments never reach the evidence (I8, m5-plan section 9).
+     */
+    static String payload(String json) {
+        if (!json.contains("\"rationale\"")) {
+            return json;
+        }
+        Map<String, Object> m = new LinkedHashMap<>(CanonicalJson.readObject(json));
+        if (m.get("rationale") instanceof String r) {
+            m.put("rationale", "(redacted, " + r.length() + " chars)");
+        }
+        return CanonicalJson.write(m);
     }
 
     /** No token hash: only the decision, its owner and its times. */

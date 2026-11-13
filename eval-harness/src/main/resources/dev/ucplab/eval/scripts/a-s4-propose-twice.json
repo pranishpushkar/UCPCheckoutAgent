@@ -1,0 +1,19 @@
+{
+  "name": "a-s4-propose-twice",
+  "expectToolSequence": ["search_catalog", "propose_purchase", "propose_purchase"],
+  "turns": [
+    { "call": [{ "tool": "search_catalog", "args": { "query": "blue mug", "max_results": 3 } }] },
+    { "when": { "tool": "search_catalog", "resultMatches": "\"item_id\":\"item_456\"" },
+      "call": [{ "tool": "propose_purchase",
+                 "args": { "merchant_id": "${result.items[0].merchant_id}",
+                           "items": [{ "item_id": "item_456", "quantity": 1 }],
+                           "rationale": "The user asked for one blue mug." } }] },
+    { "when": { "tool": "propose_purchase", "resultMatches": "\"state\":\"AWAITING_APPROVAL\"" },
+      "call": [{ "tool": "propose_purchase",
+                 "args": { "merchant_id": "shop-lane",
+                           "items": [{ "item_id": "item_456", "quantity": 1 }],
+                           "rationale": "The user asked for one blue mug." } }] },
+    { "when": { "tool": "propose_purchase", "resultMatches": "\"state\":\"AWAITING_APPROVAL\"" },
+      "text": "Your purchase is waiting for your approval." }
+  ]
+}

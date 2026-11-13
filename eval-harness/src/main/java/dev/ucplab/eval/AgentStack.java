@@ -6,6 +6,9 @@ import dev.ucplab.core.approval.DefaultApprovalService;
 import dev.ucplab.core.id.IdGenerator;
 import dev.ucplab.core.identity.UserId;
 import dev.ucplab.core.merchant.MerchantEntry;
+import dev.ucplab.core.merchant.MerchantId;
+import dev.ucplab.core.merchant.MerchantProfile;
+import dev.ucplab.core.merchant.MerchantRegistry;
 import dev.ucplab.core.merchant.MerchantStatus;
 import dev.ucplab.core.merchant.PaymentInstrument;
 import dev.ucplab.core.orchestrator.DefaultOrchestrator;
@@ -19,6 +22,8 @@ import dev.ucplab.persistence.Database;
 import dev.ucplab.persistence.SqlApprovalRepository;
 import dev.ucplab.persistence.SqlIntentRepository;
 import dev.ucplab.persistence.SqlRecoveryScan;
+import dev.ucplab.runtime.ToolPorts;
+import dev.ucplab.ucp.CatalogClient;
 import dev.ucplab.ucp.CircuitBreakers;
 import dev.ucplab.ucp.JdkHttpTransport;
 import dev.ucplab.ucp.Sleeper;
@@ -27,9 +32,13 @@ import dev.ucplab.ucp.UcpHttpGateway;
 import java.net.URI;
 import java.nio.file.Path;
 import java.security.SecureRandom;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.SplittableRandom;
 import java.util.concurrent.Executors;
@@ -43,7 +52,8 @@ import java.util.concurrent.TimeUnit;
  * (m4-plan section 3). Nothing carries over from one run to the next.
  *
  * <p>The same wiring serves the agent child process of S9 and S28 ({@link AgentMain}) and the extra workers of S14
- * ({@link #racer}).
+ * ({@link #racer}). An agent row (M5) also gets the ports the agent runtime's tools call ({@link #toolPorts}): a
+ * one-entry registry, a catalog client on the lane's proxy, and this stack's orchestrator.
  */
 final class AgentStack implements AutoCloseable {
 
@@ -70,6 +80,7 @@ final class AgentStack implements AutoCloseable {
     private final RuleBasedPolicyEngine policy;
     private final ApprovalTokens tokens;
     private final PaymentInstrument instrument;
+    private final CatalogClient catalog;
 
     /**
      * @param merchantUrl where the agent is pointed: the lane's proxy
@@ -100,6 +111,10 @@ final class AgentStack implements AutoCloseable {
         approvalService = new DefaultApprovalService(intents, approvals, tokens, clock, ids, workerId, approvalLease,
                 DefaultApprovalService.DEFAULT_TTL, DefaultApprovalService.DEFAULT_MAX_AUTH_AGE);
         orchestrator = orchestrator(intents, approvals, approvalService, ids, workerId, new SplittableRandom(~seed));
+        catalog = new CatalogClient(new UcpHttpGateway(shop, ucp, new JdkHttpTransport(ucp),
+                new CircuitBreakers(ucp, clock), clock, Sleeper.THREAD, new SplittableRandom(seed ^ 0x5eed), ids), ucp,
+                new JdkHttpTransport(ucp), new CircuitBreakers(ucp, clock), clock, Sleeper.THREAD,
+                new SplittableRandom(seed * 7 + 1), ids);
         worker = new RecoveryWorker(intents, scan, orchestrator, clock, Thread::sleep, Runnable::run, scale.recovery(),
                 workerId);
         scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -161,6 +176,52 @@ final class AgentStack implements AutoCloseable {
         public void close() {
             db.close();
         }
+    }
+
+    /**
+     * The ports of an agent row's tools (m5-plan section 9): the lane's one merchant, its catalog through the proxy,
+     * and this stack's orchestrator. No approval service and no gateway, so no tool can approve or complete (I6).
+     */
+    ToolPorts toolPorts() {
+        MerchantRegistry registry = new MerchantRegistry() {
+            @Override
+            public List<MerchantEntry> active() {
+                return List.of(shop);
+            }
+
+            @Override
+            public Optional<MerchantEntry> find(MerchantId id) {
+                return id.equals(Scenarios.SHOP) ? Optional.of(shop) : Optional.empty();
+            }
+
+            @Override
+            public MerchantProfile profile(MerchantId id) {
+                throw new UnsupportedOperationException("the tools do not read profiles");
+            }
+        };
+        return new ToolPorts(registry, Map.of(Scenarios.SHOP, catalog), orchestrator);
+    }
+
+    /** How many intents {@code user} has in this run's database (S12's check, section 8's no-side-effect check). */
+    int intentCount(UserId user) {
+        return count("SELECT COUNT(*) FROM purchase_intent WHERE user_id = ?", user);
+    }
+
+    /** How many approval rows {@code user} has in this run's database (section 8). */
+    int approvalCount(UserId user) {
+        return count("SELECT COUNT(*) FROM approval WHERE user_id = ?", user);
+    }
+
+    private int count(String sql, UserId user) {
+        return db.read(c -> {
+            try (PreparedStatement ps = c.prepareStatement(sql)) {
+                ps.setString(1, user.value());
+                try (ResultSet rs = ps.executeQuery()) {
+                    rs.next();
+                    return rs.getInt(1);
+                }
+            }
+        });
     }
 
     /**

@@ -1,0 +1,8 @@
+{
+  "name": "drift-when",
+  "turns": [
+    { "call": [{ "tool": "search_catalog", "args": { "query": "blue mug", "max_results": 3 } }] },
+    { "when": { "tool": "search_catalog", "resultMatches": "\"item_id\":\"item_999\"" },
+      "text": "never" }
+  ]
+}

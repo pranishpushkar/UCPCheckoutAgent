@@ -51,8 +51,7 @@ public final class ReportMarkdown {
                 terminal = (terminal.isEmpty() ? "" : terminal + ", ") + "aborted " + s.aborted();
             }
             sb.append("| ").append(s.scenario().id()).append(" | ").append(cell(s.scenario().fault()))
-                    .append(" | ").append(String.join(" or ", s.scenario().expected().stream().map(Enum::name)
-                            .sorted().toList()))
+                    .append(" | ").append(cell(s.scenario().expectedText()))
                     .append(" | ").append(s.n())
                     .append(" | ").append(terminal.isEmpty() ? "none" : terminal)
                     .append(" | ").append(s.expectedOutcomes()).append('/').append(s.n()).append(" (")

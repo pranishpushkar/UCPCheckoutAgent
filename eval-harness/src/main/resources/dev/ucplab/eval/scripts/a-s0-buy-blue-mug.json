@@ -1,0 +1,14 @@
+{
+  "name": "a-s0-buy-blue-mug",
+  "expectToolSequence": ["search_catalog", "propose_purchase"],
+  "turns": [
+    { "call": [{ "tool": "search_catalog", "args": { "query": "blue mug", "max_results": 3 } }] },
+    { "when": { "tool": "search_catalog", "resultMatches": "\"item_id\":\"item_456\"" },
+      "call": [{ "tool": "propose_purchase",
+                 "args": { "merchant_id": "${result.items[0].merchant_id}",
+                           "items": [{ "item_id": "item_456", "quantity": 1 }],
+                           "rationale": "The user asked for one blue mug." } }] },
+    { "when": { "tool": "propose_purchase", "resultMatches": "\"state\":\"AWAITING_APPROVAL\"" },
+      "text": "I have asked for your approval of 1 Blue Mug." }
+  ]
+}

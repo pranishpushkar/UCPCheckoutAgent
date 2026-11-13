@@ -70,6 +70,11 @@
             </dependency>
             <dependency>
                 <groupId>dev.ucplab</groupId>
+                <artifactId>agent-runtime</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>dev.ucplab</groupId>
                 <artifactId>agent-persistence</artifactId>
                 <version>${project.version}</version>
             </dependency>

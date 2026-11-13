@@ -1,0 +1,71 @@
+{
+  "name": "a-b-wall-clock",
+  "turns": [
+    {
+      "call": [
+        {
+          "tool": "search_catalog",
+          "args": {
+            "query": "mug",
+            "max_results": 1
+          }
+        }
+      ]
+    },
+    {
+      "call": [
+        {
+          "tool": "search_catalog",
+          "args": {
+            "query": "mug",
+            "max_results": 1
+          }
+        }
+      ]
+    },
+    {
+      "call": [
+        {
+          "tool": "search_catalog",
+          "args": {
+            "query": "mug",
+            "max_results": 1
+          }
+        }
+      ]
+    },
+    {
+      "call": [
+        {
+          "tool": "search_catalog",
+          "args": {
+            "query": "mug",
+            "max_results": 1
+          }
+        }
+      ]
+    },
+    {
+      "call": [
+        {
+          "tool": "search_catalog",
+          "args": {
+            "query": "mug",
+            "max_results": 1
+          }
+        }
+      ]
+    },
+    {
+      "call": [
+        {
+          "tool": "search_catalog",
+          "args": {
+            "query": "mug",
+            "max_results": 1
+          }
+        }
+      ]
+    }
+  ]
+}

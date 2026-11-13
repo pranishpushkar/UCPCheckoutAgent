@@ -28,6 +28,11 @@
             <groupId>dev.ucplab</groupId>
             <artifactId>agent-persistence</artifactId>
         </dependency>
+        <!-- Decision 1: the agent runtime (JDK and core only), never agent-adk, ADK or the Gemini SDK. -->
+        <dependency>
+            <groupId>dev.ucplab</groupId>
+            <artifactId>agent-runtime</artifactId>
+        </dependency>
         <dependency>
             <groupId>dev.ucplab</groupId>
             <artifactId>fault-proxy</artifactId>

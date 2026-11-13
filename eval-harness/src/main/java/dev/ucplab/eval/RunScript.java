@@ -1,5 +1,8 @@
 package dev.ucplab.eval;
 
+import dev.ucplab.core.agent.InMemoryRunRepository;
+import dev.ucplab.core.agent.RunId;
+import dev.ucplab.core.agent.RunRecord;
 import dev.ucplab.core.id.SequentialIdGenerator;
 import dev.ucplab.core.identity.AuthContext;
 import dev.ucplab.core.identity.UserId;
@@ -10,13 +13,23 @@ import dev.ucplab.core.intent.StepResult;
 import dev.ucplab.faultproxy.LogEntry;
 import dev.ucplab.faultproxy.PathPattern;
 import dev.ucplab.faultproxy.RuleSet;
+import dev.ucplab.runtime.AgentBudget;
+import dev.ucplab.runtime.AgentRuntime;
+import dev.ucplab.runtime.BudgetLimit;
+import dev.ucplab.runtime.RunOutcome;
+import dev.ucplab.runtime.RunTrace;
+import dev.ucplab.runtime.ScriptDriftException;
+import dev.ucplab.runtime.ScriptedModel;
 import java.io.IOException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Path;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -31,6 +44,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -40,12 +54,23 @@ import java.util.function.Supplier;
  * fresh agent, propose, let the auto-approver act and the recovery worker drive, wait for a terminal state (or abort at
  * the time limit), wait until the proxy has settled every request of the run, then collect the evidence.
  *
+ * <p>An agent row (M5, {@link Scenario.Driver#AGENT}) proposes through the agent runtime instead (m5-plan section 9):
+ * a {@code ScriptedModel} replaying the row's script, a {@link ScriptedUser}, and the stack's orchestrator and catalog.
+ * After every run the script's tool sequence is checked. A {@link ScriptDriftException} from the run or the check, and
+ * any exception the runtime throws on, aborts the run. The approver and the recovery worker then act as in M4 on the
+ * intents the agent proposed, and the row's own claim (S12's ask before any intent, section 8's no side effects) is
+ * checked once the proxy is quiet; a run whose claim fails is aborted, never passed.
+ *
  * <p>All waiting is polling with a deadline, never a sleep sized to a hold.
  */
 public final class RunScript {
 
     /** How often the harness looks at the database, the approver channel and the proxy log. */
     static final Duration POLL = Duration.ofMillis(20);
+    /** How long {@code ask_user} waits in an agent row (6.2). */
+    static final Duration ASK_TIMEOUT = Duration.ofMinutes(5);
+    /** How far the clock of an A-B wall-clock run moves on every read: 30 s pass within a few calls. */
+    static final Duration WALL_CLOCK_STEP = Duration.ofSeconds(4);
     /** S14: how many workers race (13.2). */
     public static final int RACERS = 24;
 
@@ -143,6 +168,7 @@ public final class RunScript {
         AtomicReference<String> windowFailed = new AtomicReference<>();
         List<AgentStack.Racer> racers = new ArrayList<>();
         Children children = new Children(name, seed);
+        Optional<RunEvidence.AgentRun> agentRun = Optional.empty();
         try (AgentStack stack = new AgentStack(lane.agentFacingUrl(), lane.newDatabase(name), scale, seed,
                 new SequentialIdGenerator(name), scenario.paymentToken(),
                 race || killPoint.isPresent() ? AgentStack.DECISION_ONLY : scale.orchestrator().lease())) {
@@ -160,7 +186,14 @@ public final class RunScript {
                     // The agent child is the worker; it is running before the intent exists.
                     children.start(stack.dbFile());
                 }
-                proposed.addAll(propose(stack, scenario, run, auth));
+                if (scenario.driver() == Scenario.Driver.AGENT) {
+                    AgentResult agent = runAgent(stack, scenario, run, name, auth);
+                    proposed.addAll(agent.intents());
+                    aborted = agent.abort();
+                    agentRun = agent.evidence();
+                } else {
+                    proposed.addAll(propose(stack, scenario, run, auth));
+                }
                 Set<IntentId> ids = new LinkedHashSet<>(proposed);
                 if (killPoint.isPresent()) {
                     // No loop here: only the child drives the intent.
@@ -172,7 +205,7 @@ public final class RunScript {
                     stack.loop.start();
                 }
                 Instant deadline = Instant.now().plus(timeLimit());
-                while (true) {
+                while (aborted.isEmpty()) {
                     for (IntentId id : ids) {
                         if (approver.tick(id)) {
                             if (killPoint.isPresent()) {
@@ -225,6 +258,9 @@ public final class RunScript {
                 if (window.isPresent()) {
                     aborted = aborted.or(() -> windowMissed(window.get(), lane.proxy().log(startSeq)));
                 }
+                if (scenario.agent().isPresent() && aborted.isEmpty()) {
+                    aborted = claimFailed(scenario.agent().get(), agentRun, stack, user, lane.proxy().log(startSeq));
+                }
                 for (IntentId id : ids) {
                     stack.intents.findForSystem(id).ifPresent(i -> persisted.add(new RunEvidence.Persisted(i,
                             stack.intents.attempts(id), stack.intents.events(id), stack.approvals.listForSystem(id))));
@@ -266,7 +302,7 @@ public final class RunScript {
         List<LogEntry> log = lane.proxy().log(startSeq);
         lane.proxyLogMark();
         return new RunEvidence(scenario.id(), run, seed, lane.index(), user, aborted, proposed, persisted, orders, sessions,
-                log, decisions, startedAt, terminalSeenAt, children.kills(), children.records());
+                log, decisions, startedAt, terminalSeenAt, children.kills(), children.records(), agentRun);
     }
 
     /**
@@ -367,6 +403,7 @@ public final class RunScript {
                                    Supplier<AuthContext> auth) throws InterruptedException {
         String rationale = "scripted run: " + scenario.id();
         return switch (scenario.driver()) {
+            case AGENT -> throw new IllegalStateException(scenario.id() + ": the agent runtime proposes");
             case PROPOSE_ONCE, ADVANCE_RACE, KILL_AND_RESTART -> List.of(stack.orchestrator.propose(auth.get(),
                     scenario.target(), scenario.basket(), rationale).intentId());
             case PROPOSE_TWICE -> {
@@ -381,6 +418,122 @@ public final class RunScript {
                 yield proposeTogether(stack, scenario, auth, rationale);
             }
         };
+    }
+
+    /** What an agent row's run left: the intents it proposed, why the run must abort, and its evidence. */
+    private record AgentResult(List<IntentId> intents, Optional<String> abort,
+                               Optional<RunEvidence.AgentRun> evidence) {
+    }
+
+    /**
+     * Runs the agent on the harness thread (m5-plan section 9), then checks the script's tool sequence. The run's
+     * record is stored in a repository of its own under the run's user. Nothing the model or the user said is kept:
+     * the evidence holds the record, the trace, and the outcome as a type and a code.
+     */
+    private AgentResult runAgent(AgentStack stack, Scenario scenario, int run, String name,
+                                 Supplier<AuthContext> auth) {
+        AgentSpec spec = scenario.agent().orElseThrow();
+        AgentSpec.Script script = spec.plan().forRun(run);
+        AuthContext signedIn = auth.get();
+        ScriptedModel model = ScriptedModel.fromResource(Scenarios.class, "scripts/" + script.resource());
+        Clock clock = script.breach().filter(b -> b == BudgetLimit.WALL_CLOCK).isPresent()
+                ? new SteppingClock(stack.clock.instant(), WALL_CLOCK_STEP) : stack.clock;
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        RunId runId = new RunId("run-" + name);
+        RunTrace trace = new RunTrace(runId);
+        ScriptedUser user = new ScriptedUser(spec.userAnswers(), () -> stack.intentCount(signedIn.user()));
+        AgentRuntime runtime = new AgentRuntime(model, "scripted", stack.toolPorts(), runs, AgentBudget.DEFAULT,
+                ASK_TIMEOUT, clock);
+        Optional<RunOutcome> outcome = Optional.empty();
+        Optional<String> abort = Optional.empty();
+        try {
+            outcome = Optional.of(runtime.run(signedIn, runId, spec.userMessage(), user, trace));
+            model.checkToolSequence();
+        } catch (ScriptDriftException e) {
+            abort = Optional.of("agent run: the script drifted");
+        } catch (RuntimeException e) {
+            abort = Optional.of("agent run threw " + e.getClass().getSimpleName());
+        }
+        Optional<RunRecord> record = runs.find(signedIn.user(), runId);
+        String type = outcome.map(o -> o.getClass().getSimpleName()).orElse("aborted");
+        Optional<String> breach = outcome.filter(o -> o instanceof RunOutcome.BudgetExceeded)
+                .map(o -> ((RunOutcome.BudgetExceeded) o).which().name());
+        Optional<RunEvidence.AgentRun> evidence = record.map(r -> new RunEvidence.AgentRun(r, trace.jsonl(), type,
+                breach, user.asks(), user.intentsAtFirstAsk()));
+        if (record.isEmpty()) {
+            abort = abort.or(() -> Optional.of("agent run left no run record"));
+        }
+        return new AgentResult(record.map(RunRecord::intentIds).orElse(List.of()), abort, evidence);
+    }
+
+    /**
+     * The agent row's own claim, checked once the proxy is quiet. S12: {@code ask_user} was called and the user had no
+     * intent when it first was. Section 8: no intent, no approval, only discovery and catalog reads on the wire (no
+     * {@code /checkout-sessions} request), and no order at the merchant, which was reset at the start of the run.
+     */
+    private Optional<String> claimFailed(AgentSpec spec, Optional<RunEvidence.AgentRun> agentRun, AgentStack stack,
+                                         UserId user, List<LogEntry> log) {
+        if (spec.askFirst()) {
+            if (agentRun.isEmpty() || agentRun.get().asks() == 0) {
+                return Optional.of("S12 claim: the agent never called ask_user");
+            }
+            if (agentRun.get().intentsAtFirstAsk().orElse(-1) != 0) {
+                return Optional.of("S12 claim: an intent existed when ask_user was first called");
+            }
+        }
+        if (spec.noSideEffects()) {
+            if (stack.intentCount(user) != 0) {
+                return Optional.of("section 8 claim: the run left an intent");
+            }
+            if (stack.approvalCount(user) != 0) {
+                return Optional.of("section 8 claim: the run left an approval");
+            }
+            Optional<LogEntry> write = log.stream().filter(l -> !isRead(l)).findFirst();
+            if (write.isPresent()) {
+                return Optional.of("section 8 claim: " + write.get().method() + " " + write.get().path()
+                        + " is not a discovery or catalog read");
+            }
+            if (!lane.groundTruth().orders().isEmpty()) {
+                return Optional.of("section 8 claim: the merchant has an order");
+            }
+        }
+        return Optional.empty();
+    }
+
+    /** Discovery, or a catalog read (6.3: search, lookup and product are reads, although UCP sends them as POST). */
+    static boolean isRead(LogEntry l) {
+        return (l.method().equals("GET") && l.path().equals("/.well-known/ucp"))
+                || (l.method().equals("POST") && new PathPattern(HostileText.CATALOG).matches(l.path()));
+    }
+
+    /**
+     * A-B's wall-clock run: a clock that moves {@code step} forward on every read, so the runtime's 30 s budget is
+     * used up in a few calls, deterministically, without the run waiting for it.
+     */
+    private static final class SteppingClock extends Clock {
+        private final Instant start;
+        private final Duration step;
+        private final AtomicLong reads = new AtomicLong();
+
+        SteppingClock(Instant start, Duration step) {
+            this.start = start;
+            this.step = step;
+        }
+
+        @Override
+        public Instant instant() {
+            return start.plus(step.multipliedBy(reads.getAndIncrement()));
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            throw new UnsupportedOperationException("UTC only");
+        }
     }
 
     /** Two {@code propose} calls released at the same instant on two threads. */
