@@ -1,6 +1,7 @@
 package dev.ucplab.service.config;
 
 import dev.ucplab.core.approval.ApprovalSecret;
+import dev.ucplab.core.agent.ModelKey;
 import dev.ucplab.core.config.AgentProfile;
 import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantId;
@@ -13,6 +14,7 @@ import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.regex.Pattern;
 
 /**
@@ -25,7 +27,9 @@ import java.util.regex.Pattern;
  * and in prod not a {@code change-me} placeholder, 9.2); {@code POLICY_FILE} (optional, {@link PolicyFile}; prod refuses
  * {@code approval_required: false}, P6); {@code MERCHANT_URL}, the one merchant of M6 as the agent reaches it (25.4:
  * "M6 configures its one merchant directly"; default the proxy at {@code http://127.0.0.1:9101}); {@code LOCAL_USERS},
- * the names the local dev sign-in offers (18.8, default {@code alice,bob}); {@code PUBLIC_ORIGIN}, a
+ * the names the local dev sign-in offers (18.8, default {@code alice,bob}); {@code AGENT_MODEL} ({@code scripted} by default, or
+ * {@code gemini}, which needs {@code GEMINI_API_KEY}; {@code GEMINI_BASE_URL} may point it at a loopback stub);
+ * {@code PUBLIC_ORIGIN}, a
  * comma-separated list of the origins a browser shows for this service, which the dev sign-in checks {@code Origin}
  * against (m6-plan section 4; default {@code http://localhost:8080,http://127.0.0.1:8080}).
  */
@@ -40,7 +44,13 @@ public final class ServiceProperties {
     static final String APPROVAL_OFF = "POLICY_FILE turns approval off, which the prod profile refuses";
     static final String MERCHANT_INVALID = "MERCHANT_URL must be an http URL";
     static final String USERS_INVALID = "LOCAL_USERS must be a comma-separated list of lowercase names";
+    static final String MODEL_INVALID = "AGENT_MODEL must be scripted or gemini";
+    static final String MODEL_KEY_REQUIRED = "AGENT_MODEL=gemini needs GEMINI_API_KEY";
+    static final String MODEL_URL_INVALID = "GEMINI_BASE_URL must be an http URL on a loopback address";
     static final String ORIGIN_INVALID = "PUBLIC_ORIGIN must be a scheme, host and optional port, with no path";
+
+    /** Which model drives the agent (25.4 {@code AGENT_MODEL}); {@code scripted} needs no key and no network. */
+    public enum AgentModel { SCRIPTED, GEMINI }
 
     /** The id of M6's one merchant (25.3 {@code merchant-a}). */
     public static final MerchantId MERCHANT = new MerchantId("merchant-a");
@@ -60,10 +70,14 @@ public final class ServiceProperties {
     private final MerchantEntry merchant;
     private final List<String> localUsers;
     private final List<String> publicOrigins;
+    private final AgentModel agentModel;
+    private final Optional<ModelKey> modelKey;
+    private final Optional<URI> modelBaseUrl;
 
     private ServiceProperties(AgentProfile profile, Path databaseFile, byte[] approvalSecret, ApprovalSecret approvalKey,
                               PolicyConfig policy, MerchantEntry merchant, List<String> localUsers,
-                              List<String> publicOrigins) {
+                              List<String> publicOrigins, AgentModel agentModel, Optional<ModelKey> modelKey,
+                              Optional<URI> modelBaseUrl) {
         this.profile = profile;
         this.databaseFile = databaseFile;
         this.approvalSecret = approvalSecret;
@@ -72,6 +86,9 @@ public final class ServiceProperties {
         this.merchant = merchant;
         this.localUsers = localUsers;
         this.publicOrigins = publicOrigins;
+        this.agentModel = agentModel;
+        this.modelKey = modelKey;
+        this.modelBaseUrl = modelBaseUrl;
     }
 
     /** Reads and checks every setting; throws {@link IllegalStateException} with a fixed message on the first refusal. */
@@ -134,8 +151,37 @@ public final class ServiceProperties {
             throw new IllegalStateException(USERS_INVALID);
         }
 
+        AgentModel agentModel = switch (env.get("AGENT_MODEL").orElse("scripted")) {
+            case "scripted" -> AgentModel.SCRIPTED;
+            case "gemini" -> AgentModel.GEMINI;
+            default -> throw new IllegalStateException(MODEL_INVALID);
+        };
+        // The key is read here, through Environment, and nowhere else (I8). It is held only as a ModelKey.
+        Optional<ModelKey> modelKey = env.get("GEMINI_API_KEY").map(ModelKey::of);
+        if (agentModel == AgentModel.GEMINI && modelKey.isEmpty()) {
+            throw new IllegalStateException(MODEL_KEY_REQUIRED);
+        }
+        Optional<URI> modelBaseUrl = env.get("GEMINI_BASE_URL").map(ServiceProperties::loopbackUrl);
+
         return new ServiceProperties(profile, databaseFile, secretBytes, approvalKey, policy, merchant, localUsers,
-                origins(env.get("PUBLIC_ORIGIN").orElse(DEFAULT_ORIGINS)));
+                origins(env.get("PUBLIC_ORIGIN").orElse(DEFAULT_ORIGINS)), agentModel,
+                agentModel == AgentModel.GEMINI ? modelKey : Optional.empty(), modelBaseUrl);
+    }
+
+    /** A test points the live client at a loopback stub; any other host could receive the key, so it is refused. */
+    private static URI loopbackUrl(String value) {
+        URI uri;
+        try {
+            uri = new URI(value);
+        } catch (URISyntaxException e) {
+            throw new IllegalStateException(MODEL_URL_INVALID);
+        }
+        String host = uri.getHost();
+        boolean loopback = "localhost".equals(host) || "127.0.0.1".equals(host) || "[::1]".equals(host);
+        if (!"http".equals(uri.getScheme()) || !loopback || uri.getRawUserInfo() != null) {
+            throw new IllegalStateException(MODEL_URL_INVALID);
+        }
+        return uri;
     }
 
     private static List<String> origins(String value) {
@@ -186,6 +232,20 @@ public final class ServiceProperties {
     /** The origins a browser shows for this service, each as {@code scheme://host[:port]}. */
     public List<String> publicOrigins() {
         return publicOrigins;
+    }
+
+    public AgentModel agentModel() {
+        return agentModel;
+    }
+
+    /** The live model's key: present only when {@code AGENT_MODEL=gemini}. It never prints (I8). */
+    public Optional<ModelKey> modelKey() {
+        return modelKey;
+    }
+
+    /** A loopback endpoint for the live client, for tests; empty means the provider's own. */
+    public Optional<URI> modelBaseUrl() {
+        return modelBaseUrl;
     }
 
     /** The key for approval tokens, built with {@code ofProduction} in prod (9.2). */

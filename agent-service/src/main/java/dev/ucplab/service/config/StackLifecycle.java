@@ -12,7 +12,7 @@ import org.springframework.context.SmartLifecycle;
 
 /**
  * Starts the recovery loop, and on shutdown stops the stack in order (m6-plan Stage 2 review, point 6): first the
- * loop, with a grace period for a pass in progress; then the drivers, which may finish their step within the same
+ * run supervisor ({@code beforeStop}: waiting runs end interrupted, running ones get the grace), then the loop, with a grace period for a pass in progress; then the drivers, which may finish their step within the same
  * grace before they are interrupted; and only then the database, so no driver ever writes to a closed pool.
  *
  * <p>Its phase is below the web server's, so it starts before the server accepts a request and stops after the server
@@ -26,6 +26,7 @@ public final class StackLifecycle implements SmartLifecycle {
 
     private static final System.Logger LOG = System.getLogger(StackLifecycle.class.getName());
 
+    private final Runnable beforeStop;
     private final RecoveryLoop loop;
     private final ExecutorService drivers;
     private final ScheduledExecutorService scheduler;
@@ -33,8 +34,9 @@ public final class StackLifecycle implements SmartLifecycle {
     private final Duration grace;
     private final AtomicBoolean running = new AtomicBoolean();
 
-    StackLifecycle(RecoveryLoop loop, ExecutorService drivers, ScheduledExecutorService scheduler, Database db,
+    StackLifecycle(Runnable beforeStop, RecoveryLoop loop, ExecutorService drivers, ScheduledExecutorService scheduler, Database db,
                    Duration grace) {
+        this.beforeStop = Objects.requireNonNull(beforeStop, "beforeStop");
         this.loop = Objects.requireNonNull(loop, "loop");
         this.drivers = Objects.requireNonNull(drivers, "drivers");
         this.scheduler = Objects.requireNonNull(scheduler, "scheduler");
@@ -55,6 +57,7 @@ public final class StackLifecycle implements SmartLifecycle {
             return;
         }
         try {
+            beforeStop.run();
             if (!loop.close(grace)) {
                 LOG.log(System.Logger.Level.WARNING, "shutdown: a recovery pass was interrupted");
             }

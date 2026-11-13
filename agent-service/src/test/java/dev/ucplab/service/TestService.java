@@ -73,6 +73,12 @@ final class TestService implements AutoCloseable {
      */
     static TestService start(Path dir, Map<String, String> extra, Optional<Clock> clock, List<Class<?>> beans,
                              Optional<IntentDriver> driver) throws IOException {
+        return start(dir, extra, clock, beans, driver, Map.of());
+    }
+
+    /** With extra singletons by bean name, such as a {@code ModelClient} or a {@code RunSupervisorConfig}. */
+    static TestService start(Path dir, Map<String, String> extra, Optional<Clock> clock, List<Class<?>> beans,
+                             Optional<IntentDriver> driver, Map<String, Object> singletons) throws IOException {
         LabMerchant merchant = LabMerchant.start();
         byte[] hmac = new byte[32];
         new SecureRandom().nextBytes(hmac);
@@ -85,6 +91,7 @@ final class TestService implements AutoCloseable {
                 context.getBeanFactory().registerSingleton("testRecoveryConfig", NO_PASSES);
                 clock.ifPresent(c -> context.getBeanFactory().registerSingleton("testClock", c));
                 driver.ifPresent(d -> context.getBeanFactory().registerSingleton("testIntentDriver", d));
+                singletons.forEach((name, bean) -> context.getBeanFactory().registerSingleton(name, bean));
                 beans.forEach(b -> ((GenericApplicationContext) context).registerBean(b));
             };
             ConfigurableApplicationContext context = ServiceApplication.start(Environment.of(env), List.of(overrides),

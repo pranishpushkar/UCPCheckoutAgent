@@ -24,6 +24,7 @@ import dev.ucplab.persistence.SqlRecoveryScan;
 import dev.ucplab.persistence.SqlRunRepository;
 import dev.ucplab.persistence.SqlSessionRepository;
 import dev.ucplab.persistence.SqlUserRepository;
+import dev.ucplab.service.run.RunSupervisor;
 import dev.ucplab.service.web.IntentDriver;
 import dev.ucplab.ucp.CircuitBreakers;
 import dev.ucplab.ucp.JdkHttpTransport;
@@ -230,9 +231,9 @@ public class StackConfiguration {
     }
 
     @Bean
-    StackLifecycle stackLifecycle(RecoveryLoop loop, Drivers drivers, ScheduledExecutorService recoveryScheduler,
-                                  Database db) {
-        return new StackLifecycle(loop, drivers.executor(), recoveryScheduler, db, StackLifecycle.DEFAULT_GRACE);
+    StackLifecycle stackLifecycle(RunSupervisor supervisor, RecoveryLoop loop, Drivers drivers,
+                                  ScheduledExecutorService recoveryScheduler, Database db) {
+        return new StackLifecycle(() -> supervisor.close(StackLifecycle.DEFAULT_GRACE), loop, drivers.executor(), recoveryScheduler, db, StackLifecycle.DEFAULT_GRACE);
     }
 
     private static ThreadFactory named(String prefix, boolean daemon) {
