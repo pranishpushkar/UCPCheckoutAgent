@@ -31,6 +31,17 @@ class OutageAndRaceScenariosTest {
 
     private static final PathPattern COMPLETE = new PathPattern(Scenarios.COMPLETE);
     private static final TimeScale SCALE = TimeScale.of(4);
+    /**
+     * How far past the outage the last refused request may land: the clear's own latency. The clearer's timer starts
+     * after the rules are installed, sleeps the outage, then sends the admin DELETE; a request that reaches the proxy
+     * between the timer's end and the DELETE taking effect is still refused. Across 15 green verify runs S8 run 1's
+     * window was 4,964 to 4,995 ms against the 5,000 ms outage, and the one failure measured 5,008.9 ms, so the clear has
+     * been seen to take about 9 ms past the timer. 100 ms is about ten times that, for a virtual thread waking late
+     * under a loaded CI JVM, and stays below the roughly 140 ms between refused requests at this scale (33 to 35 over
+     * the window), so a clear late by about one request interval or more still fails here. "Nothing refused after the
+     * clear" is checked separately and has no tolerance.
+     */
+    private static final Duration CLEAR_LATENCY = Duration.ofMillis(100);
 
     private Lane lane;
     private final List<List<RunScript.RaceOutcome>> races = new ArrayList<>();
@@ -127,8 +138,8 @@ class OutageAndRaceScenariosTest {
                     .allSatisfy(l -> assertThat(l.forwards()).isZero());
             assertThat(refused).anySatisfy(l -> assertThat(l.method()).isEqualTo("GET"));
             Duration window = Duration.between(refused.getFirst().at(), refused.getLast().at());
-            assertThat(window).as("run %d: the window lasted no longer than the outage", run)
-                    .isLessThanOrEqualTo(SCALE.s8Outage());
+            assertThat(window).as("run %d: the window lasted no longer than the outage and the clear's latency", run)
+                    .isLessThanOrEqualTo(SCALE.s8Outage().plus(CLEAR_LATENCY));
             assertThat(after).as("run %d: nothing refused once the window was cleared", run)
                     .allSatisfy(l -> assertThat(l.ruleId()).isEmpty());
             if (intent(e).state() == IntentState.COMPLETED) {
