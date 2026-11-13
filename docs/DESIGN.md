@@ -663,9 +663,17 @@ CREATE TABLE agent_run_tool_event (           -- names and our own fixed codes o
   took_ms INTEGER NOT NULL CHECK (took_ms >= 0),
   PRIMARY KEY (run_id, seq)
 );
+CREATE TABLE agent_run_turn (                 -- turn 0 is the run's start; each continuation adds one (23.1)
+  run_id TEXT NOT NULL REFERENCES agent_run(id),
+  seq INTEGER NOT NULL CHECK (seq >= 0),
+  user_id TEXT NOT NULL,                      -- copied from the run in the INSERT that checks the owner
+  started_at TEXT NOT NULL,
+  PRIMARY KEY (run_id, seq)
+);
+CREATE INDEX ix_run_turn_user ON agent_run_turn(user_id, started_at);
 ```
 
-**Runs (M6, migration V5).** A run row holds names, counts, codes and times only: never the system prompt, a user message, model text, an `ask_user` question or answer, tool arguments or results, or an exception message (I8, 23.1). The single `intent_id` column of Draft v3 became `agent_run_intent`, because one run can propose several intents. `app_user` and `user_session` arrive in M6 (migration V6, for the local sign-in of 18.8); `login_state` arrives with OIDC in M6b.
+**Runs (M6, migration V5).** A run row holds names, counts, codes and times only: never the system prompt, a user message, model text, an `ask_user` question or answer, tool arguments or results, or an exception message (I8, 23.1). The single `intent_id` column of Draft v3 became `agent_run_intent`, because one run can propose several intents. The hourly run limit (P5) counts rows of `agent_run_turn`, so a continuation counts as a run and the cap of 5 continuations is at most 6 turns per run (23.1); a turn holds a time only. `app_user` and `user_session` arrive in M6 (migration V6, for the local sign-in of 18.8); `login_state` arrives with OIDC in M6b.
 
 **Guards in the schema (M3, migration V4).** The tables above carry `CHECK`s on `state`, `op` and `status` (the values of the Java enums, tested), `cancel_pending IN (0, 1)` and non-negative counters, plus `CHECK (state <> 'COMPLETED' OR order_id IS NOT NULL)` and `UNIQUE (merchant_id, order_id) WHERE order_id IS NOT NULL`. They do not make at-most-one-order by themselves: a resend legitimately writes several `COMPLETE` attempt rows under one key, and the merchant owns order creation (7.4, 7.5). There is deliberately no `UNIQUE (intent_id) WHERE status = 'SENT'`: a crash leaves a `SENT` row that recovery must be free to supersede. Indexes serve `claimRecoverable` and `RecoveryScan.approvalsDue` (7.6).
 

@@ -207,4 +207,53 @@ class MigrationsTest {
         }
         throw new AssertionError("no CHECK list for " + column);
     }
+
+    // Covers: section 10 (V5 creates the run tables and their indexes on an empty database)
+    @Test
+    void v5_createsTheRunTables_fromEmpty() {
+        Path file = dir.resolve("v5.db");
+        Migrations.migrate(file);
+
+        try (Database db = Database.open(file, 1)) {
+            assertThat(column(db, "SELECT name FROM sqlite_master WHERE type = 'table'"))
+                    .contains("agent_run", "agent_run_intent", "agent_run_tool_event", "agent_run_turn");
+            assertThat(column(db, "SELECT name FROM sqlite_master WHERE type = 'index'"))
+                    .contains("ix_run_user", "ix_run_intent", "ix_run_turn_user");
+            assertThat(column(db, "SELECT version FROM flyway_schema_history WHERE success = 1 ORDER BY installed_rank"))
+                    .contains("5");
+        }
+    }
+
+    // Covers: section 10 (V5 on a database at V4 keeps its intents and adds the run tables)
+    @Test
+    void v5_onAV4Database_keepsItsRows() {
+        Path file = dir.resolve("v4-to-v5.db");
+        Flyway.configure().dataSource("jdbc:sqlite:" + file, null, null).locations("classpath:db/migration")
+                .target("4").load().migrate();
+        try (Database old = Database.open(file, 1)) {
+            exec(old, intent("i1", "m", "k1", "AWAITING_APPROVAL", null));
+            assertThat(column(old, "SELECT name FROM sqlite_master WHERE type = 'table'")).doesNotContain("agent_run");
+        }
+
+        Migrations.migrate(file);
+
+        try (Database db = Database.open(file, 1)) {
+            assertThat(column(db, "SELECT id FROM purchase_intent")).containsExactly("i1");
+            assertThat(column(db, "SELECT name FROM sqlite_master WHERE type = 'table'"))
+                    .contains("agent_run", "agent_run_turn");
+            exec(db, "INSERT INTO agent_run (id, user_id, model, started_at, updated_at) VALUES ('r', 'u', 'm', 't', 't')");
+            assertThat(column(db, "SELECT id FROM agent_run")).containsExactly("r");
+        }
+    }
+
+    // Covers: section 10, 23.1 (the outcome CHECK lists exactly the statuses a stored run can end with)
+    @Test
+    void v5_outcomeCheck_listsTheEndedStatuses() throws IOException {
+        String sql = Files.readString(Path.of("src/main/resources/db/migration/V5__agent_run.sql"));
+        Matcher m = Pattern.compile("outcome IN \\(([^)]*)\\)").matcher(sql);
+
+        assertThat(m.find()).isTrue();
+        assertThat(new TreeSet<>(List.of(m.group(1).replace("'", "").split(","))))
+                .containsExactlyInAnyOrder("done", "waiting_for_approval", "budget_exceeded", "user_timeout", "failed");
+    }
 }
