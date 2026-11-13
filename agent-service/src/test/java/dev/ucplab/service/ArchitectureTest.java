@@ -137,6 +137,16 @@ class ArchitectureTest {
                 .noneMatch(t -> t.getName().equals("java.util.random.RandomGenerator"));
     }
 
+    // Covers: 7.8 (the run supervisor holds no lock: it moves a run's phase by compare-and-set, so nothing is held across a
+    // model or merchant call; the source scan below covers synchronized)
+    @Test
+    void runSupervisor_usesNoLocks() {
+        noClasses()
+                .that().resideInAPackage("dev.ucplab.service.run..")
+                .should().dependOnClassesThat().resideInAnyPackage("java.util.concurrent.locks..")
+                .check(PRODUCTION_CLASSES);
+    }
+
     // Covers: 7.8 (no synchronized block or method anywhere in agent-service's main source)
     @Test
     void source_hasNoSynchronized_always() throws IOException {

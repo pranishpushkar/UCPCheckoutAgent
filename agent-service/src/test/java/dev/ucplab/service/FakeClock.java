@@ -8,15 +8,15 @@ import java.time.ZoneOffset;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** A clock the test moves by hand; safe to read from the service's threads. */
-final class FakeClock extends Clock {
+public final class FakeClock extends Clock {
 
     private final AtomicReference<Instant> now;
 
-    FakeClock(Instant start) {
+    public FakeClock(Instant start) {
         now = new AtomicReference<>(start);
     }
 
-    void advance(Duration d) {
+    public void advance(Duration d) {
         now.updateAndGet(t -> t.plus(d));
     }
 

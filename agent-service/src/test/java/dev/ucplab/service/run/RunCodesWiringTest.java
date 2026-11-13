@@ -81,7 +81,7 @@ class RunCodesWiringTest {
         assertThat(fromCode).contains("model_error", "tool_error", "internal_error", "script_drift", "WALL_CLOCK");
         Set<String> check = checkList("reason");
         assertThat(check).containsAll(fromCode);
-        assertThat(check).containsExactlyInAnyOrderElementsOf(unionWith(fromCode, RunSupervisorCodes.SERVICE_REASONS));
+        assertThat(check).containsExactlyInAnyOrderElementsOf(unionWith(fromCode, Set.of(RunSupervisor.INTERRUPTED)));
     }
 
     private static Set<String> unionWith(Set<String> a, Set<String> b) {
