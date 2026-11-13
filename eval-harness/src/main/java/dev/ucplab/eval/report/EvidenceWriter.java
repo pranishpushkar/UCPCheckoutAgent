@@ -101,6 +101,7 @@ public final class EvidenceWriter {
         m.put("upstreamError", l.upstreamError());
         m.put("clientGone", l.clientGone());
         m.put("settled", l.settled());
+        m.put("rewrite", opt(l.rewrite()));
         return m;
     }
 

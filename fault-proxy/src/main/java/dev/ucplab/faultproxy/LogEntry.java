@@ -16,13 +16,16 @@ import java.util.OptionalInt;
  * {@code forwarded} is {@code forwards > 0}. A copy counts once it is handed to the HTTP client, so a copy that could
  * not reach the merchant is counted and also flagged {@code upstreamError}.
  *
+ * <p>{@code rewrite} is set only for {@code forward_then_rewrite_response}: {@code replaced}, {@code no_match} (a JSON
+ * body without the literal) or {@code not_json}; it says whether a replacement happened, never the strings (§12).
+ *
  * <p>{@code settled} turns true exactly once, after the last thing the proxy does for the request (§12): until then
  * the request may still reach the merchant or the client.
  */
 public record LogEntry(long seq, Instant at, String method, String path, Optional<String> requestId,
                        Optional<String> idempotencyKey, Optional<String> bodyHmac, int forwards,
                        OptionalInt merchantStatus, Optional<String> action, Optional<String> ruleId,
-                       boolean upstreamError, boolean clientGone, boolean settled) {
+                       boolean upstreamError, boolean clientGone, boolean settled, Optional<String> rewrite) {
 
     public LogEntry {
         Objects.requireNonNull(at, "at");
@@ -34,9 +37,19 @@ public record LogEntry(long seq, Instant at, String method, String path, Optiona
         Objects.requireNonNull(merchantStatus, "merchantStatus");
         Objects.requireNonNull(action, "action");
         Objects.requireNonNull(ruleId, "ruleId");
+        Objects.requireNonNull(rewrite, "rewrite");
         if (forwards < 0 || forwards > 2) {
             throw new IllegalArgumentException("forwards must be 0, 1 or 2: " + forwards);
         }
+    }
+
+    /** An entry with no rewrite outcome. */
+    public LogEntry(long seq, Instant at, String method, String path, Optional<String> requestId,
+                    Optional<String> idempotencyKey, Optional<String> bodyHmac, int forwards,
+                    OptionalInt merchantStatus, Optional<String> action, Optional<String> ruleId,
+                    boolean upstreamError, boolean clientGone, boolean settled) {
+        this(seq, at, method, path, requestId, idempotencyKey, bodyHmac, forwards, merchantStatus, action, ruleId,
+                upstreamError, clientGone, settled, Optional.empty());
     }
 
     public boolean forwarded() {
@@ -45,22 +58,27 @@ public record LogEntry(long seq, Instant at, String method, String path, Optiona
 
     LogEntry withForward() {
         return new LogEntry(seq, at, method, path, requestId, idempotencyKey, bodyHmac, forwards + 1, merchantStatus,
-                action, ruleId, upstreamError, clientGone, settled);
+                action, ruleId, upstreamError, clientGone, settled, rewrite);
     }
 
     LogEntry withMerchantStatus(int status) {
         return new LogEntry(seq, at, method, path, requestId, idempotencyKey, bodyHmac, forwards,
-                OptionalInt.of(status), action, ruleId, upstreamError, clientGone, settled);
+                OptionalInt.of(status), action, ruleId, upstreamError, clientGone, settled, rewrite);
     }
 
     LogEntry withUpstreamError() {
         return new LogEntry(seq, at, method, path, requestId, idempotencyKey, bodyHmac, forwards, merchantStatus,
-                action, ruleId, true, clientGone, settled);
+                action, ruleId, true, clientGone, settled, rewrite);
     }
 
     LogEntry withClientGone() {
         return new LogEntry(seq, at, method, path, requestId, idempotencyKey, bodyHmac, forwards, merchantStatus,
-                action, ruleId, upstreamError, true, settled);
+                action, ruleId, upstreamError, true, settled, rewrite);
+    }
+
+    LogEntry withRewrite(String outcome) {
+        return new LogEntry(seq, at, method, path, requestId, idempotencyKey, bodyHmac, forwards, merchantStatus,
+                action, ruleId, upstreamError, clientGone, settled, Optional.of(outcome));
     }
 
     LogEntry withSettled() {
@@ -68,7 +86,7 @@ public record LogEntry(long seq, Instant at, String method, String path, Optiona
             throw new IllegalStateException("entry " + seq + " is already settled");
         }
         return new LogEntry(seq, at, method, path, requestId, idempotencyKey, bodyHmac, forwards, merchantStatus,
-                action, ruleId, upstreamError, clientGone, true);
+                action, ruleId, upstreamError, clientGone, true, rewrite);
     }
 
     /** The JSON form served by {@code GET /_proxy/log}; absent values are JSON {@code null}. */
@@ -89,6 +107,7 @@ public record LogEntry(long seq, Instant at, String method, String path, Optiona
         m.put("upstreamError", upstreamError);
         m.put("clientGone", clientGone);
         m.put("settled", settled);
+        m.put("rewrite", orNull(rewrite));
         return m;
     }
 

@@ -280,6 +280,8 @@ public final class FaultProxy implements AutoCloseable {
                 }
                 case Action.DuplicateRequest d -> sendReply(ex, seq, duplicate(seq, request, d.mode()));
                 case Action.CorruptResponse c -> sendReply(ex, seq, corrupt(forward(seq, request, true), c.kind()));
+                case Action.ForwardThenRewriteResponse w -> sendReply(ex, seq, rewrite(seq, forward(seq, request, true),
+                        w));
             }
         } catch (IOException e) {
             // The merchant could not be reached or its reply could not be read: close with no reply (Uncertain, 8.1).
@@ -352,6 +354,36 @@ public final class FaultProxy implements AutoCloseable {
             }
         };
         return new UpstreamReply(reply.status(), reply.headers(), out);
+    }
+
+    /**
+     * Replaces every occurrence of the rule's literal in a JSON body; a body that is not JSON (it does not parse, as
+     * UTF-8 JSON) or holds no occurrence is returned as it came. The outcome goes into the log, never the strings or
+     * the body (I8). {@link #sendReply} sends the new length as {@code Content-Length}.
+     */
+    private UpstreamReply rewrite(long seq, UpstreamReply reply, Action.ForwardThenRewriteResponse rule) {
+        String body = new String(reply.body(), StandardCharsets.UTF_8);
+        String outcome;
+        byte[] out = reply.body();
+        if (!isJson(body)) {
+            outcome = "not_json";
+        } else if (!body.contains(rule.find())) {
+            outcome = "no_match";
+        } else {
+            outcome = "replaced";
+            out = body.replace(rule.find(), rule.replace()).getBytes(StandardCharsets.UTF_8);
+        }
+        log.update(seq, e -> e.withRewrite(outcome));
+        return new UpstreamReply(reply.status(), reply.headers(), out);
+    }
+
+    private static boolean isJson(String body) {
+        try {
+            Json.read(body);
+            return true;
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
     }
 
     /** The merchant's complete reply to one forwarded copy. */
