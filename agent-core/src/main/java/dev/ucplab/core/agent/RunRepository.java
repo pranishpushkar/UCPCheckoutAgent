@@ -51,6 +51,12 @@ public interface RunRepository {
     /** How many turns of the owner's runs started at or after {@code from} (P5's window, 23.1). */
     int turnsSince(UserId owner, Instant from);
 
+    /**
+     * When the owner's run was last written (insert, update or turn), from the repository's clock; empty when the run
+     * is missing or someone else's (T6). The orphan rule (23.1) reads it, so no system read is needed.
+     */
+    Optional<Instant> updatedAt(UserId owner, RunId id);
+
     /** Evaluation harness only (T2): the run, whoever owns it. */
     Optional<RunRecord> findForSystem(RunId id);
 }

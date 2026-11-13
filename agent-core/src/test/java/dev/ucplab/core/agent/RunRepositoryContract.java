@@ -41,6 +41,17 @@ public abstract class RunRepositoryContract {
                         new ToolEvent("propose_purchase", "ok", Duration.ofMillis(90))));
     }
 
+    // Covers: 23.1, T2, T6 (updatedAt is the owner's own: present for a stored run, empty for another user's or a missing
+    // one, and never earlier than the run's insert)
+    @Test
+    void updatedAt_isOwnerScoped() {
+        repo.insert(ALICE, RunRecord.started(new RunId("r1"), ALICE, "scripted", T0));
+
+        assertThat(repo.updatedAt(ALICE, new RunId("r1"))).isPresent();
+        assertThat(repo.updatedAt(BOB, new RunId("r1"))).isEmpty();
+        assertThat(repo.updatedAt(ALICE, new RunId("missing"))).isEmpty();
+    }
+
     // Covers: section 10 agent_run, T2 (a run reads back as it was written, by its owner)
     @Test
     void insert_thenFindByOwner_roundTrips() {

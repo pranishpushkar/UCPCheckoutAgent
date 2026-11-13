@@ -11,7 +11,9 @@ CREATE TABLE agent_run (
   updated_at TEXT NOT NULL,
   ended_at TEXT,
   outcome TEXT CHECK (outcome IN ('done','waiting_for_approval','budget_exceeded','user_timeout','failed')),
-  reason TEXT,
+  -- Our own codes only: the failed reasons, and the name of the budget limit that ended the run (AgentRuntime).
+  reason TEXT CHECK (reason IN ('model_error','tool_error','internal_error','script_drift','interrupted',
+                                'MODEL_CALLS','TOOL_CALLS','WALL_CLOCK','TOKENS')),
   model_calls INTEGER NOT NULL DEFAULT 0 CHECK (model_calls >= 0),
   tool_calls INTEGER NOT NULL DEFAULT 0 CHECK (tool_calls >= 0),
   input_tokens INTEGER NOT NULL DEFAULT 0 CHECK (input_tokens >= 0),
@@ -35,7 +37,9 @@ CREATE TABLE agent_run_tool_event (
   run_id TEXT NOT NULL REFERENCES agent_run(id),
   seq INTEGER NOT NULL CHECK (seq >= 0),
   tool TEXT NOT NULL,
-  summary TEXT NOT NULL,
+  -- ToolOutcome's codes (m6-plan section 3.5); a plain IN list, portable to Postgres.
+  summary TEXT NOT NULL CHECK (summary IN ('ok','invalid_argument','unavailable','not_found','unknown_tool',
+                                           'no_answer')),
   took_ms INTEGER NOT NULL CHECK (took_ms >= 0),
   PRIMARY KEY (run_id, seq)
 );

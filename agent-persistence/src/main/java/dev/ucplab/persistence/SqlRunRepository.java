@@ -165,6 +165,22 @@ public final class SqlRunRepository implements RunRepository {
     }
 
     @Override
+    public Optional<Instant> updatedAt(UserId owner, RunId id) {
+        Objects.requireNonNull(owner, "owner");
+        Objects.requireNonNull(id, "id");
+        return db.read(c -> {
+            try (PreparedStatement s = c.prepareStatement(
+                    "SELECT updated_at FROM agent_run WHERE id = ? AND user_id = ?")) {
+                s.setString(1, id.value());
+                s.setString(2, owner.value());
+                try (ResultSet r = s.executeQuery()) {
+                    return r.next() ? Optional.of(SqlTimes.parse(r.getString(1))) : Optional.<Instant>empty();
+                }
+            }
+        });
+    }
+
+    @Override
     public Optional<RunRecord> findForSystem(RunId id) {
         Objects.requireNonNull(id, "id");
         return db.write(c -> runs(c, "id = ?", id.value()).stream().findFirst());

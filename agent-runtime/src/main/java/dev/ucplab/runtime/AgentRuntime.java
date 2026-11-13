@@ -31,10 +31,12 @@ import java.util.Optional;
  * <p>Every model and tool call is checked against the run's {@link BudgetMeter} first, and time waiting for the user is
  * left out of the wall clock. The user is the run's {@link AuthContext}, passed to each tool in its
  * {@link ToolContext}, never read from the model (T1). The run's {@link RunRecord} is stored under that user (T2) when
- * the run starts and updated when it ends; it holds names, counts and codes, never the prompt, model text or tool
+ * the run starts, updated after each tool call (so a run waiting in {@code ask_user} already shows its tool events and
+ * intents) and when it ends; it holds names, counts and codes, never the prompt, model text or tool
  * output (23.1).
  *
- * <p>A run is single-threaded, on the caller's thread. The runtime holds no lock and no mutable state of its own, so
+ * <p>{@link #resume} continues a settled conversation under a fresh budget; {@link #start} and {@code resume} return
+ * the final {@link Conversation} in a {@link RunSession}. A run is single-threaded, on the caller's thread. The runtime holds no lock and no mutable state of its own, so
  * runs can go on side by side, and nothing is held across a model or merchant call (7.8). A
  * {@link ScriptDriftException} from a scripted model ends the record as failed and is thrown on to the harness, which
  * counts the run as aborted.
@@ -76,30 +78,42 @@ public final class AgentRuntime {
 
     /** As {@link #run(AuthContext, RunId, String, UserChannel)}, writing the run's spans to {@code trace}. */
     public RunOutcome run(AuthContext auth, RunId id, String userMessage, UserChannel user, RunTrace trace) {
+        return start(auth, id, userMessage, user, trace).outcome();
+    }
+
+    /** Starts a run, as {@link #run(AuthContext, RunId, String, UserChannel, RunTrace)}, and returns its conversation too. */
+    public RunSession start(AuthContext auth, RunId id, String userMessage, UserChannel user, RunTrace trace) {
+        check(auth, id, userMessage, user, trace);
+        Run run = new Run(auth, id, user, trace, Optional.empty());
+        runs.insert(auth.user(), RunRecord.started(id, auth.user(), run.modelId, run.start));
+        return run.execute(new Conversation(SystemPrompt.text(), List.of()), userMessage);
+    }
+
+    /**
+     * Continues a settled run's conversation with the user's next message, under a fresh {@link BudgetMeter} (6.3, m6-plan
+     * Decision 3). The stored record is the run's own: its counts, intents and tool events carry on, and it goes back to
+     * "in progress" until this call ends it. An answer to {@code ask_user} is not a resume: that wait happens inside the
+     * run, under the same meter.
+     *
+     * @throws IllegalArgumentException if the caller has no run with this id
+     */
+    public RunSession resume(AuthContext auth, RunId id, Conversation history, String userMessage, UserChannel user,
+                             RunTrace trace) {
+        check(auth, id, userMessage, user, trace);
+        Objects.requireNonNull(history, "history");
+        RunRecord stored = runs.find(auth.user(), id)
+                .orElseThrow(() -> new IllegalArgumentException("no such run for this user"));
+        Run run = new Run(auth, id, user, trace, Optional.of(stored));
+        run.snapshot();
+        return run.execute(history, userMessage);
+    }
+
+    private static void check(AuthContext auth, RunId id, String userMessage, UserChannel user, RunTrace trace) {
         Objects.requireNonNull(auth, "auth");
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(userMessage, "userMessage");
         Objects.requireNonNull(user, "user");
         Objects.requireNonNull(trace, "trace");
-        Run run = new Run(auth, id, user, trace);
-        runs.insert(auth.user(), RunRecord.started(id, auth.user(), run.modelId, run.start));
-        RunOutcome outcome;
-        try {
-            outcome = run.loop(userMessage);
-        } catch (ScriptDriftException e) {
-            run.finishFailed("script_drift", e);
-            throw e;
-        } catch (RuntimeException e) {
-            run.finishFailed(INTERNAL_ERROR, e);
-            throw e;
-        }
-        try {
-            run.finish(outcome);
-        } catch (RuntimeException e) {
-            run.finishFailed(INTERNAL_ERROR, e);
-            throw e;
-        }
-        return outcome;
     }
 
     /** One run's state, confined to the run's thread. */
@@ -110,22 +124,68 @@ public final class AgentRuntime {
         private final BudgetMeter meter;
         private final ToolRegistry tools;
         private final String modelId;
+        /** When the run's record began; a resumed run keeps the original. */
         private final Instant start;
+        /** When this call began, for the trace's duration and the fresh meter. */
+        private final Instant begun;
         private final List<IntentId> intents = new ArrayList<>();
         private final List<ToolEvent> events = new ArrayList<>();
+        private final int baseModelCalls;
+        private final int baseToolCalls;
+        private final long baseInputTokens;
+        private final long baseOutputTokens;
+        private Conversation conversation;
 
-        Run(AuthContext auth, RunId id, UserChannel user, RunTrace trace) {
+        Run(AuthContext auth, RunId id, UserChannel user, RunTrace trace, Optional<RunRecord> earlier) {
             this.auth = auth;
             this.context = new ToolContext(auth, id);
             this.trace = trace;
             this.meter = new BudgetMeter(budget, clock);
             this.tools = ToolRegistry.of(ports, (q, t) -> meter.waitingForUser(() -> user.ask(q, t)), askTimeout);
             this.modelId = modelName + "/" + SystemPrompt.VERSION;
-            this.start = clock.instant();
+            this.begun = clock.instant();
+            this.start = earlier.map(RunRecord::startedAt).orElse(begun);
+            earlier.ifPresent(r -> {
+                intents.addAll(r.intentIds());
+                events.addAll(r.toolEvents());
+            });
+            this.baseModelCalls = earlier.map(RunRecord::modelCalls).orElse(0);
+            this.baseToolCalls = earlier.map(RunRecord::toolCalls).orElse(0);
+            this.baseInputTokens = earlier.map(RunRecord::inputTokens).orElse(0L);
+            this.baseOutputTokens = earlier.map(RunRecord::outputTokens).orElse(0L);
         }
 
-        RunOutcome loop(String userMessage) {
-            Conversation conversation = new Conversation(SystemPrompt.text(), List.of(new Message.User(userMessage)));
+        /** Runs the loop from {@code history} plus the user's message, and ends the record whichever way it leaves. */
+        RunSession execute(Conversation history, String userMessage) {
+            RunOutcome outcome;
+            try {
+                outcome = loop(history.append(new Message.User(userMessage)));
+            } catch (ScriptDriftException e) {
+                finishFailed("script_drift", e);
+                throw e;
+            } catch (RuntimeException e) {
+                finishFailed(INTERNAL_ERROR, e);
+                throw e;
+            }
+            try {
+                finish(outcome);
+            } catch (RuntimeException e) {
+                finishFailed(INTERNAL_ERROR, e);
+                throw e;
+            }
+            return new RunSession(outcome, conversation);
+        }
+
+        /** The record as it stands, still in progress: tool events and intents show while the run waits (23.1). */
+        void snapshot() {
+            runs.update(auth.user(), new RunRecord(context.runId(), auth.user(), modelId, start, Optional.empty(),
+                    Optional.empty(), Optional.empty(), baseModelCalls + meter.modelCalls(),
+                    baseToolCalls + meter.toolCalls(), baseInputTokens + meter.usage().inputTokens(),
+                    baseOutputTokens + meter.usage().outputTokens(), intents, events));
+        }
+
+        RunOutcome loop(Conversation initial) {
+            conversation = initial;
             while (true) {
                 Optional<BudgetLimit> refused = meter.beforeModelCall();
                 if (refused.isPresent()) {
@@ -147,6 +207,7 @@ public final class AgentRuntime {
                 trace.llmCall(meter.modelCalls(), Duration.between(before, clock.instant()),
                         turn.usage().inputTokens(), turn.usage().outputTokens(), turn.toolCalls().size());
                 conversation = conversation.append(new Message.Model(turn.text(), turn.toolCalls()));
+                snapshot();
                 if (turn.toolCalls().isEmpty()) {
                     return new RunOutcome.Done(turn.text(), intents);
                 }
@@ -173,6 +234,7 @@ public final class AgentRuntime {
                         intents.add(r.intent().get());
                     }
                     conversation = conversation.append(new Message.ToolResult(call.id(), call.name(), outcome.json()));
+                    snapshot();
                     if (outcome instanceof ToolOutcome.NoAnswer) {
                         return new RunOutcome.UserTimedOut(
                                 call.arguments().get("question") instanceof String q ? q : "");
@@ -214,10 +276,12 @@ public final class AgentRuntime {
             Instant ended = end.isBefore(start) ? start : end;
             Optional<String> reason = detail.isEmpty() ? Optional.empty() : Optional.of(detail);
             runs.update(auth.user(), new RunRecord(context.runId(), auth.user(), modelId, start, Optional.of(ended),
-                    Optional.of(status), reason, meter.modelCalls(), meter.toolCalls(), meter.usage().inputTokens(),
-                    meter.usage().outputTokens(), intents, events));
-            trace.run(status, detail, meter.modelCalls(), meter.toolCalls(), meter.usage().inputTokens(),
-                    meter.usage().outputTokens(), Duration.between(start, ended));
+                    Optional.of(status), reason, baseModelCalls + meter.modelCalls(), baseToolCalls + meter.toolCalls(),
+                    baseInputTokens + meter.usage().inputTokens(), baseOutputTokens + meter.usage().outputTokens(),
+                    intents, events));
+            trace.run(status, detail, baseModelCalls + meter.modelCalls(), baseToolCalls + meter.toolCalls(),
+                    baseInputTokens + meter.usage().inputTokens(), baseOutputTokens + meter.usage().outputTokens(),
+                    Duration.between(begun, ended));
         }
 
         /** True when an intent of this run waits for the user's approval (23.1 {@code waiting_for_approval}). */

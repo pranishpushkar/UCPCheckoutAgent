@@ -148,4 +148,34 @@ class SqlRunRepositoryTest extends RunRepositoryContract {
         });
         assertThat(stored).isEqualTo(SqlTimes.format(T0.plusSeconds(60)) + "|null");
     }
+
+    // Covers: 23.1, 23.5, I8 (updatedAt reads the stored time, which came from the injected clock)
+    @Test
+    void updatedAt_readsTheStoredTime() {
+        repo.insert(ALICE, RunRecord.started(new RunId("r-ua"), ALICE, "scripted/v1", T0));
+
+        assertThat(repo.updatedAt(ALICE, new RunId("r-ua"))).contains(T0.plusSeconds(60));
+    }
+
+    // Covers: I8, 23.1 (a tool event's summary is one of our fixed codes; the database refuses any other text)
+    @Test
+    void toolEventSummary_outsideTheFixedCodes_isRefusedByTheDatabase() {
+        exec(raw("parent", "NULL", "NULL", "NULL", 0));
+
+        assertThatThrownBy(() -> exec("INSERT INTO agent_run_tool_event (run_id, seq, tool, summary, took_ms)"
+                + " VALUES ('parent', 0, 'search_catalog', 'canary text', 1)")).isInstanceOf(DatabaseException.class);
+        exec("INSERT INTO agent_run_tool_event (run_id, seq, tool, summary, took_ms)"
+                + " VALUES ('parent', 0, 'search_catalog', 'ok', 1)");
+    }
+
+    // Covers: I8, 23.1 (a run's reason is one of our fixed codes; the database refuses any other text)
+    @Test
+    void reason_outsideTheFixedCodes_isRefusedByTheDatabase() {
+        assertThatThrownBy(() -> exec(raw("x1", "'t'", "'failed'", "'canary text'", 0)))
+                .isInstanceOf(DatabaseException.class);
+        assertThatThrownBy(() -> exec(raw("x2", "'t'", "'failed'", "'wall_clock'", 0)))
+                .isInstanceOf(DatabaseException.class);
+        exec(raw("ok1", "'t'", "'budget_exceeded'", "'WALL_CLOCK'", 0));
+        exec(raw("ok2", "'t'", "'failed'", "'interrupted'", 0));
+    }
 }
