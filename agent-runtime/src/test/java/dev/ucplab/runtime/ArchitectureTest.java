@@ -2,10 +2,18 @@ package dev.ucplab.runtime;
 
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
+import static org.assertj.core.api.Assertions.assertThat;
 
+import com.tngtech.archunit.base.DescribedPredicate;
+import com.tngtech.archunit.core.domain.JavaClass;
 import com.tngtech.archunit.core.domain.JavaClasses;
+import com.tngtech.archunit.core.domain.JavaMethodCall;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.core.importer.ImportOption;
+import dev.ucplab.core.approval.ApprovalService;
+import dev.ucplab.core.merchant.MerchantGateway;
+import java.util.Set;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 
 class ArchitectureTest {
@@ -30,5 +38,32 @@ class ArchitectureTest {
                 .should().dependOnClassesThat()
                 .resideInAnyPackage("com.google..", "com.fasterxml..", "io.reactivex..", "reactor..")
                 .check(PRODUCTION_CLASSES);
+    }
+
+    // Covers: 6.2, I6 (the classes implementing Tool are exactly the five tools)
+    @Test
+    void architecture_toolImplementations_areExactlyTheFive() {
+        Set<String> tools = PRODUCTION_CLASSES.stream()
+                .filter(c -> c.isAssignableTo(Tool.class) && !c.isInterface())
+                .map(JavaClass::getSimpleName)
+                .collect(Collectors.toSet());
+
+        assertThat(tools).containsExactlyInAnyOrder("SearchCatalogTool", "GetProductTool", "ProposePurchaseTool",
+                "GetPurchaseStatusTool", "AskUserTool");
+    }
+
+    // Covers: I6, 9.3 L1 (nothing in agent-runtime approves, completes or cancels)
+    @Test
+    void architecture_runtimeNeverDecidesCompletesOrCancels_always() {
+        noClasses()
+                .should().callMethodWhere(target(ApprovalService.class, "decide"))
+                .orShould().callMethodWhere(target(MerchantGateway.class, "complete"))
+                .orShould().callMethodWhere(target(MerchantGateway.class, "cancel"))
+                .check(PRODUCTION_CLASSES);
+    }
+
+    private static DescribedPredicate<JavaMethodCall> target(Class<?> owner, String method) {
+        return DescribedPredicate.describe(owner.getSimpleName() + "." + method,
+                call -> call.getTargetOwner().isAssignableTo(owner) && call.getName().equals(method));
     }
 }
