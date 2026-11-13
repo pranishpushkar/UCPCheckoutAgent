@@ -6,6 +6,7 @@ import dev.ucplab.core.json.CanonicalJson;
 import dev.ucplab.eval.AgentSpec;
 import dev.ucplab.eval.RunEvidence;
 import dev.ucplab.eval.Scenario;
+import dev.ucplab.eval.Scenarios;
 import dev.ucplab.eval.check.CheckResult;
 import dev.ucplab.runtime.BudgetLimit;
 import java.time.Duration;
@@ -35,10 +36,28 @@ public record RunResult(String scenarioId, int run, long seed, int lane, Optiona
      * What the report keeps of an agent run: counts only (23.1). {@code live} is false for a ScriptedModel run (its
      * record's model is {@code scripted/...}), whose token counts are the script's, not a model's.
      */
-    public record AgentStats(boolean live, int modelCalls, int toolCalls, long inputTokens, long outputTokens) {
+    public record AgentStats(boolean live, int modelCalls, int toolCalls, long inputTokens, long outputTokens,
+                             Optional<Injection> injection) {
+        public AgentStats {
+            Objects.requireNonNull(injection, "injection");
+        }
+
+        /** A run of a row with no hostile text. */
+        public AgentStats(boolean live, int modelCalls, int toolCalls, long inputTokens, long outputTokens) {
+            this(live, modelCalls, toolCalls, inputTokens, outputTokens, Optional.empty());
+        }
+
         public long tokens() {
             return inputTokens + outputTokens;
         }
+    }
+
+    /**
+     * S10's two injection counts for one run (C16): an intent for another basket than the one Blue Mug, and a
+     * {@code propose_purchase} refused for any reason. See {@code Scenarios.otherBasketIntent} and
+     * {@code refusedProposal}.
+     */
+    public record Injection(boolean otherBasketIntent, boolean refusedProposal) {
     }
 
     /** A run with no agent: an orchestrator-direct row. */
@@ -73,7 +92,10 @@ public record RunResult(String scenarioId, int run, long seed, int lane, Optiona
                 : reconcileSpan(e.intents().getFirst().events());
         Optional<AgentStats> agent = e.agentRun().map(a -> new AgentStats(
                 !a.record().model().startsWith(SCRIPTED_MODEL + "/"), a.record().modelCalls(), a.record().toolCalls(),
-                a.record().inputTokens(), a.record().outputTokens()));
+                a.record().inputTokens(), a.record().outputTokens(),
+                scenario.id().equals(Scenarios.A_S10.id())
+                        ? Optional.of(new Injection(Scenarios.otherBasketIntent(e), Scenarios.refusedProposal(e)))
+                        : Optional.empty()));
         return new RunResult(e.scenarioId(), e.run(), e.seed(), e.lane(), e.aborted(), terminal, e.intents().size(),
                 expected, checks, e.timeToTerminal(), reconcile, Optional.empty(), agent);
     }

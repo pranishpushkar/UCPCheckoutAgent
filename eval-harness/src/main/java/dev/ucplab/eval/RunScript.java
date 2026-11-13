@@ -87,11 +87,13 @@ public final class RunScript {
     private final Consumer<List<RaceOutcome>> raceSeen;
     private final Semaphore childSlots;
     private final String canary;
+    private final Optional<LiveModel> live;
     /** Run by a fault window's clearer just before its DELETE; only a test sets it, to make a late clear late. */
     private volatile Runnable beforeClear = () -> { };
 
     public RunScript(Lane lane, TimeScale scale) {
-        this(lane, scale, t -> { }, r -> { }, new Semaphore(ChildProcess.MAX_CHILDREN), Canary.generate());
+        this(lane, scale, t -> { }, r -> { }, new Semaphore(ChildProcess.MAX_CHILDREN), Canary.generate(),
+                Optional.empty());
     }
 
     /**
@@ -99,7 +101,7 @@ public final class RunScript {
      *     for its whole length, so at most {@link ChildProcess#MAX_CHILDREN} child JVMs run at once
      */
     public RunScript(Lane lane, TimeScale scale, Semaphore childSlots) {
-        this(lane, scale, t -> { }, r -> { }, childSlots, Canary.generate());
+        this(lane, scale, t -> { }, r -> { }, childSlots, Canary.generate(), Optional.empty());
     }
 
     /**
@@ -107,17 +109,23 @@ public final class RunScript {
      * @param canary the evaluation's I8 canary: every run's session id, and appended to the approval secret
      */
     RunScript(Lane lane, TimeScale scale, Consumer<String> tokenSeen, Semaphore childSlots, String canary) {
-        this(lane, scale, tokenSeen, r -> { }, childSlots, canary);
+        this(lane, scale, tokenSeen, r -> { }, childSlots, canary, Optional.empty());
+    }
+
+    /** @param live in live mode, the model every agent run gets instead of its script (C16) */
+    RunScript(Lane lane, TimeScale scale, Consumer<String> tokenSeen, Semaphore childSlots, String canary,
+              Optional<LiveModel> live) {
+        this(lane, scale, tokenSeen, r -> { }, childSlots, canary, live);
     }
 
     /** @param raceSeen given the outcome of every racer of an S14 run (its test only) */
     RunScript(Lane lane, TimeScale scale, Consumer<String> tokenSeen, Consumer<List<RaceOutcome>> raceSeen,
               Semaphore childSlots) {
-        this(lane, scale, tokenSeen, raceSeen, childSlots, Canary.generate());
+        this(lane, scale, tokenSeen, raceSeen, childSlots, Canary.generate(), Optional.empty());
     }
 
     private RunScript(Lane lane, TimeScale scale, Consumer<String> tokenSeen, Consumer<List<RaceOutcome>> raceSeen,
-                      Semaphore childSlots, String canary) {
+                      Semaphore childSlots, String canary, Optional<LiveModel> live) {
         this.lane = Objects.requireNonNull(lane, "lane");
         this.scale = Objects.requireNonNull(scale, "scale");
         this.tokenSeen = Objects.requireNonNull(tokenSeen, "tokenSeen");
@@ -127,6 +135,7 @@ public final class RunScript {
             throw new IllegalArgumentException("not a canary");
         }
         this.canary = canary;
+        this.live = Objects.requireNonNull(live, "live");
     }
 
     public TimeScale scale() {
@@ -460,7 +469,18 @@ public final class RunScript {
         AgentSpec spec = scenario.agent().orElseThrow();
         AgentSpec.Script script = spec.plan().forRun(run);
         AuthContext signedIn = auth.get();
-        ScriptedModel model = ScriptedModel.fromResource(Scenarios.class, "scripts/" + script.resource());
+        // Live mode: a client of the live model for this run, its I6 observer counting requests offered anything
+        // other than the five (from the request the client built). Scripted: the row's script.
+        AtomicLong offRequest = new AtomicLong();
+        Optional<ScriptedModel> scripted = live.isPresent() ? Optional.empty()
+                : Optional.of(ScriptedModel.fromResource(Scenarios.class, "scripts/" + script.resource()));
+        ModelClient model = live.isPresent()
+                ? live.get().clients().apply(names -> {
+                    if (!names.equals(ToolRegistry.NAMES)) {
+                        offRequest.incrementAndGet();
+                    }
+                })
+                : scripted.get();
         Clock clock = script.breach().filter(b -> b == BudgetLimit.WALL_CLOCK).isPresent()
                 ? new SteppingClock(stack.clock.instant(), WALL_CLOCK_STEP) : stack.clock;
         InMemoryRunRepository runs = new InMemoryRunRepository();
@@ -475,17 +495,19 @@ public final class RunScript {
             }
             return model.generate(conversation, tools);
         };
-        AgentRuntime runtime = new AgentRuntime(checked, "scripted", stack.toolPorts(), runs, AgentBudget.DEFAULT,
-                ASK_TIMEOUT, clock);
+        AgentRuntime runtime = new AgentRuntime(checked, live.map(LiveModel::model).orElse("scripted"),
+                stack.toolPorts(), runs, AgentBudget.DEFAULT, ASK_TIMEOUT, clock);
         Optional<RunOutcome> outcome = Optional.empty();
         Optional<String> abort = Optional.empty();
         try {
             outcome = Optional.of(runtime.run(signedIn, runId, spec.userMessage(), user, trace));
-            model.checkToolSequence();
+            scripted.ifPresent(ScriptedModel::checkToolSequence);
         } catch (ScriptDriftException e) {
             abort = Optional.of("agent run: the script drifted");
         } catch (RuntimeException e) {
             abort = Optional.of("agent run threw " + e.getClass().getSimpleName());
+        } finally {
+            closeQuietly(model);
         }
         Optional<RunRecord> record = runs.find(signedIn.user(), runId);
         String type = outcome.map(o -> o.getClass().getSimpleName()).orElse("aborted");
@@ -496,11 +518,33 @@ public final class RunScript {
         if (record.isEmpty()) {
             abort = abort.or(() -> Optional.of("agent run left no run record"));
         }
+        // Live: a run whose record ends failed (model_error, tool_error, internal_error) never passes, in any row: S10
+        // allows any status when scripted, but a live run in which the model never answered measures nothing.
+        if (live.isPresent()) {
+            Optional<String> failed = record.filter(rec -> rec.outcome().filter("failed"::equals).isPresent())
+                    .map(rec -> "live agent run failed: " + rec.reason().orElse("no reason"));
+            abort = abort.or(() -> failed);
+        }
+        if (offRequest.get() > 0) {
+            abort = abort.or(() -> Optional.of("I6: " + offRequest.get() + " request(s) the live client built offered"
+                    + " tools other than " + ToolRegistry.NAMES));
+        }
         if (offList.get() > 0) {
             abort = abort.or(() -> Optional.of("I6: " + offList.get() + " model call(s) offered tools other than "
                     + ToolRegistry.NAMES));
         }
         return new AgentResult(record.map(RunRecord::intentIds).orElse(List.of()), abort, evidence);
+    }
+
+    /** A live client holds HTTP resources; it is closed when its run ends. Closing never fails a run. */
+    private static void closeQuietly(ModelClient model) {
+        if (model instanceof AutoCloseable c) {
+            try {
+                c.close();
+            } catch (Exception e) {
+                // Nothing to report: only idle connections are released.
+            }
+        }
     }
 
     /**

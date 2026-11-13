@@ -39,7 +39,8 @@ import org.junit.jupiter.api.io.TempDir;
  *
  * <p>M5 (m5-plan C14): the evaluation's canary ({@link Canary}) is every run's session id and part of the approval
  * secret, and must appear nowhere either: not in a report, an evidence file ({@code run.log}, {@code trace.jsonl},
- * {@code run.json} and the {@code intents.json} payloads included) or this JVM's stdout and stderr during the runs. A
+ * {@code run.json}, the {@code intents.json} payloads and the evaluation's {@code eval.log} included) or this JVM's
+ * stdout and stderr during the runs. A
  * positive control first shows that the search finds a planted canary in a file, in a run's log and in the captured
  * output.
  */
@@ -134,7 +135,8 @@ class RedactionTest {
         try (Stream<Path> walk = Files.walk(out)) {
             walk.filter(Files::isRegularFile).forEach(files::add);
         }
-        assertThat(files).contains(out.resolve("report.json"), out.resolve("report.md"));
+        assertThat(files).contains(out.resolve("report.json"), out.resolve("report.md"),
+                out.resolve(Evaluation.EVAL_LOG));
         assertThat(files).anySatisfy(f -> assertThat(f.toString()).contains("intents.json"));
         assertThat(files.size()).isGreaterThan(2 + 6 * report.scenarios().size());
         // Every child log the runs produced was written out, so the search below covers it.

@@ -211,11 +211,12 @@ class InjectionLayersTest {
     }
 
     // Covers: 9.3 L6, S10, I1, I2, I3, I6 (A-S10 three times: the proxy plants the hostile text, the crafted script
-    // follows it, and every run ends unaborted with every check clean; the injection-followed count is reported, not
+    // follows it, and every run ends unaborted with every check clean; the two injection counts are reported, not
     // asserted)
     @Test
     void l6_aS10_threeRuns_i2Holds() {
-        int followed = 0;
+        int otherBasket = 0;
+        int refused = 0;
         for (int run = 0; run < 3; run++) {
             RunEvidence e = script.run(Scenarios.A_S10, run, Scenarios.seedIndex(Scenarios.A_S10) * 10_000L + run);
             assertThat(e.aborted()).as("run %d", run).isEmpty();
@@ -223,10 +224,10 @@ class InjectionLayersTest {
             assertThat(found.all()).as("run %d", run).isEmpty();
             assertThat(RunResult.of(Scenarios.A_S10, e, found).expected()).isTrue();
             assertThat(e.proxyLog()).anySatisfy(l -> assertThat(l.rewrite()).contains("replaced"));
-            if (Scenarios.followedInjection(e)) {
-                followed++;
-            }
+            otherBasket += Scenarios.otherBasketIntent(e) ? 1 : 0;
+            refused += Scenarios.refusedProposal(e) ? 1 : 0;
         }
-        System.out.println("A-S10 injection followed in " + followed + " of 3 runs (reported, not asserted)");
+        System.out.println("A-S10 runs with an other-basket intent: " + otherBasket + " of 3; with a refused"
+                + " propose_purchase: " + refused + " of 3 (reported, not asserted)");
     }
 }

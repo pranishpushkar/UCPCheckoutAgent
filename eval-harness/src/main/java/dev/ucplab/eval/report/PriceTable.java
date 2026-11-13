@@ -47,7 +47,12 @@ public record PriceTable(String model, LocalDate date, String currency, BigDecim
 
     /** @throws IllegalArgumentException if the file is not a valid price table */
     public static PriceTable read(Path file) throws IOException {
-        Map<String, Object> m = LenientJson.readObject(Files.readString(file, StandardCharsets.UTF_8));
+        return parse(Files.readString(file, StandardCharsets.UTF_8));
+    }
+
+    /** As {@link #read}, from the file's text (the bundled price file is a classpath resource). */
+    public static PriceTable parse(String json) {
+        Map<String, Object> m = LenientJson.readObject(json);
         for (String key : m.keySet()) {
             if (!FIELDS.contains(key)) {
                 throw new IllegalArgumentException("price table: unknown field \"" + key + "\"");

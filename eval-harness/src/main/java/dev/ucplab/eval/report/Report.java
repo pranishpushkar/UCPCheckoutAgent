@@ -18,7 +18,8 @@ import java.util.Optional;
  * @param prices the price file for the live rows' cost column, if one was given (13.3)
  */
 public record Report(Instant generatedAt, CommitInfo commit, EvalConfig config, String merchantVersion,
-                     List<String> runtime, List<ScenarioSummary> scenarios, Optional<PriceTable> prices) {
+                     List<String> runtime, List<ScenarioSummary> scenarios, Optional<PriceTable> prices,
+                     Optional<LiveRun> live) {
 
     /** 13.5: the acceptance report has 200 runs per scenario. */
     public static final int FULL_RUNS = 200;
@@ -37,6 +38,13 @@ public record Report(Instant generatedAt, CommitInfo commit, EvalConfig config, 
         runtime = List.copyOf(runtime);
         scenarios = List.copyOf(scenarios);
         Objects.requireNonNull(prices, "prices");
+        Objects.requireNonNull(live, "live");
+    }
+
+    /** A scripted report, or a report of live rows read back without the live block. */
+    public Report(Instant generatedAt, CommitInfo commit, EvalConfig config, String merchantVersion,
+                  List<String> runtime, List<ScenarioSummary> scenarios, Optional<PriceTable> prices) {
+        this(generatedAt, commit, config, merchantVersion, runtime, scenarios, prices, Optional.empty());
     }
 
     /** A report with no price file: live rows' cost reads {@link #NA_NO_PRICES}. */
@@ -52,7 +60,7 @@ public record Report(Instant generatedAt, CommitInfo commit, EvalConfig config, 
     }
 
     public boolean reduced() {
-        return config.timeScale().k() != 1 || scenarios.isEmpty()
+        return config.timeScale().k() != 1 || scenarios.isEmpty() || stopped().isPresent()
                 || scenarios.stream().anyMatch(s -> s.n() < FULL_RUNS);
     }
 
@@ -62,7 +70,7 @@ public record Report(Instant generatedAt, CommitInfo commit, EvalConfig config, 
         int most = scenarios.stream().mapToInt(ScenarioSummary::n).max().orElse(0);
         String fewer = scenarios.stream().filter(s -> s.n() < most).map(s -> s.scenario().id() + " " + s.n())
                 .collect(java.util.stream.Collectors.joining(", "));
-        return "REDUCED: " + (fewest == most ? fewest + " runs per scenario"
+        return "REDUCED: " + stopped().map(s -> s + "; ").orElse("") + (fewest == most ? fewest + " runs per scenario"
                 : most + " runs per scenario (" + fewer + ")") + ", time scale " + config.timeScale().k()
                 + " — not an acceptance report";
     }
@@ -79,16 +87,32 @@ public record Report(Instant generatedAt, CommitInfo commit, EvalConfig config, 
         return scenarios.stream().mapToInt(ScenarioSummary::unexpected).sum();
     }
 
-    /** 1 for any violation or aborted run, else 2 for any unexpected terminal state, else 0. */
+    /**
+     * 1 for any violation or aborted run; else 3 when a live cap stopped the evaluation early (the report is
+     * incomplete, as with {@code --require-full} not met); else 2 for any unexpected terminal state; else 0.
+     */
     public int exitCode() {
         if (violations() > 0 || aborted() > 0) {
             return VIOLATION_OR_ABORT;
         }
+        if (stopped().isPresent()) {
+            return HARNESS_ERROR;
+        }
         return unexpected() > 0 ? UNEXPECTED_OUTCOME : CLEAN;
     }
 
+    /** The cap that stopped a live evaluation early; empty otherwise. */
+    public Optional<String> stopped() {
+        return live.flatMap(LiveRun::stopped);
+    }
+
     /** The evaluation's mode, as 13.1 asks every number to be labelled; each row also has its {@link Mode}. */
+    public String mode() {
+        return live.isPresent() ? LIVE : MODE;
+    }
+
     public static final String MODE = "scripted";
+    public static final String LIVE = "live";
     /** Why an agent column is empty, by cause (m5-plan section 9). */
     public static final String NA_DIRECT = "n/a (orchestrator-direct)";
     public static final String NA_SCRIPTED = "n/a (scripted model)";

@@ -33,9 +33,20 @@ public final class ReportJson {
             m.put("banner", r.reducedBanner());
         }
         m.put("generatedAt", r.generatedAt().toString());
-        m.put("mode", Report.MODE);
+        m.put("mode", r.mode());
         m.put("modes", r.modes().stream().map(Mode::label).toList());
         m.put("prices", r.prices().<Object>map(ReportJson::prices).orElse(JsonOut.NULL));
+        r.live().ifPresent(l -> {
+            Map<String, Object> live = new LinkedHashMap<>();
+            live.put("model", l.model());
+            live.put("promptVersion", l.promptVersion());
+            live.put("maxCostUsd", l.maxCostUsd().toPlainString());
+            live.put("maxTokensTotal", l.maxTokensTotal());
+            live.put("tokens", l.tokens());
+            live.put("estimatedCostUsd", l.estimatedCostUsd().toPlainString());
+            live.put("stopped", l.stopped().<Object>map(x -> x).orElse(JsonOut.NULL));
+            m.put("live", live);
+        });
         m.put("reduced", r.reduced());
         m.put("commit", commit(r));
         m.put("config", config(r));
@@ -118,6 +129,13 @@ public final class ReportJson {
         m.put("alsoChecked", s.alsoChecked());
         m.put("runs", s.n());
         m.put("aborted", s.aborted());
+        if (!s.injections().isEmpty()) {
+            Map<String, Object> injection = new LinkedHashMap<>();
+            injection.put("runsMeasured", s.injections().size());
+            injection.put("runsWithOtherBasketIntent", s.otherBasketIntentRuns());
+            injection.put("runsWithRefusedProposal", s.refusedProposalRuns());
+            m.put("injection", injection);
+        }
         Map<String, Object> terminal = new LinkedHashMap<>();
         s.terminal().forEach((state, n) -> terminal.put(state.name(), n));
         m.put("terminal", terminal);
