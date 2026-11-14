@@ -113,6 +113,7 @@ public final class FaultyMerchantModel implements MerchantGateway {
      */
     private boolean fulfillmentMode;
     private int groupCount = 1;
+    private boolean forgetOption;
     private final Map<String, Long> optionPrices = new LinkedHashMap<>(Map.of("std-ship", 0L, "exp-ship-us", 1500L));
     private int seq;
     private long heldSeq;
@@ -170,6 +171,11 @@ public final class FaultyMerchantModel implements MerchantGateway {
     /** Lab control: how many groups the merchant lists once a destination is selected (default 1; fulfillment mode). */
     public void setGroupCount(int groups) {
         withLock(() -> groupCount = groups);
+    }
+
+    /** Lab control: the next update that selects an option has the option dropped, once (fulfillment mode). */
+    public void forgetNextOption() {
+        withLock(() -> forgetOption = true);
     }
 
     /** Sets the price of a shipping option: {@code std-ship} (default 0) or {@code exp-ship-us} (default 1500). */
@@ -420,6 +426,7 @@ public final class FaultyMerchantModel implements MerchantGateway {
         Session s = new Session(new SessionId("cs_" + ids.next()), priced.lines,
                 request.buyerEmail().map(Buyer::ofEmail).orElse(NO_BUYER));
         s.status = readiness(s);
+        s.quotedShipping = shipping(s);
         sessions.put(s.id, s);
         return ok(201, s, priced.messages);
     }
@@ -451,6 +458,14 @@ public final class FaultyMerchantModel implements MerchantGateway {
                 s.lines = priced.lines;
                 s.buyer = request.buyer().map(FaultyMerchantModel::keptBuyerFields).orElse(NO_BUYER);
                 s.selection = request.fulfillment();
+                if (forgetOption && s.selection.map(sel -> !sel.groups().isEmpty()).orElse(false)) {
+                    // Lab control: this update's option choice is lost once, as a merchant that resets it on a re-quote.
+                    FulfillmentSelection sel = s.selection.get();
+                    s.selection = Optional.of(new FulfillmentSelection(sel.methodId(), sel.type(), sel.lineItemIds(),
+                            sel.destinationId(), List.of()));
+                    forgetOption = false;
+                }
+                s.quotedShipping = shipping(s);
                 s.status = readiness(s);
                 return ok(200, s, priced.messages);
             }
@@ -508,6 +523,10 @@ public final class FaultyMerchantModel implements MerchantGateway {
                 priceChanged = true;
             }
             fresh.add(new LineView(line.itemId(), line.quantity(), item.price, line.lineId()));
+        }
+        if (fulfillmentMode && shipping(s) != s.quotedShipping) {
+            priceChanged = true;    // the shipping price moved since the quote: a price change like any other
+            s.quotedShipping = shipping(s);
         }
         if (priceChanged) {
             s.lines = List.copyOf(fresh);
@@ -773,6 +792,7 @@ public final class FaultyMerchantModel implements MerchantGateway {
         CheckoutStatus status = CheckoutStatus.INCOMPLETE;
         Optional<OrderRef> order = Optional.empty();
         Optional<FulfillmentSelection> selection = Optional.empty();
+        long quotedShipping;
 
         Session(SessionId id, List<LineView> lines, Buyer buyer) {
             this.id = id;

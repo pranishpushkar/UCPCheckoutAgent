@@ -171,4 +171,186 @@ class FulfillmentQuoteTest {
         assertThat(lab.events(id)).anySatisfy(e -> assertThat(e.toString()).contains("fulfillment_unsupported"));
         assertThat(lab.approvals.findLatestForSystem(id)).isEmpty();
     }
+
+    private java.util.List<dev.ucplab.core.intent.MerchantAttempt> ops(IntentId id, AttemptOp op) {
+        return lab.intents.attempts(id).stream().filter(a -> a.op() == op).toList();
+    }
+
+    private IntentState approveAndDrive(Lab.Worker w, IntentId id) {
+        lab.decide(w, id, true);
+        return lab.drive(w, id);
+    }
+
+    // Covers: S16, P8, P7, I1, I2, I3, I7 (after the three selection updates two re-quotes are still allowed and the third
+    // price change ends REJECTED price_unstable; requote_count counts only the re-quotes; every update has its own key)
+    @Test
+    void s16_afterASelection_stillAllowsTwoReQuotes() {
+        lab.merchant.enableFulfillment();
+        lab.merchant.addRule(dev.ucplab.core.merchant.fake.FaultRule.nth(dev.ucplab.core.merchant.fake.MerchantCall.COMPLETE, 1,
+                new dev.ucplab.core.merchant.fake.Fault.PriceChange("item_123", 2600)));
+        lab.merchant.addRule(dev.ucplab.core.merchant.fake.FaultRule.nth(dev.ucplab.core.merchant.fake.MerchantCall.COMPLETE, 2,
+                new dev.ucplab.core.merchant.fake.Fault.PriceChange("item_123", 2700)));
+        lab.merchant.addRule(dev.ucplab.core.merchant.fake.FaultRule.nth(dev.ucplab.core.merchant.fake.MerchantCall.COMPLETE, 3,
+                new dev.ucplab.core.merchant.fake.Fault.PriceChange("item_123", 2800)));
+        Lab.Worker w = lab.worker("worker-a");
+        IntentId id = lab.propose(w, TWO_SHIRTS).intentId();
+        settleQuote(w, id);
+        int approvals = 0;
+        IntentState state = IntentState.AWAITING_APPROVAL;
+        while (state == IntentState.AWAITING_APPROVAL) {
+            state = approveAndDrive(w, id);
+            approvals++;
+        }
+
+        assertThat(state).isEqualTo(IntentState.REJECTED);
+        assertThat(lab.intent(id).failureReason()).contains("price_unstable");
+        assertThat(lab.intent(id).requoteCount()).isEqualTo(2);
+        assertThat(approvals).isEqualTo(3);
+        assertThat(ops(id, AttemptOp.UPDATE)).hasSize(5);    // 3 selections + 2 re-quotes
+        assertThat(ops(id, AttemptOp.UPDATE)).extracting(a -> a.idempotencyKey().orElseThrow()).doesNotHaveDuplicates();
+        assertThat(lab.merchant.orders()).isEmpty();
+    }
+
+    // Covers: 8.4, 7.2 (a re-quote repeats the selection: the update after a price change carries the destination and the
+    // option the last response showed, and the checkout is ready again without a new selection)
+    @Test
+    void aReQuote_repeatsTheSelection() {
+        lab.merchant.enableFulfillment();
+        lab.merchant.addRule(dev.ucplab.core.merchant.fake.FaultRule.nth(dev.ucplab.core.merchant.fake.MerchantCall.COMPLETE, 1,
+                new dev.ucplab.core.merchant.fake.Fault.PriceChange("item_123", 2600)));
+        Lab.Worker w = lab.worker("worker-a");
+        IntentId id = lab.propose(w, TWO_SHIRTS).intentId();
+        settleQuote(w, id);
+
+        assertThat(approveAndDrive(w, id)).isEqualTo(IntentState.AWAITING_APPROVAL);
+
+        var requote = ops(id, AttemptOp.UPDATE).get(3);
+        assertThat(requote.requestBody().orElseThrow().json()).contains("\"selected_destination_id\":\"addr_1\"")
+                .contains("\"selected_option_id\":\"std-ship\"");
+        assertThat(ops(id, AttemptOp.UPDATE)).hasSize(4);
+        assertThat(lab.intent(id).requoteCount()).isEqualTo(1);
+    }
+
+    // Covers: 7.2, MAX_SELECTION_STEPS (a merchant that drops the option on the re-quote: the new cycle selects it again,
+    // inside the step cap, and the intent reaches a new approval)
+    @Test
+    void ifTheMerchantResetsTheSelection_theNewCycleSelectsAgain() {
+        lab.merchant.enableFulfillment();
+        lab.merchant.addRule(dev.ucplab.core.merchant.fake.FaultRule.nth(dev.ucplab.core.merchant.fake.MerchantCall.COMPLETE, 1,
+                new dev.ucplab.core.merchant.fake.Fault.PriceChange("item_123", 2600)));
+        Lab.Worker w = lab.worker("worker-a");
+        IntentId id = lab.propose(w, TWO_SHIRTS).intentId();
+        settleQuote(w, id);
+        lab.merchant.forgetNextOption();
+
+        assertThat(approveAndDrive(w, id)).isEqualTo(IntentState.AWAITING_APPROVAL);
+
+        assertThat(ops(id, AttemptOp.UPDATE)).hasSize(5);    // 3 selections, the re-quote, one more option selection
+        assertThat(lab.approvals.findLatestForSystem(id).orElseThrow().snapshot().fulfillment()).isPresent();
+    }
+
+    // Covers: I2, I3, P7, 9.2 (the approval's total includes shipping, and when the option's price rises after approval
+    // complete is not accepted at the old total: the merchant reports a price change, the intent re-quotes, the new
+    // snapshot has the new price and needs a new approval, and no order is above the approved maximum)
+    @Test
+    void aRiseInShipping_afterApproval_needsANewApproval() {
+        lab.merchant.enableFulfillment();
+        Lab.Worker w = lab.worker("worker-a");
+        IntentId id = lab.propose(w, TWO_SHIRTS).intentId();
+        settleQuote(w, id);
+        var first = lab.approvals.findLatestForSystem(id).orElseThrow();
+        lab.decide(w, id, true);
+        lab.merchant.setOptionPrice("std-ship", 900);
+
+        IntentState state = lab.drive(w, id);
+
+        assertThat(state).isEqualTo(IntentState.AWAITING_APPROVAL);
+        var second = lab.approvals.findLatestForSystem(id).orElseThrow();
+        assertThat(second.snapshot().fulfillment().orElseThrow().priceMinor()).isEqualTo(900);
+        assertThat(second.snapshot().totalMinor()).isEqualTo(first.snapshot().totalMinor() + 900);
+        assertThat(second.snapshotHash()).isNotEqualTo(first.snapshotHash());
+        assertThat(lab.merchant.orders()).isEmpty();
+        assertThat(lab.intent(id).requoteCount()).isEqualTo(1);
+    }
+
+    /** The fake merchant, except that complete answers the way the sample's 4xx refusals are reported by the gateway. */
+    private final class Refusing implements dev.ucplab.core.merchant.MerchantGateway {
+        final int http;
+        final String code;
+        int completes;
+
+        Refusing(int http, String code) {
+            this.http = http;
+            this.code = code;
+        }
+
+        public dev.ucplab.core.merchant.MerchantProfile discover(dev.ucplab.core.merchant.MerchantId m) {
+            return lab.merchant.discover(m);
+        }
+
+        public dev.ucplab.core.merchant.CallOutcome<dev.ucplab.core.merchant.CheckoutView> create(
+                dev.ucplab.core.merchant.CreateCheckout r, dev.ucplab.core.merchant.IdempotencyKey k) {
+            return lab.merchant.create(r, k);
+        }
+
+        public dev.ucplab.core.merchant.CallOutcome<dev.ucplab.core.merchant.CheckoutView> update(
+                dev.ucplab.core.merchant.SessionId id, dev.ucplab.core.merchant.UpdateCheckout r,
+                dev.ucplab.core.merchant.IdempotencyKey k) {
+            return lab.merchant.update(id, r, k);
+        }
+
+        public dev.ucplab.core.merchant.CallOutcome<dev.ucplab.core.merchant.CheckoutView> complete(
+                dev.ucplab.core.merchant.SessionId id, dev.ucplab.core.merchant.FrozenBody b,
+                dev.ucplab.core.merchant.IdempotencyKey k) {
+            completes++;
+            var message = new dev.ucplab.core.merchant.MerchantMessage("error", code, java.util.Optional.empty(), "refused",
+                    java.util.Optional.empty());
+            var view = new dev.ucplab.core.merchant.CheckoutView(id, dev.ucplab.core.merchant.CheckoutStatus.READY_FOR_COMPLETE,
+                    "", java.util.List.of(), 0, 0, 0, java.util.Optional.empty(), java.util.Optional.empty(),
+                    java.util.List.of(message));
+            return new dev.ucplab.core.merchant.CallOutcome.Ok<>(http, view, java.util.List.of(message));
+        }
+
+        public dev.ucplab.core.merchant.CallOutcome<dev.ucplab.core.merchant.CheckoutView> cancel(
+                dev.ucplab.core.merchant.SessionId id, dev.ucplab.core.merchant.IdempotencyKey k) {
+            return lab.merchant.cancel(id, k);
+        }
+
+        public dev.ucplab.core.merchant.CallOutcome<dev.ucplab.core.merchant.CheckoutView> get(
+                dev.ucplab.core.merchant.SessionId id) {
+            return lab.merchant.get(id);
+        }
+    }
+
+    private void refusalEndsNotCharged(int http, String code, String reason) {
+        Refusing g = new Refusing(http, code);
+        Lab.Worker w = lab.worker("worker-a", g);
+        IntentId id = lab.propose(w, TWO_SHIRTS).intentId();
+        lab.decide(w, id, true);
+
+        IntentState state = lab.drive(w, id);
+
+        assertThat(state).isEqualTo(IntentState.FAILED_NOT_CHARGED);
+        assertThat(lab.intent(id).failureReason()).contains(reason);
+        assertThat(g.completes).isEqualTo(1);
+        assertThat(ops(id, AttemptOp.COMPLETE)).singleElement().satisfies(a -> {
+            assertThat(a.httpStatus()).contains(http);
+            assertThat(a.status()).isEqualTo(dev.ucplab.core.intent.AttemptStatus.RESPONDED);
+        });
+        assertThat(ops(id, AttemptOp.CANCEL)).as("cancel owed").isNotEmpty();
+        assertThat(lab.events(id)).noneSatisfy(e -> assertThat(e.toString()).contains("RECONCILING"));
+    }
+
+    // Covers: 8.1, 7.2, 8.2 (fixture 26: 409 OUT_OF_STOCK at complete: FAILED_NOT_CHARGED out_of_stock, cancel owed, one
+    // complete, the 409 on the attempt, never RECONCILING)
+    @Test
+    void aSampleStyle409OutOfStock_endsNotCharged() {
+        refusalEndsNotCharged(409, "out_of_stock", "out_of_stock");
+    }
+
+    // Covers: 8.1, 7.2, 8.2 (fixture 31: 402 INSUFFICIENT_FUNDS at complete: payment_declined, otherwise the same)
+    @Test
+    void aSampleStyle402Decline_endsNotCharged() {
+        refusalEndsNotCharged(402, "payment_declined", "payment_declined");
+    }
 }
