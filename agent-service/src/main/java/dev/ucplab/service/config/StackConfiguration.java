@@ -6,6 +6,7 @@ import dev.ucplab.core.crypto.HmacSha256;
 import dev.ucplab.core.id.IdGenerator;
 import dev.ucplab.core.id.UuidV7IdGenerator;
 import dev.ucplab.core.intent.IntentCursorCodec;
+import dev.ucplab.core.merchant.MerchantInstruments;
 import dev.ucplab.core.merchant.PaymentInstrument;
 import dev.ucplab.core.orchestrator.DefaultOrchestrator;
 import dev.ucplab.core.orchestrator.OrchestratorConfig;
@@ -214,6 +215,9 @@ public class StackConfiguration {
                                      PaymentInstrument paymentInstrument) {
         RuleBasedPolicyEngine policy = new RuleBasedPolicyEngine(properties.policy(), merchantRegistry::find,
                 new SqlPolicyUsage(db), clock);
+        // 8.5: the gateway above requires the lab handler, so the instrument must be for it, or the stack does not build.
+        MerchantInstruments.requireMatchingHandler(properties.merchant().id(), UcpHttpGateway.PAYMENT_HANDLER,
+                paymentInstrument);
         return new DefaultOrchestrator(intents, approvals, approvalService, merchantGateway, policy,
                 new RequotePolicy(properties.policy()), paymentInstrument,
                 orchestratorConfig, clock, ids, workerId.value(), random);

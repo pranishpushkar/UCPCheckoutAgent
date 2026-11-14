@@ -353,4 +353,22 @@ class FulfillmentQuoteTest {
     void aSampleStyle402Decline_endsNotCharged() {
         refusalEndsNotCharged(402, "payment_declined", "payment_declined");
     }
+
+    // Covers: 7.2, 9.2 (the two-groups check covers every Ok answer in QUOTING: a merchant that answers the create
+    // ready_for_complete with two groups already chosen is not approved on a snapshot naming only the first)
+    @Test
+    void aReadyAnswerWithTwoGroups_endsQuotingAsUnsupported() {
+        lab.merchant.enableFulfillment();
+        lab.merchant.setGroupCount(2);
+        lab.merchant.preselectShipping();
+        Lab.Worker w = lab.worker("worker-a");
+        IntentId id = lab.propose(w, TWO_SHIRTS).intentId();
+
+        settleQuote(w, id);
+
+        assertThat(lab.intent(id).state()).isEqualTo(IntentState.FAILED_NOT_CHARGED);
+        assertThat(lab.intent(id).failureReason()).contains("quote_retries_exhausted");
+        assertThat(lab.events(id)).anySatisfy(e -> assertThat(e.toString()).contains("fulfillment_unsupported"));
+        assertThat(lab.approvals.findLatestForSystem(id)).isEmpty();
+    }
 }

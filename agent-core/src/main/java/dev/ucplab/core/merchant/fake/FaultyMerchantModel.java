@@ -114,6 +114,7 @@ public final class FaultyMerchantModel implements MerchantGateway {
     private boolean fulfillmentMode;
     private int groupCount = 1;
     private boolean forgetOption;
+    private boolean preselect;
     private final Map<String, Long> optionPrices = new LinkedHashMap<>(Map.of("std-ship", 0L, "exp-ship-us", 1500L));
     private int seq;
     private long heldSeq;
@@ -171,6 +172,11 @@ public final class FaultyMerchantModel implements MerchantGateway {
     /** Lab control: how many groups the merchant lists once a destination is selected (default 1; fulfillment mode). */
     public void setGroupCount(int groups) {
         withLock(() -> groupCount = groups);
+    }
+
+    /** Lab control: a create is answered with a method, destination and options already selected (fulfillment mode). */
+    public void preselectShipping() {
+        withLock(() -> preselect = true);
     }
 
     /** Lab control: the next update that selects an option has the option dropped, once (fulfillment mode). */
@@ -425,6 +431,15 @@ public final class FaultyMerchantModel implements MerchantGateway {
         }
         Session s = new Session(new SessionId("cs_" + ids.next()), priced.lines,
                 request.buyerEmail().map(Buyer::ofEmail).orElse(NO_BUYER));
+        if (fulfillmentMode && preselect) {
+            // Lab control: a merchant that answers the create with the shipping already chosen.
+            List<String> lineIds = s.lines.stream().flatMap(l -> l.lineId().stream()).toList();
+            List<FulfillmentSelection.GroupSelection> groups = new ArrayList<>();
+            for (int i = 0; i < groupCount; i++) {
+                groups.add(new FulfillmentSelection.GroupSelection("group_" + s.id.value() + (i == 0 ? "" : "_" + i), lineIds, "std-ship"));
+            }
+            s.selection = Optional.of(new FulfillmentSelection("method_1", "shipping", lineIds, Optional.of("addr_1"), groups));
+        }
         s.status = readiness(s);
         s.quotedShipping = shipping(s);
         sessions.put(s.id, s);

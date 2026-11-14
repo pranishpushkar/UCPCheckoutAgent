@@ -535,8 +535,6 @@ public final class DefaultOrchestrator implements Orchestrator {
         return FulfillmentSteps.next(shown, lineIds, fulfillmentPolicy);
     }
 
-
-
     private static boolean unsupportedFulfillment(CheckoutView view) {
         return view.fulfillment().filter(f -> f.methods().size() > 1
                 || f.methods().stream().anyMatch(m -> m.groups().size() > 1)).isPresent();
@@ -602,6 +600,11 @@ public final class DefaultOrchestrator implements Orchestrator {
                     yield finish(base, attempt, AttemptStatus.RESPONDED, http, summary,
                             move(base, TransitionEvent.RETRIES_EXHAUSTED), REQUIRES_ESCALATION);
                 }
+                if (unsupportedFulfillment(view)) {
+                    // One method and one group only (9.2): the snapshot could not name the rest of what was chosen.
+                    event(base.id(), "fulfillment_unsupported", Map.of("reason", "more than one method or group"));
+                    yield exhaustQuoting(base, attempt, AttemptStatus.RESPONDED, http, summary);
+                }
                 Set<String> codes = codes(view);
                 if (codes.contains(OUT_OF_STOCK)) {
                     yield finish(base, attempt, AttemptStatus.RESPONDED, http, summary,
@@ -621,11 +624,6 @@ public final class DefaultOrchestrator implements Orchestrator {
                 }
                 if (view.status() == CheckoutStatus.READY_FOR_COMPLETE) {
                     yield quoteReady(base, attempt, http, summary, view);
-                }
-                if (unsupportedFulfillment(view)) {
-                    // One method and one group only (9.2): the snapshot could not name the rest of what was chosen.
-                    event(base.id(), "fulfillment_unsupported", Map.of("reason", "more than one method or group"));
-                    yield exhaustQuoting(base, attempt, AttemptStatus.RESPONDED, http, summary);
                 }
                 if (view.status() == CheckoutStatus.INCOMPLETE && view.messages().isEmpty()
                         && selectionPending(base, view)) {
