@@ -2,14 +2,58 @@
 # scripts/quickstart.sh, the CLI smoke (steps 5 to 7) through scripts/quickstart-smoke.sh, the image layer scan
 # (section 9.4), then `docker compose down -v`. The scripted model is used and no job has GEMINI_API_KEY: this job
 # never makes a live model call.
-# Triggers (Decisions item 7, m6-plan): every pull request and every push to develop, for now. About 4 to 5 minutes of
-# runner time each; the C20 report in m6-progress6.md has the measured local time and a proposal.
+# Triggers (Decisions item 7, m6-plan): pull requests and pushes to develop that touch something the quick start
+# depends on (the modules in the stack, the Compose and Docker files, the scripts, the build, the README and this
+# workflow), plus a manual run. A docs-only change skips it.
 name: Quick start
 
 on:
   pull_request:
+    paths:
+      - 'agent-core/**'
+      - 'agent-ucp/**'
+      - 'agent-persistence/**'
+      - 'agent-runtime/**'
+      - 'agent-adk/**'
+      - 'agent-service/**'
+      - 'merchant/**'
+      - 'fault-proxy/**'
+      - 'compose.yaml'
+      - 'docker/**'
+      - 'scripts/**'
+      - '.env.example'
+      - '.dockerignore'
+      - 'pom.xml'
+      - 'mvnw'
+      - '.mvn/**'
+      - 'README.md'
+      - '.github/workflows/quickstart.yml'
   push:
     branches: [develop]
+    paths:
+      - 'agent-core/**'
+      - 'agent-ucp/**'
+      - 'agent-persistence/**'
+      - 'agent-runtime/**'
+      - 'agent-adk/**'
+      - 'agent-service/**'
+      - 'merchant/**'
+      - 'fault-proxy/**'
+      - 'compose.yaml'
+      - 'docker/**'
+      - 'scripts/**'
+      - '.env.example'
+      - '.dockerignore'
+      - 'pom.xml'
+      - 'mvnw'
+      - '.mvn/**'
+      - 'README.md'
+      - '.github/workflows/quickstart.yml'
+  workflow_dispatch:
+
+# The job only reads the repository.
+permissions:
+  contents: read
 
 jobs:
   quickstart:
