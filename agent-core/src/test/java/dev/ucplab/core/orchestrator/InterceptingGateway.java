@@ -34,9 +34,19 @@ final class InterceptingGateway implements MerchantGateway {
     private final Map<MerchantCall, Boolean> crashBefore = new EnumMap<>(MerchantCall.class);
     private final Map<MerchantCall, Boolean> crashAfter = new EnumMap<>(MerchantCall.class);
     private final Map<MerchantCall, Runnable> during = new EnumMap<>(MerchantCall.class);
+    private InterceptingGateway peer;
 
     InterceptingGateway(MerchantGateway delegate) {
         this.delegate = delegate;
+    }
+
+    /**
+     * Links two gateways in front of two merchants: an armed crash fires once, at whichever of them gets the call first,
+     * and disarms at the other (the process dies once, not once per merchant).
+     */
+    static void link(InterceptingGateway a, InterceptingGateway b) {
+        a.peer = b;
+        b.peer = a;
     }
 
     /** Dies after the attempt row is written but before the request leaves (between 7.3 steps 3 and 4). */
@@ -86,6 +96,9 @@ final class InterceptingGateway implements MerchantGateway {
 
     private CallOutcome<CheckoutView> intercept(MerchantCall call, Supplier<CallOutcome<CheckoutView>> request) {
         if (crashBefore.remove(call) != null) {
+            if (peer != null) {
+                peer.crashBefore.remove(call);
+            }
             throw new SimulatedCrash("before " + call);
         }
         CallOutcome<CheckoutView> outcome = request.get();
@@ -94,6 +107,9 @@ final class InterceptingGateway implements MerchantGateway {
             action.run();
         }
         if (crashAfter.remove(call) != null) {
+            if (peer != null) {
+                peer.crashAfter.remove(call);
+            }
             throw new SimulatedCrash("after " + call);
         }
         return outcome;

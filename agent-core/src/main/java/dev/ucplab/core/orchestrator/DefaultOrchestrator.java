@@ -46,6 +46,7 @@ import dev.ucplab.core.merchant.IdempotencyKey;
 import dev.ucplab.core.merchant.MerchantGateway;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantMessage;
+import dev.ucplab.core.merchant.NoGatewayException;
 import dev.ucplab.core.merchant.MutatingOp;
 import dev.ucplab.core.merchant.PaymentInstrument;
 import dev.ucplab.core.merchant.QuoteShape;
@@ -67,6 +68,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.random.RandomGenerator;
 import java.util.stream.Collectors;
@@ -135,11 +137,12 @@ public final class DefaultOrchestrator implements Orchestrator {
     static final int MAX_PROBE_ATTEMPTS = 3;
 
     private static final int MAX_RATIONALE = 300;
+    private static final System.Logger LOG = System.getLogger(DefaultOrchestrator.class.getName());
 
     private final IntentRepository intents;
     private final ApprovalRepository approvals;
     private final ApprovalService approvalService;
-    private final MerchantGateway merchant;
+    private final Function<MerchantId, MerchantGateway> gateways;
     private final PolicyEngine policy;
     private final RequotePolicy requotePolicy;
     private final PaymentInstrument payment;
@@ -165,10 +168,31 @@ public final class DefaultOrchestrator implements Orchestrator {
             IntentRepository intents, ApprovalRepository approvals, ApprovalService approvalService,
             MerchantGateway merchant, PolicyEngine policy, RequotePolicy requotePolicy, PaymentInstrument payment,
             OrchestratorConfig config, Clock clock, IdGenerator ids, String workerId, RandomGenerator jitter) {
+        this(intents, approvals, approvalService, onlyGateway(merchant), policy, requotePolicy, payment, config, clock,
+                ids, workerId, jitter);
+    }
+
+    /** One gateway for every merchant: a deployment with a single merchant (M1 to M6). */
+    private static Function<MerchantId, MerchantGateway> onlyGateway(MerchantGateway merchant) {
+        Objects.requireNonNull(merchant, "merchant");
+        return id -> merchant;
+    }
+
+    /**
+     * @param gateways the gateway of an intent's merchant (8.5: one gateway per merchant, I11), for example
+     *     {@link dev.ucplab.core.merchant.MerchantGateways#of}. Every merchant call of an intent goes through the gateway
+     *     of {@code intent.merchantId()} and no other. A merchant with none throws {@link NoGatewayException} before
+     *     anything is written or sent.
+     */
+    public DefaultOrchestrator(
+            IntentRepository intents, ApprovalRepository approvals, ApprovalService approvalService,
+            Function<MerchantId, MerchantGateway> gateways, PolicyEngine policy, RequotePolicy requotePolicy,
+            PaymentInstrument payment, OrchestratorConfig config, Clock clock, IdGenerator ids, String workerId,
+            RandomGenerator jitter) {
         this.intents = Objects.requireNonNull(intents, "intents");
         this.approvals = Objects.requireNonNull(approvals, "approvals");
         this.approvalService = Objects.requireNonNull(approvalService, "approvalService");
-        this.merchant = Objects.requireNonNull(merchant, "merchant");
+        this.gateways = Objects.requireNonNull(gateways, "gateways");
         this.policy = Objects.requireNonNull(policy, "policy");
         this.requotePolicy = Objects.requireNonNull(requotePolicy, "requotePolicy");
         this.payment = Objects.requireNonNull(payment, "payment");
@@ -329,6 +353,26 @@ public final class DefaultOrchestrator implements Orchestrator {
         return moved(intent, next);
     }
 
+    /**
+     * The gateway of the intent's merchant (I11, 8.5), or {@link NoGatewayException}. Called before the first write of
+     * every step that calls a merchant, so a missing gateway sends nothing and changes nothing: the intent keeps its
+     * state (RecoveryWorker logs the failed step and tries again next pass), and never falls back to another merchant.
+     */
+    private MerchantGateway gateway(PurchaseIntent intent) {
+        MerchantGateway gateway;
+        try {
+            gateway = gateways.apply(intent.merchantId());
+        } catch (NoGatewayException e) {
+            LOG.log(System.Logger.Level.ERROR, "no gateway for merchant {0}", intent.merchantId());
+            throw e;
+        }
+        if (gateway == null) {
+            LOG.log(System.Logger.Level.ERROR, "no gateway for merchant {0}", intent.merchantId());
+            throw new NoGatewayException(intent.merchantId());
+        }
+        return gateway;
+    }
+
     // ---------------------------------------------------------------- QUOTING
 
     private Step quote(PurchaseIntent intent, List<MerchantAttempt> attempts) {
@@ -350,6 +394,8 @@ public final class DefaultOrchestrator implements Orchestrator {
             return moved(intent, next);
         }
 
+        // Before any write: a merchant without a gateway leaves the intent exactly as it is.
+        MerchantGateway merchant = gateway(intent);
         IdempotencyKey key = IdempotencyKey.derive(intent.id(), create ? MutatingOp.CREATE : MutatingOp.UPDATE, revision);
         String body;
         Supplier<CallOutcome<CheckoutView>> call;
@@ -583,6 +629,7 @@ public final class DefaultOrchestrator implements Orchestrator {
                     + intent.id());
         }
 
+        MerchantGateway merchant = gateway(intent);
         FrozenBody body = CheckoutWire.completeBody(payment);
         IdempotencyKey key = IdempotencyKey.derive(intent.id(), MutatingOp.COMPLETE, revision);
         MerchantAttempt attempt = newAttempt(intent.id(), AttemptOp.COMPLETE, revision, key, Optional.of(body));
@@ -725,6 +772,7 @@ public final class DefaultOrchestrator implements Orchestrator {
 
     /** The resend approved by reconciliation: the stored key and byte-identical stored body (I7). */
     private Step resend(PurchaseIntent intent, List<MerchantAttempt> sameKey) {
+        MerchantGateway merchant = gateway(intent);
         MerchantAttempt first = sameKey.get(0);
         FrozenBody body = first.requestBody()
                 .orElseThrow(() -> new IllegalStateException("I7: complete attempt without a stored body"));
@@ -739,6 +787,7 @@ public final class DefaultOrchestrator implements Orchestrator {
     // ---------------------------------------------------------------- RECONCILING (7.5)
 
     private Step reconcile(PurchaseIntent intent, List<MerchantAttempt> attempts) {
+        MerchantGateway merchant = gateway(intent);
         SessionId session = requireSession(intent);
         Instant since = intent.uncertainSince()
                 .orElseThrow(() -> new IllegalStateException("RECONCILING without uncertain_since: " + intent.id()));
@@ -934,6 +983,7 @@ public final class DefaultOrchestrator implements Orchestrator {
             event(intent.id(), "cancel_gave_up", Map.of("attempts", tried));
             return moved(intent, next);
         }
+        MerchantGateway merchant = gateway(intent);
         IdempotencyKey key = IdempotencyKey.derive(intent.id(), MutatingOp.CANCEL, 0);
         MerchantAttempt attempt = newAttempt(intent.id(), AttemptOp.CANCEL, 0, key, Optional.empty());
         PurchaseIntent written = writeAhead(intent, attempt, intent.withState(intent.state(), clock.instant()));
@@ -992,6 +1042,7 @@ public final class DefaultOrchestrator implements Orchestrator {
             return stopProbing(intent, "orphan_probe_body_mismatch", Map.of("attempt_id", original.id().value()));
         }
 
+        MerchantGateway merchant = gateway(intent);
         // An attempt left SENT by a crash is settled as uncertain first, fenced like every write here; it counts as a probe.
         List<AttemptId> unresolved = creates.stream().filter(a -> a.status() == AttemptStatus.SENT)
                 .map(MerchantAttempt::id).toList();

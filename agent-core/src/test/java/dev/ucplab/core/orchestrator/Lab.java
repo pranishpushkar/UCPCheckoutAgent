@@ -48,6 +48,8 @@ final class Lab {
 
     static final Instant T0 = Instant.parse("2026-01-01T00:00:00Z");
     static final MerchantId SHOP = new MerchantId("shop-1");
+    /** A second merchant, for tests of gateway routing (I11, 8.5). */
+    static final MerchantId SHOP_B = new MerchantId("shop-2");
     static final UserId ALICE = new UserId("alice");
     static final UserId BOB = new UserId("bob");
     static final List<ProposedLine> TWO_SHIRTS = List.of(new ProposedLine("item_123", 2));
@@ -69,6 +71,7 @@ final class Lab {
     final ApprovalRepository approvals;
     final RecoveryScan scan;
     final FaultyMerchantModel merchant;
+    final FaultyMerchantModel merchantB;
     final SequentialIdGenerator ids = new SequentialIdGenerator("id");
     final OrchestratorConfig config;
     private PaymentInstrument payment = PaymentInstrument.mockCard("pi_1", FaultyMerchantModel.TOKEN_OK);
@@ -105,6 +108,7 @@ final class Lab {
         this.scan = stores.scan();
         this.config = config;
         this.merchant = new FaultyMerchantModel(SHOP, mode, clock, new SequentialIdGenerator("m"));
+        this.merchantB = new FaultyMerchantModel(SHOP_B, mode, clock, new SequentialIdGenerator("mb"));
     }
 
     /** One orchestrator instance with its approval service, both using {@code workerId} as lease owner. */
@@ -131,16 +135,32 @@ final class Lab {
     Worker worker(
             String workerId, MerchantGateway gateway, ApprovalRepository approvalRepository,
             IntentRepository intentRepository) {
+        return worker(workerId, new java.util.function.Function<MerchantId, MerchantGateway>() {
+            @Override
+            public MerchantGateway apply(MerchantId id) {
+                return gateway;
+            }
+        }, approvalRepository, intentRepository);
+    }
+
+    /** A worker whose orchestrator picks the gateway by the intent's merchant: {@link #SHOP} and {@link #SHOP_B} are ACTIVE. */
+    Worker routedWorker(String workerId, java.util.function.Function<MerchantId, MerchantGateway> gateways) {
+        return worker(workerId, gateways, approvals, intents);
+    }
+
+    private Worker worker(
+            String workerId, java.util.function.Function<MerchantId, MerchantGateway> gateways,
+            ApprovalRepository approvalRepository, IntentRepository intentRepository) {
         PolicyConfig policyConfig = PolicyConfig.defaults();
         RuleBasedPolicyEngine policy = new RuleBasedPolicyEngine(policyConfig,
-                m -> m.equals(SHOP)
-                        ? Optional.of(new MerchantEntry(SHOP, URI.create("http://127.0.0.1:8081"), "Shop", MerchantStatus.ACTIVE))
+                m -> m.equals(SHOP) || m.equals(SHOP_B)
+                        ? Optional.of(new MerchantEntry(m, URI.create("http://127.0.0.1:8081"), "Shop", MerchantStatus.ACTIVE))
                         : Optional.empty(),
                 NO_USAGE, clock);
         DefaultApprovalService approvalService = new DefaultApprovalService(intentRepository, approvalRepository,
                 new ApprovalTokens(SECRET), clock, ids, workerId, config.lease(), DefaultApprovalService.DEFAULT_TTL,
                 DefaultApprovalService.DEFAULT_MAX_AUTH_AGE);
-        DefaultOrchestrator orchestrator = new DefaultOrchestrator(intentRepository, approvalRepository, approvalService, gateway, policy,
+        DefaultOrchestrator orchestrator = new DefaultOrchestrator(intentRepository, approvalRepository, approvalService, gateways, policy,
                 new RequotePolicy(policyConfig), payment, config, clock, ids, workerId, new SplittableRandom(42));
         return new Worker(workerId, orchestrator, approvalService);
     }
@@ -156,6 +176,10 @@ final class Lab {
 
     ProposalResult propose(Worker w, List<ProposedLine> lines) {
         return w.orchestrator().propose(alice(), SHOP, lines, "two red t-shirts");
+    }
+
+    ProposalResult proposeAt(Worker w, MerchantId merchantId, List<ProposedLine> lines) {
+        return w.orchestrator().propose(alice(), merchantId, lines, "two red t-shirts");
     }
 
     /** The approver channel: Alice reads the pending approval and decides (23.2). */

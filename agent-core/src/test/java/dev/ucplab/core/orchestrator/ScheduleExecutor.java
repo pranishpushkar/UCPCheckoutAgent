@@ -10,6 +10,8 @@ import dev.ucplab.core.intent.ProposedLine;
 import dev.ucplab.core.intent.PurchaseIntent;
 import dev.ucplab.core.intent.StepResult;
 import dev.ucplab.core.merchant.MerchantGateway;
+import dev.ucplab.core.merchant.MerchantGateways;
+import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.fake.FaultyMerchantModel;
 import dev.ucplab.core.merchant.fake.FaultRule;
 import java.time.Duration;
@@ -66,6 +68,7 @@ final class ScheduleExecutor {
     };
 
     private final WorkerFactory factory;
+    private final boolean spread;
     private final FaultyMerchantModel.Mode mode;
     private final java.util.function.Function<dev.ucplab.core.MutableClock, CrashHarness.Stores> storeFactory;
 
@@ -77,12 +80,37 @@ final class ScheduleExecutor {
     /** The same over the store {@code storeFactory} builds for each schedule's clock (the SQL adapter, M3). */
     ScheduleExecutor(WorkerFactory factory, FaultyMerchantModel.Mode mode,
             java.util.function.Function<dev.ucplab.core.MutableClock, CrashHarness.Stores> storeFactory) {
+        this(factory, mode, storeFactory, false);
+    }
+
+    /**
+     * {@code spread}: two merchants (I11, 8.5). The slots alternate between {@link Lab#SHOP} and {@link Lab#SHOP_B}, the
+     * orchestrator picks each intent's gateway by its merchant, and every fault, price, stock change and crash of a
+     * schedule applies to both merchants, so each runs the whole schedule's faults for the slots it holds.
+     */
+    static ScheduleExecutor spread(FaultyMerchantModel.Mode mode) {
+        return new ScheduleExecutor(DEFAULT_ORCHESTRATOR, mode, Lab::inMemoryStores, true);
+    }
+
+    private ScheduleExecutor(WorkerFactory factory, FaultyMerchantModel.Mode mode,
+            java.util.function.Function<dev.ucplab.core.MutableClock, CrashHarness.Stores> storeFactory,
+            boolean spread) {
+        this.spread = spread;
         this.factory = factory;
         this.mode = mode;
         this.storeFactory = storeFactory;
     }
 
     Observations run(Schedule schedule) {
+        return new Execution().run(schedule).getFirst();
+    }
+
+    /**
+     * What each merchant saw: one {@link Observations} for a single merchant, and for a spread run (two merchants) one per
+     * merchant, each holding that merchant's slots, intents, calls, log and orders, so every invariant is checked in the
+     * single-merchant world it is written for, over the same shared clock, workers, leases and crashes.
+     */
+    List<Observations> runViews(Schedule schedule) {
         return new Execution().run(schedule);
     }
 
@@ -106,15 +134,22 @@ final class ScheduleExecutor {
         private final List<Observations.CrashEvent> crashes = new ArrayList<>();
         private final List<Observations.Sample> samples = new ArrayList<>();
         private final List<String> aborts = new ArrayList<>();
+        private final ProbeGateway probeB = new ProbeGateway(lab.merchantB, lab.clock, seq);
         private InterceptingGateway gateway;
+        private InterceptingGateway gatewayB;
         private Worker worker;
         private int workers;
         private int steps;
 
-        Observations run(Schedule schedule) {
+        List<Observations> run(Schedule schedule) {
             schedule.entries().stream()
                     .filter(ScheduleEntry.CallFault.class::isInstance).map(ScheduleEntry.CallFault.class::cast)
-                    .forEach(f -> lab.merchant.addRule(FaultRule.nth(f.call(), f.nth(), f.fault())));
+                    .forEach(f -> {
+                        lab.merchant.addRule(FaultRule.nth(f.call(), f.nth(), f.fault()));
+                        if (spread) {
+                            lab.merchantB.addRule(FaultRule.nth(f.call(), f.nth(), f.fault()));
+                        }
+                    });
             restart();
             try {
                 for (ScheduleEntry entry : schedule.entries()) {
@@ -129,8 +164,12 @@ final class ScheduleExecutor {
             slots.values().forEach(id -> sample(id, Observations.Phase.END));
             lab.clock.advance(SETTLE);
             lab.merchant.settle();
-            return new Observations(slots, probe.calls(), lab.merchant.log(), lab.merchant.orders(), decisions,
-                    crashes, samples, aborts, lab.config);
+            if (spread) {
+                lab.merchantB.settle();
+                return List.of(view(false), view(true));
+            }
+            return List.of(new Observations(slots, probe.calls(), lab.merchant.log(), lab.merchant.orders(), decisions,
+                    crashes, samples, aborts, lab.config));
         }
 
         private void apply(ScheduleEntry entry) {
@@ -140,14 +179,26 @@ final class ScheduleExecutor {
                 case ScheduleEntry.ApproveStale a -> decide(a.slot(), true, true);
                 case ScheduleEntry.Reject r -> decide(r.slot(), false, false);
                 case ScheduleEntry.Wait w -> runUntil(Optional.of(lab.clock.instant().plus(w.duration())));
-                case ScheduleEntry.SetPrice p -> lab.merchant.setPrice(p.itemId(), p.priceMinor());
-                case ScheduleEntry.SetStock s -> lab.merchant.setStock(s.itemId(), s.stock());
+                case ScheduleEntry.SetPrice p -> {
+                    lab.merchant.setPrice(p.itemId(), p.priceMinor());
+                    if (spread) {
+                        lab.merchantB.setPrice(p.itemId(), p.priceMinor());
+                    }
+                }
+                case ScheduleEntry.SetStock s -> {
+                    lab.merchant.setStock(s.itemId(), s.stock());
+                    if (spread) {
+                        lab.merchantB.setStock(s.itemId(), s.stock());
+                    }
+                }
                 case ScheduleEntry.CallFault f -> { } // installed before the first entry
                 case ScheduleEntry.Crash c -> {
-                    if (c.afterCall()) {
-                        gateway.crashAfterNext(c.call());
-                    } else {
-                        gateway.crashBeforeNext(c.call());
+                    for (InterceptingGateway g : spread ? List.of(gateway, gatewayB) : List.of(gateway)) {
+                        if (c.afterCall()) {
+                            g.crashAfterNext(c.call());
+                        } else {
+                            g.crashBeforeNext(c.call());
+                        }
                     }
                 }
             }
@@ -155,15 +206,16 @@ final class ScheduleExecutor {
 
         private void propose(int slot) {
             List<ProposedLine> lines = SLOT_LINES.get(slot);
+            MerchantId merchant = merchantOf(slot);
             Optional<IntentId> existing = Optional.ofNullable(slots.get(slot));
             if (existing.isPresent() && lab.intent(existing.get()).state().isTerminal()) {
                 return;
             }
             IntentId id;
             try {
-                id = worker.orchestrator().propose(lab.alice(), Lab.SHOP, lines, "property schedule").intentId();
+                id = worker.orchestrator().propose(lab.alice(), merchant, lines, "property schedule").intentId();
             } catch (InterceptingGateway.SimulatedCrash e) {
-                String dedupe = DefaultOrchestrator.dedupeKey(Lab.ALICE, Lab.SHOP, lines);
+                String dedupe = DefaultOrchestrator.dedupeKey(Lab.ALICE, merchant, lines);
                 id = lab.intents.findActiveByDedupeKey(dedupe)
                         .orElseThrow(() -> new Abort("crash in propose left no intent for slot " + slot)).id();
                 crashed(id, e);
@@ -276,7 +328,36 @@ final class ScheduleExecutor {
         private void restart() {
             workers++;
             gateway = new InterceptingGateway(probe);
+            if (spread) {
+                gatewayB = new InterceptingGateway(probeB);
+                InterceptingGateway.link(gateway, gatewayB);
+                Lab.Worker w = lab.routedWorker(currentWorkerId(),
+                        MerchantGateways.of(Map.of(Lab.SHOP, gateway, Lab.SHOP_B, gatewayB)));
+                worker = new Worker(w.orchestrator(), w.approvalService());
+                return;
+            }
             worker = factory.create(lab, currentWorkerId(), gateway);
+        }
+
+        /** Slots alternate between the two merchants when spread; otherwise every slot is at the one merchant. */
+        private MerchantId merchantOf(int slot) {
+            return spread && slot % 2 == 1 ? Lab.SHOP_B : Lab.SHOP;
+        }
+
+        /** What merchant A (or B) saw: its slots' intents, its calls, its log and its orders; every crash; the aborts go with A. */
+        private Observations view(boolean b) {
+            Map<Integer, IntentId> mine = new HashMap<>();
+            slots.forEach((slot, id) -> {
+                if (merchantOf(slot).equals(b ? Lab.SHOP_B : Lab.SHOP)) {
+                    mine.put(slot, id);
+                }
+            });
+            java.util.Set<IntentId> ids = new java.util.HashSet<>(mine.values());
+            FaultyMerchantModel model = b ? lab.merchantB : lab.merchant;
+            return new Observations(mine, (b ? probeB : probe).calls(), model.log(), model.orders(),
+                    decisions.stream().filter(d -> ids.contains(d.intent())).toList(),
+                    crashes,   // a crash kills the process: it matters to every intent, whichever merchant it was at
+                    samples.stream().filter(x -> ids.contains(x.intent())).toList(), b ? List.of() : aborts, lab.config);
         }
 
         private String currentWorkerId() {
