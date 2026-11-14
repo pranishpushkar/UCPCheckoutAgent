@@ -58,19 +58,19 @@ import java.util.concurrent.TimeUnit;
  * ({@link #racer}). An agent row (M5) also gets the ports the agent runtime's tools call ({@link #toolPorts}): a
  * one-entry registry, a catalog client on the lane's proxy, and this stack's orchestrator.
  */
-final class AgentStack implements AutoCloseable {
+public final class AgentStack implements AutoCloseable {
 
     static final String UCP_AGENT = "profile=\"https://eval.ucplab.dev/agent\"";
     private static final int POOL_SIZE = 4;
     /** A decision that holds the intent only for its own write (see the constructor). */
     static final Duration DECISION_ONLY = Duration.ofMillis(1);
 
-    final Clock clock = Clock.systemUTC();
+    public final Clock clock = Clock.systemUTC();
     final Database db;
-    final SqlIntentRepository intents;
+    public final SqlIntentRepository intents;
     final SqlApprovalRepository approvals;
-    final DefaultApprovalService approvalService;
-    final DefaultOrchestrator orchestrator;
+    public final DefaultApprovalService approvalService;
+    public final DefaultOrchestrator orchestrator;
     final RecoveryWorker worker;
     final RecoveryLoop loop;
     private final ScheduledExecutorService scheduler;
@@ -105,7 +105,7 @@ final class AgentStack implements AutoCloseable {
     }
 
     /** @param wiring the merchant's handler, versions, shipping policy and instrument; the handler check of 8.5 runs here */
-    AgentStack(URI merchantUrl, Path dbFile, TimeScale scale, long seed, IdGenerator ids, String paymentToken,
+    public AgentStack(URI merchantUrl, Path dbFile, TimeScale scale, long seed, IdGenerator ids, String paymentToken,
                Duration approvalLease, String canary, MerchantWiring wiring) {
         this.wiring = wiring;
         this.dbFile = dbFile;

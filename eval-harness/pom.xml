@@ -165,6 +165,13 @@
              ./mvnw -B -ntp verify -Pinterop -DskipTests -pl eval-harness -am (after scripts/interop-fetch.sh). -->
         <profile>
             <id>interop</id>
+            <properties>
+                <interop.runs>20</interop.runs>
+                <interop.lanes>4</interop.lanes>
+                <interop.k>4</interop.k>
+                <interop.trace>false</interop.trace>
+                <interop.rows>S0,S1,S2,S3,S4,S5,S6,S7</interop.rows>
+            </properties>
             <build>
                 <plugins>
                     <plugin>
@@ -183,6 +190,11 @@
                                         <argument>-classpath</argument>
                                         <classpath/>
                                         <argument>-Dinterop.repo=${project.basedir}/..</argument>
+                                        <argument>-Dinterop.runs=${interop.runs}</argument>
+                                        <argument>-Dinterop.lanes=${interop.lanes}</argument>
+                                        <argument>-Dinterop.k=${interop.k}</argument>
+                                        <argument>-Dinterop.trace=${interop.trace}</argument>
+                                        <argument>-Dinterop.rows=${interop.rows}</argument>
                                         <argument>dev.ucplab.eval.interop.InteropMain</argument>
                                     </arguments>
                                     <classpathScope>runtime</classpathScope>
