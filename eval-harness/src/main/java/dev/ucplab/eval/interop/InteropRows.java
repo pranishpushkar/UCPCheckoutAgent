@@ -40,8 +40,15 @@ final class InteropRows {
 
     /** One row: what the proxy does, what the harness changes at the sample before the decision, the card, the answer. */
     record Row(String id, String title, BiFunction<TimeScale, Integer, RuleSet> rules, BiConsumer<SampleMerchant, long[]> before,
-               String token, Set<IntentState> expected, boolean twice, boolean sameTotalAsApproved) {
+               String token, Set<IntentState> expected, boolean twice, boolean sameTotalAsApproved, Mode mode) {
+        Row(String id, String title, BiFunction<TimeScale, Integer, RuleSet> rules, BiConsumer<SampleMerchant, long[]> before,
+            String token, Set<IntentState> expected, boolean twice, boolean sameTotalAsApproved) {
+            this(id, title, rules, before, token, expected, twice, sameTotalAsApproved, Mode.NORMAL);
+        }
     }
+
+    /** How the run is driven beyond propose, approve and advance. */
+    enum Mode { NORMAL, RACE, WINDOW }
 
     /** What one run saw. */
     record Result(String row, int run, IntentState state, int newOrders, long millis, List<String> violations) {
@@ -83,12 +90,26 @@ final class InteropRows {
                             m.setStock(ITEM, 0);
                         }, SampleWiring.SUCCESS_TOKEN, Set.of(IntentState.FAILED_NOT_CHARGED), false, false),
                 new Row("S7", "payment declined", (t, r) -> RuleSet.empty(), none, SampleWiring.FAIL_TOKEN,
-                        Set.of(IntentState.FAILED_NOT_CHARGED), false, false));
+                        Set.of(IntentState.FAILED_NOT_CHARGED), false, false),
+                new Row("S8", "503 on every checkout call for 20 s / k, then recovery", (t, r) -> RuleSet.empty(), none,
+                        SampleWiring.SUCCESS_TOKEN, Set.of(IntentState.COMPLETED, IntentState.ESCALATED), false, false, Mode.WINDOW),
+                new Row("S13", "duplicate_request on complete (parallel in even runs, sequential in odd)",
+                        (t, r) -> rules(r, new Rule("duplicate-complete", Match.of("POST", complete).withNth(1),
+                                new Action.DuplicateRequest(r % 2 == 0 ? Action.DuplicateRequest.Mode.PARALLEL
+                                        : Action.DuplicateRequest.Mode.SEQUENTIAL)).withTimes(1)), none,
+                        SampleWiring.SUCCESS_TOKEN, Set.of(IntentState.COMPLETED), false, false),
+                new Row("S14", "24 workers advance one APPROVED intent together", (t, r) -> RuleSet.empty(), none,
+                        SampleWiring.SUCCESS_TOKEN, Set.of(IntentState.COMPLETED), false, false, Mode.RACE));
     }
 
     /** Runs one row once against a lane's sample and proxy. */
     static Result run(Row row, int run, SampleMerchant sample, FaultProxy proxy, ProfileServer profile, Path work, TimeScale scale)
             throws Exception {
+        return run(row, run, sample, proxy, profile, work, scale, profile.ucpAgent());
+    }
+
+    static Result run(Row row, int run, SampleMerchant sample, FaultProxy proxy, ProfileServer profile, Path work, TimeScale scale,
+            String ucpAgent) throws Exception {
         long started = System.nanoTime();
         List<String> violations = new ArrayList<>();
         Path db = work.resolve(row.id() + "-" + run + ".db");
@@ -99,8 +120,9 @@ final class InteropRows {
         IntentState state;
         long approvedTotal = -1;
         String reason = "";
+        String sessionId = "";
         try (AgentStack stack = new AgentStack(proxy.baseUrl(), db, scale, run, new SequentialIdGenerator(row.id() + "r" + run),
-                row.token(), scale.orchestrator().lease(), "", SampleWiring.of(profile.ucpAgent()))) {
+                row.token(), row.mode() == Mode.RACE ? AgentStack.DECISION_ONLY : scale.orchestrator().lease(), "", SampleWiring.of(ucpAgent))) {
             UserId user = new UserId("interop-user");
             AuthContext auth = new AuthContext(user, "john.doe@example.com", stack.clock.instant(), "interop-session");
             IntentId id = stack.orchestrator.propose(auth, SHOP, BASKET, "interop " + row.id()).intentId();
@@ -129,7 +151,26 @@ final class InteropRows {
                         row.before().accept(sample, saved);
                         changed = true;
                     }
+                    if (row.mode() == Mode.WINDOW) {
+                        proxy.install(new RuleSet(run, List.of(
+                                new Rule("outage-post", Match.of("POST", "/checkout-sessions/**"), Action.FailBeforeForward.status(503)),
+                                new Rule("outage-put", Match.of("PUT", "/checkout-sessions/**"), Action.FailBeforeForward.status(503)),
+                                new Rule("outage-get", Match.of("GET", "/checkout-sessions/**"), Action.FailBeforeForward.status(503)))));
+                        Thread clear = new Thread(() -> {
+                            try {
+                                Thread.sleep(scale.s8Outage().toMillis());
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                            }
+                            proxy.clearRules();
+                        }, "interop-s8-clear");
+                        clear.setDaemon(true);
+                        clear.start();
+                    }
                     stack.approvalService.decide(auth, id, pending.token(), true);
+                    if (row.mode() == Mode.RACE) {
+                        race(stack, id, run, scale);
+                    }
                     continue;
                 }
                 long wait = r.nextAttemptAt().map(t -> Math.max(10, Duration.between(Instant.now(), t).toMillis())).orElse(50L);
@@ -139,6 +180,7 @@ final class InteropRows {
                 stack.intents.attempts(id).forEach(x -> System.err.println("[attempt] " + x.op() + " rev " + x.revision() + " http "
                         + x.httpStatus() + "\n   req " + x.requestBody().map(b -> b.json()).orElse("") + "\n   resp " + x.responseJson().orElse("")));
             }
+            sessionId = stack.intents.findForSystem(id).flatMap(i -> i.sessionId()).map(x -> x.value()).orElse("");
             reason = stack.intents.findForSystem(id).flatMap(i -> i.failureReason()).orElse("");
             if (!state.isTerminal()) {
                 violations.add("not terminal within the bound: " + state);
@@ -154,24 +196,68 @@ final class InteropRows {
         }
         List<SampleOrder> orders = sample.orders();
         int newOrders = orders.size() - ordersBefore;
-        if (!row.expected().contains(state) && Boolean.getBoolean("interop.trace")) {
-            proxy.log(0).forEach(e -> System.err.println("[proxy] " + e.method() + " " + e.path() + " -> " + e.merchantStatus()
-                    + " " + e.action() + " forwarded=" + e.forwarded()));
-        }
         if (!row.expected().contains(state)) {
             violations.add("expected " + row.expected() + " but " + state + (reason.isEmpty() ? "" : " (" + reason + ")"));
         }
-        int expectedOrders = state == IntentState.COMPLETED ? 1 : 0;
-        if (newOrders != expectedOrders) {
-            violations.add("I1: " + newOrders + " new order(s) in the sample's orders table; expected " + expectedOrders
-                    + " for " + state);
-        }
-        if (newOrders > 0 && row.sameTotalAsApproved() && !orders.isEmpty()
-                && orders.get(orders.size() - 1).totalMinor() != approvedTotal) {
-            violations.add("I2: order total " + orders.get(orders.size() - 1).totalMinor() + " is not the approved total "
-                    + approvedTotal);
-        }
+        violations.addAll(groundTruth(state, sessionId, orders.subList(ordersBefore, orders.size()), approvedTotal));
         return new Result(row.id(), run, state, newOrders, (System.nanoTime() - started) / 1_000_000, violations);
+    }
+
+    /** S14: 24 workers on the same database file call advance together once the decision's lease has run out. */
+    private static void race(AgentStack stack, IntentId id, int run, TimeScale scale) throws Exception {
+        Thread.sleep(20);
+        List<AgentStack.Racer> racers = new ArrayList<>();
+        try {
+            for (int i = 0; i < 24; i++) {
+                racers.add(stack.racer(new SequentialIdGenerator("S14r" + run + "w" + i), i));
+            }
+            java.util.concurrent.CountDownLatch go = new java.util.concurrent.CountDownLatch(1);
+            List<Thread> threads = new ArrayList<>();
+            for (AgentStack.Racer r : racers) {
+                Thread t = new Thread(() -> {
+                    try {
+                        go.await();
+                        r.orchestrator().advance(id);
+                    } catch (RuntimeException | InterruptedException e) {
+                        // a lost race is expected; the table decides
+                    }
+                });
+                threads.add(t);
+                t.start();
+            }
+            go.countDown();
+            for (Thread t : threads) {
+                t.join();
+            }
+        } finally {
+            racers.forEach(AgentStack.Racer::close);
+        }
+    }
+
+    /**
+     * I1 and I2 from the sample's own table (H1 C8b): a COMPLETED intent has exactly one new order, it carries the intent's
+     * own session id (not just any order: the count alone would pass a foreign one), and its total is the approved total,
+     * shipping included. Any other end has none.
+     */
+    static List<String> groundTruth(IntentState state, String sessionId, List<SampleOrder> newOrders, long approvedTotal) {
+        List<String> out = new ArrayList<>();
+        if (state != IntentState.COMPLETED) {
+            if (!newOrders.isEmpty()) {
+                out.add("I1: " + newOrders.size() + " new order(s) in the sample's orders table for " + state);
+            }
+            return out;
+        }
+        if (newOrders.size() != 1) {
+            out.add("I1: " + newOrders.size() + " new order(s) in the sample's orders table; expected 1 for COMPLETED");
+        }
+        for (SampleOrder o : newOrders) {
+            if (!o.checkoutId().equals(sessionId)) {
+                out.add("I1: the new order " + o.id() + " is for checkout " + o.checkoutId() + ", not this intent's " + sessionId);
+            } else if (o.totalMinor() != approvedTotal) {
+                out.add("I2: order total " + o.totalMinor() + " is not the approved total " + approvedTotal);
+            }
+        }
+        return out;
     }
 
     static byte[] key() {

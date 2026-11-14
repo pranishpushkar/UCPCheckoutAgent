@@ -63,7 +63,7 @@ public final class AgentStack implements AutoCloseable {
     static final String UCP_AGENT = "profile=\"https://eval.ucplab.dev/agent\"";
     private static final int POOL_SIZE = 4;
     /** A decision that holds the intent only for its own write (see the constructor). */
-    static final Duration DECISION_ONLY = Duration.ofMillis(1);
+    public static final Duration DECISION_ONLY = Duration.ofMillis(1);
 
     public final Clock clock = Clock.systemUTC();
     final Database db;
@@ -211,7 +211,7 @@ public final class AgentStack implements AutoCloseable {
      *
      * @param ids an id generator with a prefix of its own (Decision 4)
      */
-    Racer racer(IdGenerator ids, int index) {
+    public Racer racer(IdGenerator ids, int index) {
         Database racerDb = Database.open(dbFile, 1);
         try {
             SqlIntentRepository repo = new SqlIntentRepository(racerDb, clock);
@@ -229,7 +229,7 @@ public final class AgentStack implements AutoCloseable {
     }
 
     /** One extra worker of S14. */
-    record Racer(Database db, String workerId, DefaultOrchestrator orchestrator) implements AutoCloseable {
+    public record Racer(Database db, String workerId, DefaultOrchestrator orchestrator) implements AutoCloseable {
         @Override
         public void close() {
             db.close();

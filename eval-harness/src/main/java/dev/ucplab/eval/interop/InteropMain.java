@@ -62,11 +62,34 @@ public final class InteropMain {
                 return out;
             }));
         }
-        for (Future<List<InteropRows.Result>> f : futures) {
-            all.addAll(f.get());
+        try {
+            for (Future<List<InteropRows.Result>> f : futures) {
+                all.addAll(f.get());
+            }
+        } finally {
+            pool.shutdownNow();
         }
-        pool.shutdown();
         long total = (System.nanoTime() - started) / 1_000_000;
+        List<String> findings = new ArrayList<>();
+        if (Boolean.parseBoolean(System.getProperty("interop.probes", "true"))) {
+            Path laneWork = Files.createDirectories(work.resolve("probes"));
+            try (ProfileServer profile = ProfileServer.start();
+                 SampleMerchant sample = SampleMerchant.start(new PinnedSampleLauncher(repo, laneWork.resolve("logs")), laneWork,
+                         Duration.ofSeconds(60))) {
+                findings.addAll(new SampleProbes(sample, profile.ucpAgent()).run());
+            }
+            // the unreachable profile: the agent-profile server is stopped, so the sample cannot fetch the URL it is given
+            try (ProfileServer profile = ProfileServer.start();
+                 SampleMerchant sample = SampleMerchant.start(new PinnedSampleLauncher(repo, laneWork.resolve("logs2")), laneWork,
+                         Duration.ofSeconds(60));
+                 FaultProxy proxy = FaultProxy.start(sample.baseUrl(), 0, InteropRows.key())) {
+                String agent = profile.ucpAgent();
+                profile.close();
+                InteropRows.Result r = InteropRows.run(InteropRows.rows("").get(0), 0, sample, proxy, profile, laneWork, scale, agent);
+                findings.add("unreachable agent profile URL: the agent's run ended " + r.state() + ", new orders " + r.newOrders()
+                        + ", violations " + r.violations());
+            }
+        }
         StringBuilder report = new StringBuilder();
         boolean failed = false;
         report.append(String.format("%-4s %-5s %-60s %s%n", "row", "runs", "terminal states", "orders / violations / time"));
@@ -84,6 +107,7 @@ public final class InteropMain {
         }
         report.append(String.format("lanes=%d runs/row=%d k=%d total=%.1fs; agent-profile fetches by the sample per lane: %s%n",
                 lanes, runs, scale.k(), total / 1000.0, java.util.Arrays.toString(fetches)));
+        findings.forEach(f -> report.append("PROBE ").append(f).append('\n'));
         System.out.print(report);
         Files.writeString(work.resolve("interop-report.txt"), report.toString());
         if (failed) {
