@@ -276,11 +276,60 @@ class MigrationsTest {
                         .contains("app_user", "user_session").doesNotContain("login_state");
                 assertThat(column(db, "SELECT name FROM sqlite_master WHERE type = 'index'")).contains("ix_session_user");
                 assertThat(column(db, "SELECT version FROM flyway_schema_history WHERE success = 1"
-                        + " ORDER BY installed_rank")).endsWith("6");
+                        + " ORDER BY installed_rank")).contains("6");
             }
         }
         try (Database db = Database.open(upgraded, 1)) {
             assertThat(column(db, "SELECT id FROM agent_run")).containsExactly("r");
+        }
+    }
+
+    // Covers: I11, 4.3, 10 (V7's trigger refuses a raw UPDATE of purchase_intent.merchant_id, by any writer, and lets an
+    // update that leaves it as it is, and every other column, through)
+    @Test
+    void v7_aRawUpdateOfMerchantId_aborts_otherUpdatesDoNot() {
+        Path file = dir.resolve("v7.db");
+        Migrations.migrate(file);
+        try (Database db = Database.open(file, 1)) {
+            exec(db, intent("i1", "m", "k1", "PROPOSED", null));
+
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> exec(db, "UPDATE purchase_intent SET merchant_id = 'other' WHERE id = 'i1'"))
+                    .hasRootCauseMessage("[SQLITE_CONSTRAINT_TRIGGER] A RAISE function within a trigger fired, causing the"
+                            + " SQL statement to abort (I11: merchant_id never changes)");
+            exec(db, "UPDATE purchase_intent SET merchant_id = merchant_id, state = 'QUOTING' WHERE id = 'i1'");
+
+            assertThat(column(db, "SELECT merchant_id || ':' || state FROM purchase_intent")).containsExactly("m:QUOTING");
+            assertThat(column(db, "SELECT version FROM flyway_schema_history WHERE success = 1"
+                    + " ORDER BY installed_rank")).endsWith("7");
+        }
+    }
+
+    // Covers: I11, 10 (a database migrated to V6 and holding rows upgrades to V7 with every row exactly as it was: V7
+    // adds a trigger and rewrites nothing)
+    @Test
+    void v7_upgradesAV6DatabaseWithRows_leavingEveryRowUnchanged() {
+        Path file = dir.resolve("v6-to-v7.db");
+        Flyway.configure().dataSource("jdbc:sqlite:" + file, null, null).locations("classpath:db/migration")
+                .target("6").load().migrate();
+        String dump = "SELECT group_concat(id || '|' || user_id || '|' || merchant_id || '|' || state || '|' || version"
+                + " || '|' || created_at, ';') FROM (SELECT * FROM purchase_intent ORDER BY id)";
+        List<String> before;
+        try (Database old = Database.open(file, 1)) {
+            exec(old, intent("i1", "merchant-a", "k1", "PROPOSED", null));
+            exec(old, intent("i2", "merchant-b", "k2", "QUOTING", null));
+            before = column(old, dump);
+            assertThat(column(old, "SELECT name FROM sqlite_master WHERE type = 'trigger'")).isEmpty();
+        }
+
+        Migrations.migrate(file);
+
+        try (Database db = Database.open(file, 1)) {
+            assertThat(column(db, dump)).isEqualTo(before);
+            assertThat(column(db, "SELECT count(*) FROM purchase_intent")).containsExactly("2");
+            assertThat(column(db, "SELECT name FROM sqlite_master WHERE type = 'trigger'"))
+                    .containsExactly("purchase_intent_merchant_immutable");
+            assertThat(column(db, "SELECT version FROM flyway_schema_history WHERE success = 1"
+                    + " ORDER BY installed_rank")).endsWith("6", "7");
         }
     }
 

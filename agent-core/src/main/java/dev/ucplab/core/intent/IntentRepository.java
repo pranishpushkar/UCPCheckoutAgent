@@ -28,8 +28,13 @@ public interface IntentRepository {
      * Writes the intent's mutable fields and sets the stored version to {@code expectedVersion + 1}, only if the
      * stored version equals {@code expectedVersion} and the stored lease owner is {@code leaseOwner} (7.6).
      *
+     * <p>I11: an intent belongs to exactly one merchant for its whole life. A copy whose {@code merchantId} differs from
+     * the stored one is refused, here and in {@link #recordAttempt} and {@link #resolveAttempt}, before anything is
+     * written.
+     *
      * @throws StaleVersionException the stored version differs
      * @throws LeaseLostException the stored lease owner differs
+     * @throws IllegalArgumentException (message starting {@code "I11:"}) the copy names another merchant
      */
     void update(PurchaseIntent intent, long expectedVersion, String leaseOwner);
 

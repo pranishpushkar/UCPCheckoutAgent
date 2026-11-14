@@ -206,12 +206,13 @@ public abstract class IntentRepositoryContract {
         assertThatThrownBy(() -> repo.update(claimed, 7, W2)).isInstanceOf(LeaseLostException.class);
     }
 
-    // Covers: T2, 7.6 (update never changes owner, merchant, dedupe key or lease, whatever the caller's copy says)
+    // Covers: T2, 7.6 (update never changes owner, dedupe key or lease, whatever the caller's copy says; the merchant of the
+    // copy must be the stored one, I11, see update_refusesAnotherMerchant_andChangesNothing)
     @Test
     void update_keepsOwnerAndLease_whateverTheCallerPasses() {
         PurchaseIntent claimed = insertAndClaim("i1", ALICE, "d1", W1);
         PurchaseIntent forged = new PurchaseIntent(
-                claimed.id(), BOB, new MerchantId("other"), "forged", List.of(new ProposedLine("other", 5)),
+                claimed.id(), BOB, SHOP, "forged", List.of(new ProposedLine("other", 5)),
                 "forged@example.com", IntentState.COMPLETING, 99,
                 Optional.empty(), Optional.empty(), 0, Optional.empty(), Optional.empty(), Optional.empty(), false,
                 Optional.of(W2), Optional.of(T0.plusSeconds(9999)), T0.minusSeconds(5), clock.instant());
@@ -229,6 +230,61 @@ public abstract class IntentRepositoryContract {
         assertThat(stored.leaseUntil()).isEqualTo(claimed.leaseUntil());
         assertThat(stored.version()).isEqualTo(1);
         assertThat(repo.find(BOB, claimed.id())).isEmpty();
+    }
+
+    /** A copy of {@code i} at another merchant: what a caller breaking I11 would pass. */
+    private static PurchaseIntent atMerchant(PurchaseIntent i, MerchantId merchant) {
+        return new PurchaseIntent(i.id(), i.owner(), merchant, i.dedupeKey(), i.lines(), i.buyerEmail(), i.state(),
+                i.version(), i.sessionId(), i.approvedSnapshotHash(), i.requoteCount(), i.orderId(), i.failureReason(),
+                i.uncertainSince(), i.cancelPending(), i.leaseOwner(), i.leaseUntil(), i.createdAt(), i.updatedAt());
+    }
+
+    // Covers: I11, 19 (an update whose merchant differs from the stored one is refused and changes nothing: the stored
+    // intent, its version and its lease are as before, so the same fenced write then still succeeds)
+    @Test
+    void update_refusesAnotherMerchant_andChangesNothing() {
+        PurchaseIntent claimed = insertAndClaim("i1", ALICE, "d1", W1);
+        PurchaseIntent moved = atMerchant(inState(claimed, IntentState.COMPLETING), new MerchantId("other"));
+
+        assertThatThrownBy(() -> repo.update(moved, 0, W1)).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageStartingWith("I11:");
+
+        PurchaseIntent stored = repo.findForSystem(claimed.id()).orElseThrow();
+        assertThat(stored.merchantId()).isEqualTo(SHOP);
+        assertThat(stored.state()).isEqualTo(IntentState.QUOTING);
+        assertThat(stored.version()).isZero();
+        repo.update(inState(claimed, IntentState.COMPLETING), 0, W1);
+        assertThat(repo.findForSystem(claimed.id()).orElseThrow().version()).isEqualTo(1);
+    }
+
+    // Covers: I11, 7.3 step 3 (recordAttempt is refused for another merchant, and the attempt is not recorded)
+    @Test
+    void recordAttempt_refusesAnotherMerchant_andRecordsNothing() {
+        PurchaseIntent claimed = insertAndClaim("i1", ALICE, "d1", W1);
+
+        assertThatThrownBy(() -> repo.recordAttempt(attempt("a1", claimed),
+                atMerchant(claimed, new MerchantId("other")), 0, W1))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("I11:");
+
+        assertThat(repo.attempts(claimed.id())).isEmpty();
+        assertThat(repo.findForSystem(claimed.id()).orElseThrow().version()).isZero();
+    }
+
+    // Covers: I11, 7.3 step 5 (resolving an attempt together with an intent at another merchant is refused, and the
+    // attempt stays SENT)
+    @Test
+    void resolveAttempt_refusesAnotherMerchant_andLeavesTheAttemptSent() {
+        PurchaseIntent claimed = insertAndClaim("i1", ALICE, "d1", W1);
+        MerchantAttempt sent = attempt("a1", claimed);
+        repo.recordAttempt(sent, claimed, 0, W1);
+
+        assertThatThrownBy(() -> repo.resolveAttempt(sent.id(), AttemptStatus.RESPONDED, Optional.empty(),
+                Optional.of("{}"), atMerchant(claimed, new MerchantId("other")), 1, W1))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("I11:");
+
+        assertThat(repo.attempts(claimed.id())).singleElement()
+                .satisfies(a -> assertThat(a.status()).isEqualTo(AttemptStatus.SENT));
+        assertThat(repo.findForSystem(claimed.id()).orElseThrow().merchantId()).isEqualTo(SHOP);
     }
 
     // Covers: 7.6 (cancel_pending is a stored field: written and cleared by update like any other mutable column)

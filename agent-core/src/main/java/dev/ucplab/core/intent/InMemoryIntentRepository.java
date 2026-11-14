@@ -101,6 +101,7 @@ public final class InMemoryIntentRepository implements IntentRepository {
         lock.lock();
         try {
             PurchaseIntent stored = fenced(intent.id(), expectedVersion, leaseOwner);
+            requireSameMerchant(stored, intent);
             intents.put(intent.id(), merge(stored, intent, expectedVersion + 1));
         } finally {
             lock.unlock();
@@ -131,6 +132,7 @@ public final class InMemoryIntentRepository implements IntentRepository {
         try {
             // Every check comes before the first write, so a failure leaves nothing behind (7.3 step 3).
             PurchaseIntent stored = fenced(intent.id(), expectedVersion, leaseOwner);
+            requireSameMerchant(stored, intent);
             if (attempts.containsKey(attempt.id())) {
                 throw new IllegalArgumentException("attempt id already exists: " + attempt.id());
             }
@@ -173,6 +175,7 @@ public final class InMemoryIntentRepository implements IntentRepository {
         try {
             // Every check comes before the first write, so a failure leaves nothing behind (7.3 step 5).
             PurchaseIntent stored = fenced(intent.id(), expectedVersion, leaseOwner);
+            requireSameMerchant(stored, intent);
             MerchantAttempt attempt = attempts.get(id);
             if (attempt == null) {
                 throw new IntentNotFoundException("no such attempt: " + id);
@@ -357,6 +360,13 @@ public final class InMemoryIntentRepository implements IntentRepository {
             throw new StaleVersionException(id, expectedVersion, stored.version());
         }
         return stored;
+    }
+
+    /** I11: an intent belongs to one merchant for its whole life. Checked before any write, so a refusal leaves nothing. */
+    private static void requireSameMerchant(PurchaseIntent stored, PurchaseIntent update) {
+        if (!stored.merchantId().equals(update.merchantId())) {
+            throw new IllegalArgumentException("I11: the merchant of intent " + stored.id() + " cannot change");
+        }
     }
 
     /** Caller holds the lock. Refuses a session change once a complete attempt exists (I4). */
