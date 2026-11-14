@@ -103,6 +103,11 @@ public final class CircuitBreaker implements Gate {
         }
     }
 
+    @Override
+    public String reason() {
+        return "circuit_open";
+    }
+
     public State state() {
         lock.lock();
         try {

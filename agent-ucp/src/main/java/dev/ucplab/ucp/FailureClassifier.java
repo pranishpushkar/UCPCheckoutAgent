@@ -54,6 +54,14 @@ public final class FailureClassifier {
         return new CallOutcome.NotSent<>("circuit breaker open for " + clean(hostPort, 80));
     }
 
+    /** A call a gate refused, by the gate's {@link Gate#reason()}: it never left, so NotSent. */
+    public static CallOutcome<CheckoutView> refused(String reason, String hostPort) {
+        Objects.requireNonNull(reason, "reason");
+        return "rate_limited".equals(reason)
+                ? new CallOutcome.NotSent<>("rate limited for " + clean(Objects.requireNonNull(hostPort, "hostPort"), 80))
+                : circuitOpen(hostPort);
+    }
+
     /** Classifies a failure to get a complete reply. {@code NotSent} only for the whitelist above. */
     public CallOutcome<CheckoutView> classify(AttemptOp op, Throwable failure) {
         Objects.requireNonNull(op, "op");

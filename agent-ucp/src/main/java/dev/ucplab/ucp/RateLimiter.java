@@ -64,6 +64,11 @@ public final class RateLimiter implements Gate {
     }
 
     @Override
+    public String reason() {
+        return "rate_limited";
+    }
+
+    @Override
     public void record(CallOutcome<?> outcome) {
         if (outcome instanceof CallOutcome.ProtocolError<?> e && e.httpStatus() == 429 && e.retryAfter().isPresent()) {
             Duration wait = e.retryAfter().get();

@@ -96,7 +96,7 @@ public final class RetryExecutor {
         String firstUncertain = null;
         for (int attempt = 1;; attempt++) {
             if (!call.bypassGate() && !gate.tryAcquire()) {
-                return tainted(new Attempt.Result(FailureClassifier.circuitOpen(call.hostPort())), firstUncertain, attempt);
+                return tainted(new Attempt.Result(FailureClassifier.refused(gate.reason(), call.hostPort())), firstUncertain, attempt);
             }
             Attempt result = once(call, raw);
             if (!call.bypassGate()) {

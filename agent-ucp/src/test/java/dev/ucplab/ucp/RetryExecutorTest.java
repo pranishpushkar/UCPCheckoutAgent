@@ -303,6 +303,11 @@ class RetryExecutorTest {
             }
 
             @Override
+            public String reason() {
+                return "circuit_open";
+            }
+
+            @Override
             public void recordReplied() {
                 // not needed
             }
@@ -487,6 +492,11 @@ class RetryExecutorTest {
         @Override
         public void record(CallOutcome<?> outcome) {
             recorded.add(outcome);
+        }
+
+        @Override
+        public String reason() {
+            return "circuit_open";
         }
 
         @Override

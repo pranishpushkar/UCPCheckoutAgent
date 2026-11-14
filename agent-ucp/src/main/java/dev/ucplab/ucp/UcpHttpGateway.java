@@ -77,7 +77,7 @@ public final class UcpHttpGateway implements MerchantGateway {
     }
 
     /**
-     * @param endpointHosts {@code host:port} strings besides the base URL's that the profile's checkout endpoint may use
+     * @param endpointHosts {@code host[:port]} strings (https without a port is 443) besides the base URL's that the profile's checkout endpoint may use
      *     (8.5, {@code endpoint_hosts} of the registry): the operator, not the profile, decides which hosts carry
      *     checkout traffic
      */
@@ -92,7 +92,7 @@ public final class UcpHttpGateway implements MerchantGateway {
         Set<String> allowed = new LinkedHashSet<>();
         allowed.add(hostPort);
         for (String h : Objects.requireNonNull(endpointHosts, "endpointHosts")) {
-            allowed.add(normalizeHostPort(h));
+            allowed.add(normalizeHostPort(h, base.getScheme()));
         }
         this.allowedHostPorts = Set.copyOf(allowed);
         this.executor = new RetryExecutor(config, Objects.requireNonNull(transport, "transport"),
@@ -237,8 +237,9 @@ public final class UcpHttpGateway implements MerchantGateway {
         CallOutcome<CheckoutView> outcome = redactor.scrub(executor.execute(
                 new ApiCall(op, method, uri, key, body, bypassGate)));
         if (newIntent && outcome instanceof CallOutcome.ProtocolError<CheckoutView> e && e.httpStatus() >= 400
-                && e.httpStatus() < 500) {
-            // Section 20: a 4xx of a create may mean the profile changed; the next create fetches a fresh one.
+                && e.httpStatus() < 500 && e.httpStatus() != 429) {
+            // Section 20: a 4xx of a create may mean the profile changed; the next create fetches a fresh one. A 429
+            // says the merchant is busy, not that the profile changed.
             cache.set(null);
         }
         return session.isPresent() ? checkSession(op, session.get(), outcome) : outcome;
@@ -273,8 +274,11 @@ public final class UcpHttpGateway implements MerchantGateway {
     }
 
     /** {@code host:port} in the form {@link #hostPort(URI)} gives, so {@code Host:443} and {@code host:443} compare equal. */
-    private static String normalizeHostPort(String text) {
+    private static String normalizeHostPort(String text, String scheme) {
         int colon = text.lastIndexOf(':');
+        if (colon < 0 && "https".equalsIgnoreCase(scheme) && !text.isEmpty()) {
+            return text.toLowerCase(java.util.Locale.ROOT) + ":443";    // https without a port is 443; http is not guessed
+        }
         if (colon <= 0 || colon == text.length() - 1) {
             throw new IllegalArgumentException("an endpoint host is host:port, not " + text);
         }

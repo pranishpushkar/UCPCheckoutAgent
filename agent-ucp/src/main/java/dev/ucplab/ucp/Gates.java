@@ -17,15 +17,25 @@ public final class Gates {
      */
     public static Gate all(Gate... gates) {
         List<Gate> list = List.of(Objects.requireNonNull(gates, "gates"));
+        // The gate that refused this thread's last tryAcquire; a thread asks for the reason right after the refusal.
+        ThreadLocal<Gate> refused = new ThreadLocal<>();
         return new Gate() {
             @Override
             public boolean tryAcquire() {
                 for (Gate g : list) {
                     if (!g.tryAcquire()) {
+                        refused.set(g);
                         return false;
                     }
                 }
+                refused.remove();
                 return true;
+            }
+
+            @Override
+            public String reason() {
+                Gate g = refused.get();
+                return g == null ? "none" : g.reason();
             }
 
             @Override

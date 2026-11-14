@@ -16,6 +16,11 @@ public interface Gate {
         }
 
         @Override
+        public String reason() {
+            return "none";
+        }
+
+        @Override
         public void record(CallOutcome<?> outcome) {
             // nothing to record
         }
@@ -31,6 +36,12 @@ public interface Gate {
 
     /** The outcome of an attempt that {@link #tryAcquire} admitted. */
     void record(CallOutcome<?> outcome);
+
+    /**
+     * Why the last {@link #tryAcquire} of this thread said no: {@code rate_limited} (the limiter) or {@code circuit_open}
+     * (the breaker). Meaningful right after a refusal.
+     */
+    String reason();
 
     /** An admitted attempt got a usable reply whose body is not a checkout (a discovery profile): the host is alive. */
     void recordReplied();
