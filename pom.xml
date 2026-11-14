@@ -45,6 +45,11 @@
         <maven-enforcer-plugin.version>3.7.0</maven-enforcer-plugin.version>
         <maven-jar-plugin.version>3.5.1</maven-jar-plugin.version>
         <exec-maven-plugin.version>3.6.3</exec-maven-plugin.version>
+        <!-- H3, ADR 0009: PIT, used only by -Pmutation (never bound to a phase). 1.30.2 (2026-11-05) and the JUnit 5 plugin
+             1.2.3 (2025-05-20); the jars' signatures were verified with gpg (key 18CD85CBC5C1DB1684C5E59FA8E3B39F19E1CCE7).
+             Neither project declares JUnit 6 support; the pair works with Jupiter 6.1.3 and is re-checked on any upgrade. -->
+        <pitest.version>1.30.2</pitest.version>
+        <pitest-junit5-plugin.version>1.2.3</pitest-junit5-plugin.version>
     </properties>
 
     <dependencyManagement>
@@ -172,6 +177,18 @@
                     <artifactId>exec-maven-plugin</artifactId>
                     <version>${exec-maven-plugin.version}</version>
                 </plugin>
+                <plugin>
+                    <groupId>org.pitest</groupId>
+                    <artifactId>pitest-maven</artifactId>
+                    <version>${pitest.version}</version>
+                    <dependencies>
+                        <dependency>
+                            <groupId>org.pitest</groupId>
+                            <artifactId>pitest-junit5-plugin</artifactId>
+                            <version>${pitest-junit5-plugin.version}</version>
+                        </dependency>
+                    </dependencies>
+                </plugin>
             </plugins>
         </pluginManagement>
         <plugins>
@@ -198,4 +215,70 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!-- H3, ADR 0009: mutation testing with PIT. Binds nothing to any phase: it only configures pitest-maven, which is run by
+             name, and never as part of ./mvnw verify. For example (a module, the classes to mutate):
+               ./mvnw -B -ntp -Pmutation -pl agent-core test-compile org.pitest:pitest-maven:mutationCoverage \
+                 -Dmutation.targetClasses=dev.ucplab.core.policy.RequotePolicy
+             -Dmutation.mutators=DEFAULTS for classes that are not on a star path (default STRONGER). The property seed and the
+             try count reach PIT's forked test JVMs (jvmArgs) and are mandatory here: with a random seed a kill would not be
+             reproducible. verify keeps 10,000 schedules and its own seed handling. -->
+        <profile>
+            <id>mutation</id>
+            <properties>
+                <mutation.targetClasses>dev.ucplab.NOT_SET_use_mutation.targetClasses</mutation.targetClasses>
+                <mutation.mutators>STRONGER</mutation.mutators>
+                <!-- The module's own tests. agent-persistence puts core's test-jar on its classpath, whose tests read paths relative to
+                     agent-core and fail there, so its run passes -Dmutation.targetTests='dev.ucplab.persistence.*' (one glob: a comma list on the command line matched nothing).
+                     SqlCrashMatrixTest, the one persistence test in a core package, is not selected; P9 decides how to include it. -->
+                <mutation.targetTests>dev.ucplab.*</mutation.targetTests>
+                <mutation.extraExcludedTests>dev.ucplab.NONE</mutation.extraExcludedTests>
+                <mutation.property.tries>500</mutation.property.tries>
+                <mutation.property.seed>1</mutation.property.seed>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.pitest</groupId>
+                        <artifactId>pitest-maven</artifactId>
+                        <configuration>
+                            <targetClasses>
+                                <param>${mutation.targetClasses}</param>
+                            </targetClasses>
+                            <!-- All of the module's tests, not the class's package: DefaultApprovalService.decide is covered by tests in
+                                 other packages, and a narrow selection reads as no coverage (the H3 Stage 0 trap). -->
+                            <targetTests>
+                                <param>${mutation.targetTests}</param>
+                            </targetTests>
+                            <excludedTestClasses>
+                                <!-- the evaluation harness starts servers and child JVMs (S9, S14): minutes per run, and not part of any star path -->
+                                <param>dev.ucplab.eval.*</param>
+                                <!-- ArchUnit scans class files; it passes on any mutant and costs seconds -->
+                                <param>*ArchitectureTest</param>
+                                <param>${mutation.extraExcludedTests}</param>
+                            </excludedTestClasses>
+                            <mutators>
+                                <mutator>${mutation.mutators}</mutator>
+                            </mutators>
+                            <threads>4</threads>
+                            <failWhenNoMutations>false</failWhenNoMutations>
+                            <timestampedReports>false</timestampedReports>
+                            <outputFormats>
+                                <param>XML</param>
+                                <param>HTML</param>
+                            </outputFormats>
+                            <reportsDirectory>${project.build.directory}/pit-reports</reportsDirectory>
+                            <!-- No history files: PIT 1.30.2 refuses them without the commercial arcmutate history plugin ("History has been
+                                 enabled but no history plugin has been installed"), so incremental analysis (plan option C) is not available. -->
+                            <jvmArgs>
+                                <jvmArg>-Dproperty.tries=${mutation.property.tries}</jvmArg>
+                                <jvmArg>-Dproperty.seed=${mutation.property.seed}</jvmArg>
+                            </jvmArgs>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

@@ -20,3 +20,4 @@
 - Third-party merchants and their tooling (the UCP samples, `uv`, Python) run only through `scripts/interop-*` and `-Pinterop`, from a clone pinned to a commit hash recorded in `docs/interop/pin.txt` with a locked, hashed dependency set. They never run in `./mvnw verify`, and no job that runs them has a secret.
 - Nothing in verify needs Python, `uv`, Docker or the network.
 - A secret for a real service (a Shopify key) lives in the Keychain and the environment only: never in a file, an image, an argument or a log; scripts that use one have a `--dry-run` that shows every call with the secret replaced.
+- Mutation testing (PIT) runs only under `-Pmutation` and the manual mutation workflow, never in `./mvnw verify`; a survivor on a ★ path is killed or listed in `docs/mutation/equivalents.md` with the owner's approval.
