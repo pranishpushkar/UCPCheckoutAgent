@@ -1,7 +1,7 @@
 # ADR 0006: The agent service: Spring Boot, its classpath, and what M6 leaves for later
 
-Status: draft (M6 C1). m6-plan.md (with its Decisions block) sets the shape; this records what C1 measured. Later M6
-commits add the wiring, sessions, the run supervisor and the Compose network namespace before it is accepted.
+Status: accepted (M6, C21). m6-plan.md (with its Decisions block) sets the shape. This records what C1 measured, what the
+Compose spike and the logging work found, the Compose stack as C20 built it, and what M6 leaves for later.
 
 ## Decision
 
@@ -100,8 +100,8 @@ org.junit.jupiter:junit-jupiter:jar:6.1.3:test
      with 404 (section 12);
   3. `docker compose down -v` leaves no container or volume of the project.
 
-  Not yet shown, for C20: a `docker kill` and restart of a joined service while `lab-net` stays up (25.5 step 8), and
-  the same on the GitHub runner's Docker.
+  Shown in C20 (below): a `docker kill` and restart of a joined service while `lab-net` stays up (25.5 step 8). Not yet
+  shown: the same on the GitHub runner's Docker, which `quickstart.yml`'s first run will tell.
 
 ## Logging and I8 (C16)
 
@@ -130,6 +130,35 @@ I7). The session cookie is stored only as a hash and the approval token not at a
 handler, which prints the message and stack to stderr, outside the redacted log. `RunSupervisor`'s virtual threads have an
 uncaught-exception handler that logs the class name only; `ServiceLeakTest` plants a canary in an `Error`'s message.
 
+## The Compose stack and the key (C20)
+
+**VERIFY, 2026-11-14,** https://docs.docker.com/compose/how-tos/environment-variables/ and its sub-pages, then measured
+with `docker compose config` and real containers (fake values only), Compose v5.7.0:
+- **A bare name in `environment:` is filled from `.env` as well as from the shell**, and the shell wins when both set
+  it. The docs page does not say so; the test shows it. So the key must never be in `.env`: the README says so, and
+  `.env.example` keeps `GEMINI_API_KEY=` empty. Unset everywhere gives no variable in the container; empty in `.env`
+  gives an empty one. Either way the scripted model runs, and `AGENT_MODEL=gemini` refuses to start.
+- **`.env` inline comments:** `KEY=value # note` works, but `KEY=   # note` (spaces, then a comment) gives the *value*
+  `# note`. The old `.env.example` line `GEMINI_API_KEY=          # live mode only` would have set a junk key; the comment
+  is on its own line now.
+
+**agent-service in Compose** joins `lab-net`'s namespace (`network_mode: service:lab-net`), listens on 8080 there, and
+keeps its SQLite file on the named volume `ucplab-data` mounted at `/data`. Its image copies the boot jar and nothing
+else (the allowlist `.dockerignore` gained that one jar). `scripts/image-secret-scan.sh` exports all three images and
+searches every layer, config and history for planted canaries, after a positive control.
+
+**Recovery checks** (run by hand, 2026-11-14):
+- `docker kill` of the fault proxy, then `docker compose up -d fault-proxy`: healthy again in 2.6 s, and a purchase
+  completes.
+- `docker kill` of agent-service straight after an approve, then `docker compose up -d --wait agent-service`: the
+  intent reached COMPLETED with one order, 4 s after the kill (recovery, 7.6).
+- **`docker kill` of `lab-net` is not recovered by `docker compose up -d`.** The other three containers keep running
+  and report healthy, but they stay attached to the dead namespace, while the restarted `lab-net` has a new, empty
+  one: the host's port 8080 reaches nothing. `docker compose restart merchant-a fault-proxy agent-service` (or
+  `docker compose up -d --force-recreate`) recovers the stack. `depends_on: restart: true` does not help after an
+  external kill (tried). It is left as it is: `lab-net` is `sleep infinity` under `init: true` and only an operator's
+  `docker kill` stops it.
+
 ## Known gaps left for later
 
 - **21.3's rule that P3 and P5 are checked and updated in the same transaction as the intent insert is left for M7**
@@ -139,3 +168,17 @@ uncaught-exception handler that logs the class name only; `ServiceLeakTest` plan
 - **Tomcat answers an encoded slash (`%2F`) in a path with its own minimal error page before our handler runs**, so that
   one response is not the `{code, message, request_id}` JSON shape. `ErrorShapeTest.containerRejection_leaksNothing`
   proves the page leaks no exception, class name, path or server banner. Accepted for M6.
+- **The stored `complete` body holds the payment credential, by design** (I7, 7.4): it is built once, when the intent
+  becomes APPROVED, and every resend reads it from `merchant_attempt.request_body`, so a resend is byte-identical. That
+  is fine for the lab's mock tokens (N1). A real deployment would need a single-use payment token or encryption of that
+  column at rest. `ServiceLeakTest` allows the payment canary in that one column and nowhere else.
+- **Lab rules are global to the one proxy until M6b's sandboxes** (T7, 24.4). Any signed-in local user's
+  `PUT /api/lab/faults` changes the rules every user's purchases meet, which is why the `demo` profile still refuses to
+  start. The lab controls exist in `local` only.
+- **`docker kill lab-net` leaves the other containers on a dead namespace** (above): recover with
+  `docker compose restart merchant-a fault-proxy agent-service`.
+- **The CSRF token is stored in the clear in `user_session.csrf_token`**, as 18.5 specifies (the session cookie is stored
+  only as a hash). A leaked database file therefore reveals CSRF tokens, though not sessions.
+- **The hourly run limit (P5) counts turns in `agent_run_turn`**, so a person who rehearses a demo more than ten times in
+  an hour on one volume is refused with 429 until the hour passes or the volume is recreated.
+

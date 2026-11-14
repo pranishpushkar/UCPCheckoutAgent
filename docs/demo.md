@@ -6,19 +6,15 @@ what the static tests cannot (24.3 [CONTRACT], item by item). Tick each line; wr
 ## Start
 
 ```sh
-./mvnw -B -ntp -DskipTests package
-java -cp merchant/target/classes dev.ucplab.merchant.MerchantServer 9001 &
-java -cp fault-proxy/target/classes dev.ucplab.faultproxy.FaultProxyMain --port 9101 --upstream http://127.0.0.1:9001 &
-env -u GEMINI_API_KEY APPROVAL_SECRET="$(openssl rand -hex 32)" AGENT_PROFILE=local \
-  MERCHANT_URL=http://127.0.0.1:9101 MERCHANT_LAB_URL=http://127.0.0.1:9001 \
-  PUBLIC_ORIGIN=http://localhost:8080,http://127.0.0.1:8080 \
-  java -jar agent-service/target/agent-service-*.jar
+scripts/quickstart.sh          # steps 2 to 4 of the README: .env, the jars, four healthy containers
 ```
 
-The README's quick start (C21) replaces these commands with Compose. Open `http://localhost:8080/` (not `127.0.0.1`: the sign-in's Origin check accepts both, but use one throughout). The
-scripted model is the default: no key, no network. Never put `GEMINI_API_KEY` on a command line.
+Open `http://localhost:8080/` (use `localhost` throughout: the sign-in's Origin check lists both `localhost` and
+`127.0.0.1`, but a page must sign in at the host it was loaded from). The scripted model is the default: no key and no
+network. Never put `GEMINI_API_KEY` in `.env` or on a command line; step 8 of the README reads it from your shell.
 
-A local database from before Stage 4 needs deleting (`rm data/ucplab.db`): V5 was edited in place.
+Each user may start 10 runs an hour (P5), so after a few rehearsals run `docker compose down -v` and start again to get
+a clean volume. Stop with `docker compose down -v` (README step 9).
 
 ## 1. Sign-in (`/api/me` on load)
 
@@ -64,8 +60,8 @@ The approval needs a sign-in no older than 15 minutes (T4).
 
 ## 5. The fault lab (local only)
 
-- [ ] The **Fault lab** and the order counter are visible in `local`. (In `prod` they are absent: start with
-  `AGENT_PROFILE=prod` and the panel stays hidden.)
+- [ ] The **Fault lab** and the order counter are visible in `local`. (In `prod` they are absent: the panel stays hidden
+  and `/api/lab/*` is 404.)
 - [ ] **Drop next complete response**, then approve a purchase: it still ends with exactly one merchant order.
 - [ ] **Merchant returns 503 for 20 s**: a purchase started in the window waits; after 20 seconds it recovers.
 - [ ] **Merchant A down**, then **Clear faults**: the merchant answers again.
