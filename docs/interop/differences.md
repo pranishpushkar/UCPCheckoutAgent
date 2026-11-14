@@ -1,22 +1,30 @@
-# Differences between the lab merchant and the official sample (H1 C9)
+# Differences between the lab merchant and the official sample (H1 C9, C9b)
 
-Every difference the interop run observes is listed here with a class, or `-Pinterop` fails (`UNCLASSIFIED`). Classes:
-`ours` (a bug of the agent: fixed, or accepted with a written reason), `theirs` (the merchant's own behaviour, legal or not),
-`choice` (both shapes are legal and the agent accepts both, or a capability we chose to support or not), `ambiguity` (the
-specification does not settle it). The status of an `ours` entry is `fixed in <commit>` or `accepted: <reason>`.
+The interop run records the agent's calls to both merchants for the same rows (S0, S5, S6, S7), compares them step by step
+(`WireDiff`) and tests every raw difference against the `match` globs below, over `row/step/kind:detail` (`*` matches anything).
+A difference no entry matches fails `-Pinterop` as UNCLASSIFIED; an entry that matches nothing fails too, unless its evidence is
+`probe` or `history` (things no wire record shows). Classes: `ours` (a bug of the agent: status `fixed in <commit>` or
+`accepted: <reason>`), `theirs` (the merchant's own behaviour), `choice` (both shapes are legal, or a capability we chose),
+`ambiguity` (the specification does not settle it). Order matters: the first matching entry explains a difference.
 
-| id | class | why | status |
-| --- | --- | --- | --- |
-| refusal-4xx-at-complete | choice | The sample answers a refused complete (409 OUT_OF_STOCK, 402 INSUFFICIENT_FUNDS) as a 4xx with a UCP error envelope; the lab answers 200 with a message. Both shapes are legal under the checkout capability and the agent accepts both: the gateway reports either as the same refusal. | n/a |
-| error-codes-upper-case | theirs | The sample writes some codes in upper case (OUT_OF_STOCK, INSUFFICIENT_FUNDS, RESOURCE_NOT_FOUND, VERSION_UNSUPPORTED); the lab uses lower case. The agent reads them case-insensitively. | n/a |
-| complete-charges-held-quote | ambiguity | After a price change in the sample's products table, a GET does not show it and complete charges the quote it holds; only an update re-prices. Neither the 2026-04-08 nor the 2026-08-25 text of Complete Checkout says whether a business must re-price (read 2026-11-14), so S5 expects COMPLETED at the approved total and S16 cannot happen. | n/a |
-| fulfillment-mandatory | choice | The sample needs a shipping method, destination and option (three full-replacement updates) before ready_for_complete; the lab needs none. The agent supports this through a FulfillmentPolicy (H1 C6) and sends no address. | n/a |
-| endpoint-at-origin | theirs | The sample serves its REST endpoint at the origin (no /ucp/v1 prefix); the proxy rule paths follow the profile's endpoint (EndpointPaths). | n/a |
-| profile-version-2026-04-08 | theirs | The sample's profile declares 2026-04-08 and refuses version="2026-08-25" with 422. The agent pins ucp_versions per merchant and sends the negotiated version. | n/a |
-| no-catalog-capability | theirs | The sample declares no catalog capability, so the rows are orchestrator-direct and the agent cannot search it. | n/a |
-| agent-profile-fetch | theirs | The sample fetches the URL in UCP-Agent on every create and update (4 times per run); the harness serves the profile on loopback. A run with the profile unreachable still completes (probe). | n/a |
-| idempotency-conflict-409 | theirs | The sample answers the same key with a different body with 409 IDEMPOTENCY_CONFLICT and replays the same key and body with 200; both are correct behaviour and not a finding against the agent (S17 probe). | n/a |
-| required-headers-422 | theirs | The sample answers a create without Request-Id, UCP-Agent or Idempotency-Key with 422 INVALID_REQUEST; the lab answers 400. | n/a |
-| session-protection-hides-key-bug | theirs | A complete sent under a fresh key for an already completed checkout makes no second order at the sample (it protects the session), so the S13 planted bug "fresh key per complete" does not fail against it; the strict lab merchant does catch it. The sample cannot detect that class of bug. | n/a |
-| redactor-dropped-fulfillment | ours | The gateway's scrubbing rebuilt the checkout view without its fulfillment part, so the selection never progressed (found by the first live row). | fixed in c7fab56 |
-| payment-handler-constant | ours | UcpHttpGateway required the lab's handler id as a constant; the sample has another. | fixed in 92f8b6e |
+| id | class | match | evidence | why | status |
+| --- | --- | --- | --- | --- | --- |
+| error-codes-upper-case | theirs | */error-code:* | computed | The sample writes codes in upper case (OUT_OF_STOCK, INSUFFICIENT_FUNDS); the lab uses lower case. The agent reads them case-insensitively. | n/a |
+| complete-charges-held-quote | ambiguity | S5/*/step-only-*,S5/complete*/status:*,S5/complete/field-only-lab:resp:messages*,S5/complete/field-only-sample:resp:order* | computed | After a price change in the sample's products table, a GET does not show it and complete charges the quote it holds; only an update re-prices, so the lab's re-quote steps (update, a second complete) have no counterpart. Neither the 2026-04-08 nor the 2026-08-25 text of Complete Checkout says whether a business must re-price (read 2026-11-14). | n/a |
+| refusal-4xx-at-complete | choice | S6/complete/*,S7/complete/* | computed | The sample answers a refused complete (409 OUT_OF_STOCK, 402 INSUFFICIENT_FUNDS) as a 4xx with a UCP error envelope; the lab answers 200 with a message. The lab's answer is a whole checkout with a message; the sample's is an error envelope with no checkout body, so every checkout field of the lab's answer is absent from the sample's. Both shapes are legal and the agent accepts both. | n/a |
+| fulfillment-mandatory | choice | */update*,*/field-only-sample:req:fulfillment*,*/field-only-sample:resp:fulfillment* | computed | The sample needs a shipping method, destination and option (three full-replacement updates) before ready_for_complete; the lab needs none. The agent supports this through a FulfillmentPolicy and sends no address. | n/a |
+| endpoint-at-origin | theirs | */path:* | computed | The sample serves its REST endpoint at the origin; the lab's is under /ucp/v1. The proxy rule paths follow the profile's endpoint. | n/a |
+| no-catalog-capability | theirs | */discover/field-only-lab:resp:ucp.capabilities.dev.ucp.shopping.catalog* | computed | The sample declares no catalog capability, so the rows are orchestrator-direct and the agent cannot search it. | n/a |
+| optional-links-and-continue-url | choice | */field-only-lab:resp:links*,*/field-only-lab:resp:continue_url | computed | The lab's checkout carries a terms-of-service link and a continue_url; the sample returns an empty links array and no continue_url. Both are optional content under the checkout schema, so each merchant chooses. | n/a |
+| sample-discount-capability | theirs | */field-only-sample:resp:discounts | computed | The sample declares the discount capability and returns a discounts object; the agent ignores it. | n/a |
+| payment-handler-listing | theirs | */field-only-*:resp:ucp.payment_handlers.* | computed | Each merchant lists its own payment handlers in its profile and in every response envelope (the sample: google_pay, mock_payment_handler, shop_pay; the lab: mock_pay_1). The agent needs only its own handler id, checked at discovery. | n/a |
+| response-envelope-status | theirs | */field-only-sample:resp:ucp.status | computed | The sample's 2026-04-08 response envelope carries ucp.status; the lab's does not. The agent ignores it. | n/a |
+| sample-signing-keys | theirs | */discover/field-only-sample:resp:signing_keys* | computed | The sample publishes signing keys in its profile (signatures are optional and unused until H5). | n/a |
+| sample-wider-capabilities | theirs | */discover/field-only-sample:resp:ucp.capabilities.* | computed | The sample declares buyer_consent, cart, discount, fulfillment and order next to checkout; the lab declares checkout (and catalog). Fulfillment is the one that changes the agent's behaviour (fulfillment-mandatory). | n/a |
+| profile-version-2026-04-08 | theirs | | history | The sample's profile declares 2026-04-08 and refuses version="2026-08-25" with 422 (fixture 35). The agent pins ucp_versions per merchant. | n/a |
+| agent-profile-fetch | theirs | | probe | The sample fetches the URL in UCP-Agent on every create and update (4 per run); a run with the profile unreachable still completes. | n/a |
+| idempotency-conflict-409 | theirs | | probe | The same key with a different body is 409 IDEMPOTENCY_CONFLICT and the same key and body replays 200: correct behaviour, not a finding against the agent. | n/a |
+| required-headers-422 | theirs | | probe | A create without Request-Id, UCP-Agent or Idempotency-Key is 422 INVALID_REQUEST; the lab answers 400. | n/a |
+| session-protection-hides-key-bug | theirs | | history | A complete under a fresh key for a completed checkout makes no second order at the sample, so a planted "fresh key per complete" bug does not fail S13 there; the strict lab merchant catches it. | n/a |
+| redactor-dropped-fulfillment | ours | | history | The gateway's scrubbing rebuilt the checkout view without its fulfillment part, so the selection never progressed (found by the first live row). | fixed in c7fab56 |
+| payment-handler-constant | ours | | history | UcpHttpGateway required the lab's handler id as a constant; the sample has another. | fixed in 92f8b6e |

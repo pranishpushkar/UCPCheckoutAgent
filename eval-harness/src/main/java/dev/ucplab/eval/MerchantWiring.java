@@ -14,12 +14,23 @@ import java.util.function.Function;
  */
 public record MerchantWiring(
         String handlerId, Set<String> ucpVersions, FulfillmentPolicy fulfillmentPolicy,
-        Function<String, PaymentInstrument> instrument, String ucpAgent) {
+        Function<String, PaymentInstrument> instrument, String ucpAgent,
+        java.util.function.UnaryOperator<dev.ucplab.ucp.HttpTransport> transport) {
+
+    /** The same wiring with every checkout call going through {@code wrap} (the wire recorder of H1 C9b). */
+    public MerchantWiring withTransport(java.util.function.UnaryOperator<dev.ucplab.ucp.HttpTransport> wrap) {
+        return new MerchantWiring(handlerId, ucpVersions, fulfillmentPolicy, instrument, ucpAgent, wrap);
+    }
+
+    public MerchantWiring(String handlerId, Set<String> ucpVersions, FulfillmentPolicy fulfillmentPolicy,
+            Function<String, PaymentInstrument> instrument, String ucpAgent) {
+        this(handlerId, ucpVersions, fulfillmentPolicy, instrument, ucpAgent, t -> t);
+    }
 
     /** A wiring that names the harness's own agent profile URL, which the lab merchant never fetches. */
     public MerchantWiring(String handlerId, Set<String> ucpVersions, FulfillmentPolicy fulfillmentPolicy,
             Function<String, PaymentInstrument> instrument) {
-        this(handlerId, ucpVersions, fulfillmentPolicy, instrument, AgentStack.UCP_AGENT);
+        this(handlerId, ucpVersions, fulfillmentPolicy, instrument, AgentStack.UCP_AGENT, t -> t);
     }
 
     /** The lab merchant: handler {@code mock_pay_1}, version 2026-08-25, the lab's mock card. */
@@ -33,5 +44,6 @@ public record MerchantWiring(
         Objects.requireNonNull(fulfillmentPolicy, "fulfillmentPolicy");
         Objects.requireNonNull(instrument, "instrument");
         Objects.requireNonNull(ucpAgent, "ucpAgent");
+        Objects.requireNonNull(transport, "transport");
     }
 }

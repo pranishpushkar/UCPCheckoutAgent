@@ -200,7 +200,7 @@ public final class AgentStack implements AutoCloseable {
     }
 
     private UcpHttpGateway gateway(SplittableRandom random, IdGenerator ids) {
-        return new UcpHttpGateway(shop, ucp, new JdkHttpTransport(ucp), breakers, clock, Sleeper.THREAD, random, ids,
+        return new UcpHttpGateway(shop, ucp, wiring.transport().apply(new JdkHttpTransport(ucp)), breakers, clock, Sleeper.THREAD, random, ids,
                 java.util.Set.of(), wiring.handlerId(), wiring.ucpVersions());
     }
 
