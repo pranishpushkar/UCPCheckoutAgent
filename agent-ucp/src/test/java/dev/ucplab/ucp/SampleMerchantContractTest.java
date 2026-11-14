@@ -237,4 +237,29 @@ class SampleMerchantContractTest {
         assertThat(lab.create(request(), CREATE_KEY)).isInstanceOfSatisfying(CallOutcome.Ok.class,
                 ok -> assertThat(((CheckoutView) ok.value()).fulfillmentOffered()).isFalse());
     }
+
+    // Covers: 8.4, 7.2, I8 (an update answered by the sample keeps its fulfillment part and its total line through the
+    // gateway, including the scrubbing of merchant text: found when the live rows showed the selection never progressing)
+    @Test
+    void anUpdateAtTheSample_keepsTheFulfillmentPart_throughTheGateway() {
+        HttpTransport t = call -> {
+            calls.add(call);
+            if (call.uri().getPath().equals("/.well-known/ucp")) {
+                return new HttpReply(200, java.util.Map.of(), profile01().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+            return InteropFixtures.reply("06-happy-fulfillment-2-destination");
+        };
+        UcpHttpGateway g = gateway(t);
+
+        CallOutcome<CheckoutView> out = g.update(new SessionId("<id-13>"),
+                dev.ucplab.core.merchant.UpdateCheckout.of(List.of(new ProposedLine("bouquet_roses", 1)), Optional.empty()),
+                dev.ucplab.core.merchant.IdempotencyKey.derive(INTENT, MutatingOp.UPDATE, 0));
+
+        assertThat(out).isInstanceOfSatisfying(CallOutcome.Ok.class, ok -> {
+            CheckoutView v = (CheckoutView) ok.value();
+            assertThat(v.fulfillment()).isPresent();
+            assertThat(v.fulfillment().get().methods().get(0).groups()).hasSize(1);
+            assertThat(v.fulfillmentOffered()).isTrue();
+        });
+    }
 }

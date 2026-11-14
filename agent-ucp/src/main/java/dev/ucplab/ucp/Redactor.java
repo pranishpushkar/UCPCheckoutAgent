@@ -47,7 +47,8 @@ final class Redactor {
                 List<MerchantMessage> messages = messages(ok.messages());
                 CheckoutView v = ok.value();
                 CheckoutView clean = new CheckoutView(v.id(), v.status(), v.currency(), v.lines(), v.subtotalMinor(),
-                        v.taxMinor(), v.totalMinor(), v.order(), v.buyer(), messages);
+                        v.taxMinor(), v.totalMinor(), v.order(), v.buyer(), messages, v.fulfillment(),
+                        v.fulfillmentMinor(), v.fulfillmentOffered());
                 yield new CallOutcome.Ok<>(ok.httpStatus(), clean, messages);
             }
         };
