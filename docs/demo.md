@@ -54,9 +54,8 @@ The approval needs a sign-in no older than 15 minutes (T4).
 - [ ] Sign in, wait 16 minutes (or set the service's clock forward in a test run), propose a purchase, press **Approve**.
 - [ ] The browser goes to `/auth/login?reauth=true&return_to=/intents/{id}` ("Sign in again to approve.").
 - [ ] After signing in you are on `/intents/{id}`: the same console, the intent's timeline and its approval card.
-- [ ] **Decision to confirm:** the page does not approve by itself on return. The person presses **Approve** again. (24.3
-  says "retry the approval on return"; an approval without a click would be the agent deciding, so the console shows the
-  card and waits. Say if you want it to retry on its own.)
+- [ ] The page does not approve by itself on return: press **Approve** again (24.3 and 18.6). An approval sent without a
+  click on the returned page would be weaker consent, so the console shows the card and waits.
 
 ## 5. The fault lab (local only)
 

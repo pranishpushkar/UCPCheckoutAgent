@@ -134,4 +134,33 @@ class ConsoleStaticTest {
         assertThat(js).contains("/auth/login").contains("reauth=true&return_to=/intents/").contains("reauth_required")
                 .contains("/api/me").contains("X-CSRF-Token").contains("setStatus");
     }
+
+    // Covers: 24.3, 18.6 (as amended after M6: back from a re-authentication the console shows the card and waits; an
+    // approval is only ever sent by the person pressing Approve or Reject, never by the page on its own)
+    @Test
+    void decide_isCalledOnlyFromTheApproveAndRejectButtons() throws IOException {
+        List<String> calls = read("console.js").lines()
+                .filter(l -> l.contains("decide(") && !l.contains("async function decide(")).toList();
+
+        assertThat(calls).hasSize(2).allMatch(l -> l.matches("\\s*\\$\\(\"(approve|reject)\"\\)\\.onclick = \\(\\) => "
+                + "decide\\(id, token, \"(approve|reject)\"\\);"));
+    }
+
+    // Covers: 24.3, T6 (another user's intent, or a missing one, says "not found" instead of leaving an empty panel)
+    @Test
+    void timeline_saysNotFound_forAnIntentThatIsNotTheCallers() throws IOException {
+        String js = read("console.js");
+
+        assertThat(js).contains("result.status === 404").contains("Intent not found.");
+    }
+
+    // Covers: 24.3, P7 (the timeline names a re-quote after price_changed, and says who decided the approval)
+    @Test
+    void timeline_namesThePriceChange_andWhoDecided() throws IOException {
+        String js = read("console.js");
+
+        assertThat(js).contains("PRICE_CHANGED").contains("Price changed: re-quoting")
+                .contains("Approved by you").contains("Rejected by you")
+                .doesNotContain("\"Approval \" + (p.decision");
+    }
 }
