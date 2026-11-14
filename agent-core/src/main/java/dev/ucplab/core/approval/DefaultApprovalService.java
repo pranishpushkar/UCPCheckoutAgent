@@ -134,7 +134,8 @@ public final class DefaultApprovalService implements ApprovalService {
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(token, "token");
 
-        if (intents.find(auth.user(), id).isEmpty()) {
+        Optional<PurchaseIntent> owned = intents.find(auth.user(), id);
+        if (owned.isEmpty()) {
             return new ApprovalDecision.NotFound();
         }
         if (!auth.isRecent(clock, maxAuthAge)) {
@@ -162,7 +163,29 @@ public final class DefaultApprovalService implements ApprovalService {
                                     .orElse(Duration.ZERO)))
                     .orElseGet(ApprovalDecision.NotFound::new);
         }
-        PurchaseIntent intent = claimed.get();
+        // 9.2: decide releases any lease it took, on every path. A lease this worker already held and live is not one it
+        // took: the claim only renewed it, and it stays.
+        boolean tookLease = !(owned.get().leaseOwner().equals(Optional.of(workerId))
+                && owned.get().leaseUntil().map(until -> until.isAfter(now)).orElse(false));
+        try {
+            return decideHolding(auth, id, approval, approve, claimed.get(), now);
+        } finally {
+            if (tookLease) {
+                release(id);
+            }
+        }
+    }
+
+    /** The lease decide took is over at once: renewed to a time already past, only if this worker still owns it. */
+    private void release(IntentId id) {
+        // The port has no release call (Appendix B). renewLease is conditional on the owner, so a lease that another worker
+        // took in the meantime is never touched, and a lease that ends before now is free for every claim, this worker's too.
+        intents.renewLease(id, workerId, Duration.ofNanos(-1));
+    }
+
+    /** The part of {@link #decide} that runs under the lease. */
+    private ApprovalDecision decideHolding(
+            AuthContext auth, IntentId id, ApprovalRecord approval, boolean approve, PurchaseIntent intent, Instant now) {
         if (intent.state() != IntentState.AWAITING_APPROVAL) {
             return new ApprovalDecision.NotPending();
         }

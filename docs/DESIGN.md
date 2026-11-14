@@ -506,6 +506,7 @@ Configuration file `policy.yaml`. `PolicyEngine.evaluateProposal(...)` and `eval
 - `approvalToken = base64url(HMAC_SHA256(approvalSecret, approvalId + ':' + intentId + ':' + snapshotHash))`.
 - Single use. TTL 10 minutes. Constant-time comparison.
 - `ApprovalService` is the only code that can move an intent to `APPROVED`.
+- `decide` releases any lease it took, on every path, including NotPending.
 - The token goes to the approver channel only. It is never in a tool result or a prompt (I6, I8).
 
 **Snapshot and token details \[CONTRACT\].**
