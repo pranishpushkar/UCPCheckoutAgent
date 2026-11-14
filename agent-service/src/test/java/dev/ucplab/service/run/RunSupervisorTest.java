@@ -491,6 +491,28 @@ class RunSupervisorTest {
         assertThat(Optional.of(second.status())).contains("done");
     }
 
+    // Covers: 23.1, 6.3 (a run always settles: an Error from the model ends the run failed/internal_error, and the same
+    // user can start a new run at once, instead of being refused as having a run still active)
+    @Test
+    void anErrorFromTheModel_endsTheRunInternalError_andFreesTheUser() throws Exception {
+        AtomicInteger calls = new AtomicInteger();
+        supervisor = fx.supervisor((conversation, tools) -> {
+            if (calls.incrementAndGet() == 1) {
+                throw new NoClassDefFoundError("com/example/Missing");
+            }
+            return text("fine");
+        }, CONFIG);
+
+        RunView first = supervisor.start(ALICE, "one");
+        supervisor.awaitSettled(first.id(), LIMIT);
+
+        RunView seen = supervisor.get(ALICE, first.id()).orElseThrow();
+        assertThat(seen.status()).isEqualTo("failed");
+        assertThat(seen.reason()).contains("internal_error");
+        RunView next = supervisor.start(ALICE, "two");
+        assertThat(next.status()).isEqualTo("done");
+    }
+
     private static void await(CountDownLatch latch) {
         try {
             if (!latch.await(30, TimeUnit.SECONDS)) {

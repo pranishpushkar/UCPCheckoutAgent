@@ -41,3 +41,6 @@ target/
 
 ### Conformance spike ###
 .conformance/
+
+### Local service data ###
+data/

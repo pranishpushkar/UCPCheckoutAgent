@@ -270,10 +270,13 @@ public final class RunSupervisor implements AutoCloseable {
         return runs.turnsSince(owner, clock.instant().minus(Duration.ofHours(1))) >= config.maxPerHour();
     }
 
-    /** The run on a virtual thread; whatever way it leaves, the run settles and its user is free again. */
+    /**
+     * The run on a virtual thread; whatever it throws, an {@link Error} included, the run settles and its user is free
+     * again. An {@code Error} ends the run {@code failed}/{@code internal_error} and is then rethrown.
+     */
     private void launch(LiveRun run, Supplier<RunSession> body) {
         executor.execute(() -> {
-            Settled end;
+            Settled end = new Settled(RunView.FAILED, Optional.of(INTERNAL_ERROR));
             try {
                 RunSession session = body.get();
                 if (session.outcome() instanceof RunOutcome.Done done) {
@@ -287,19 +290,30 @@ public final class RunSupervisor implements AutoCloseable {
                 end = settledFromRecord(run);
             } catch (RuntimeException e) {
                 run.conversation = null;
-                end = new Settled(RunView.FAILED, Optional.of(INTERNAL_ERROR));
+            } catch (Throwable t) {
+                run.conversation = null;
+                throw t;
+            } finally {
+                settle(run, end);
             }
+        });
+    }
+
+    private void settle(LiveRun run, Settled reached) {
+        Settled end = reached;
+        try {
             if (run.interrupted.get()) {
                 interrupt(run.owner, run.id);
                 run.conversation = null;
                 end = new Settled(RunView.FAILED, Optional.of(INTERRUPTED));
             }
+        } finally {
             run.lastActivity = clock.instant();
             CompletableFuture<Phase> waiter = run.settled.get();
             run.phase.set(end);
             active.remove(run.owner, run.id);
             waiter.complete(end);
-        });
+        }
     }
 
     private Settled settledFromRecord(LiveRun run) {
