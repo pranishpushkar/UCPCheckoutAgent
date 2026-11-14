@@ -1,0 +1,80 @@
+# The lab stack (DESIGN 21.1 and 25.3, M6): lab-net, merchant-a, fault-proxy and agent-service.
+#
+# The merchant and the proxy bind 127.0.0.1 only (Appendix A, section 12), so every lab container shares the network
+# namespace of lab-net, which never restarts and so outlives a `docker kill` of any other service (25.5 step 8).
+# /_lab and the proxy admin API are reachable only inside that namespace. lab-net publishes 8080 on the host's
+# loopback only: the agent-service console and API.
+#
+# Build the jars first: ./mvnw -B -ntp -DskipTests package, and copy .env.example to .env.
+#
+# The model key: GEMINI_API_KEY is a bare name below, so Compose passes the value of the shell that runs it, at run
+# time only. It is never a value here, in an image, in a build argument or in .env (m6-plan section 9.3).
+name: ucplab
+
+services:
+  lab-net:
+    image: eclipse-temurin:21.0.13_9-jre-noble@sha256:0d57a8e90c2bb844c5a8e1b2b71e11eff06dad7edcfd803cd21ed4ae203b2515
+    command: ["sleep", "infinity"]
+    init: true
+    ports:
+      - "127.0.0.1:8080:8080"
+
+  merchant-a:
+    image: ucplab/merchant:local
+    build:
+      context: .
+      dockerfile: docker/merchant.Dockerfile
+    network_mode: service:lab-net
+    depends_on:
+      - lab-net
+    command: ["9001"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:9001/.well-known/ucp"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  fault-proxy:
+    image: ucplab/fault-proxy:local
+    build:
+      context: .
+      dockerfile: docker/fault-proxy.Dockerfile
+    network_mode: service:lab-net
+    depends_on:
+      merchant-a:
+        condition: service_healthy
+    command: ["--port", "9101", "--upstream", "http://127.0.0.1:9001"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:9101/.well-known/ucp"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  agent-service:
+    image: ucplab/agent-service:local
+    build:
+      context: .
+      dockerfile: docker/agent-service.Dockerfile
+    network_mode: service:lab-net
+    depends_on:
+      fault-proxy:
+        condition: service_healthy
+    environment:
+      - AGENT_PROFILE=local
+      - MERCHANT_URL=http://127.0.0.1:9101
+      - MERCHANT_LAB_URL=http://127.0.0.1:9001
+      - DATABASE_URL=jdbc:sqlite:/data/ucplab.db
+      - APPROVAL_SECRET=${APPROVAL_SECRET:?copy .env.example to .env first}
+      - AGENT_MODEL=${AGENT_MODEL:-scripted}
+      # A bare name: the value comes from the shell that runs docker compose, or the variable is absent.
+      - GEMINI_API_KEY
+    volumes:
+      - ucplab-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8080/readyz"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+volumes:
+  ucplab-data:

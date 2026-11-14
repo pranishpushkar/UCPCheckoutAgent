@@ -13,6 +13,57 @@
     <artifactId>agent-service</artifactId>
     <name>Agent service</name>
 
+    <properties>
+        <!-- The Jackson 2 that google-genai 1.80.0 declares and agent-adk's tests run on (ADR 0006). Boot 4 uses
+             Jackson 3 (tools.jackson) itself; its BOM would otherwise move Jackson 2 to 2.21.x under genai. -->
+        <jackson2.version>2.18.11</jackson2.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- genai's four Jackson 2 modules, pinned. jackson-annotations is deliberately left to the Boot BOM
+                 (2.21): Jackson 3 keeps using that 2.x artifact and needs 2.21 (ADR 0006), so it cannot be 2.18. -->
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-databind</artifactId>
+                <version>${jackson2.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-core</artifactId>
+                <version>${jackson2.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.datatype</groupId>
+                <artifactId>jackson-datatype-jdk8</artifactId>
+                <version>${jackson2.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.datatype</groupId>
+                <artifactId>jackson-datatype-jsr310</artifactId>
+                <version>${jackson2.version}</version>
+            </dependency>
+            <!-- The parent's JUnit, imported again ahead of the Boot BOM: an import inherited from the parent does not
+                 beat this module's own imports, and Boot's would give Jupiter 6.0.3 (ADR 0006). -->
+            <dependency>
+                <groupId>org.junit</groupId>
+                <artifactId>junit-bom</artifactId>
+                <version>${junit.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- Imported here only (5.2, section 15). The parent's explicit entries (Flyway, sqlite-jdbc) are
+                 inherited and take precedence; ClasspathVersionsTest proves it. -->
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
     <dependencies>
         <dependency>
             <groupId>dev.ucplab</groupId>
@@ -28,7 +79,52 @@
         </dependency>
         <dependency>
             <groupId>dev.ucplab</groupId>
+            <artifactId>agent-runtime</artifactId>
+        </dependency>
+        <!-- Runtime scope only (m6-plan section 2.3): the live client is reached through ModelClients.load, so no
+             Gemini SDK type is on this module's compile classpath (5.2). -->
+        <dependency>
+            <groupId>dev.ucplab</groupId>
             <artifactId>agent-adk</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Tests only: ServiceWiringTest runs a purchase through the service's beans against the reference merchant
+             behind the fault proxy (m6-plan section 2.4). Main code never sees these modules. -->
+        <dependency>
+            <groupId>dev.ucplab</groupId>
+            <artifactId>merchant</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>dev.ucplab</groupId>
+            <artifactId>fault-proxy</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <version>${spring-boot.version}</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>repackage</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
 </project>

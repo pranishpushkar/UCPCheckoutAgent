@@ -4,6 +4,6 @@ class InMemoryRunRepositoryTest extends RunRepositoryContract {
 
     @Override
     protected RunRepository create() {
-        return new InMemoryRunRepository();
+        return new InMemoryRunRepository(new dev.ucplab.core.MutableClock(java.time.Instant.parse("2026-01-01T00:01:00Z")));
     }
 }

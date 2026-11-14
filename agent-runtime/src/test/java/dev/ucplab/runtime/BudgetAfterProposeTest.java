@@ -35,7 +35,7 @@ class BudgetAfterProposeTest {
                     + "{\"when\":{\"tool\":\"propose_purchase\",\"resultMatches\":\"AWAITING_APPROVAL\"},\"call\":["
                     + String.join(",", Collections.nCopies(7, status)) + "]},"
                     + "{\"text\":\"never\"}]}");
-            InMemoryRunRepository runs = new InMemoryRunRepository();
+            InMemoryRunRepository runs = new InMemoryRunRepository(lab.clock);
             AgentRuntime runtime = new AgentRuntime(model, "scripted", lab.ports(), runs, AgentBudget.DEFAULT,
                     Duration.ofMinutes(5), lab.clock);
 

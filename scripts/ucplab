@@ -1,0 +1,6 @@
+#!/bin/sh
+# The command line client (m6-plan section 8): the JDK and agent-core's LenientJson only, no Spring on the classpath.
+# Build first: ./mvnw -DskipTests package. Usage: scripts/ucplab [--user NAME] [--base-url URL] COMMAND ...
+set -eu
+root="$(cd "$(dirname "$0")/.." && pwd)"
+exec java -cp "$root/agent-service/target/classes:$root/agent-core/target/classes" dev.ucplab.service.cli.Cli "$@"

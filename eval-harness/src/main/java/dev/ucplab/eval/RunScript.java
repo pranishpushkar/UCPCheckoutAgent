@@ -370,7 +370,7 @@ public final class RunScript {
             int n = done.size() + 1;
             currentDb = db;
             currentLog = db.resolveSibling(name + "-child-" + n + ".log");
-            current = ChildProcess.startAgent(db, lane.agentFacingUrl(), scale, seed + n, currentLog);
+            current = ChildProcess.startAgent(db, lane.agentFacingUrl(), scale, seed + n, currentLog, canary);
             currentWorker = current.awaitReady(READY_LIMIT);
         }
 
@@ -485,7 +485,7 @@ public final class RunScript {
                 : scripted.get();
         Clock clock = script.breach().filter(b -> b == BudgetLimit.WALL_CLOCK).isPresent()
                 ? new SteppingClock(stack.clock.instant(), WALL_CLOCK_STEP) : stack.clock;
-        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository(clock);
         RunId runId = new RunId("run-" + name);
         RunTrace trace = new RunTrace(runId);
         ScriptedUser user = new ScriptedUser(spec.userAnswers(), () -> stack.intentCount(signedIn.user()));

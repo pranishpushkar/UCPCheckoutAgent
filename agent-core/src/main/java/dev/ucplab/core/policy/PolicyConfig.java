@@ -15,7 +15,7 @@ import java.util.Objects;
  * @param maxRequotes P8
  */
 // P7 has no setting: it is always on (9.1).
-// TODO(M6): agent-service loads POLICY_FILE (policy.yaml) into this record and calls
+// agent-service's PolicyFile loads POLICY_FILE (policy.yaml) into this record, and ServiceProperties calls
 // requireValidFor(AGENT_PROFILE) at startup. agent-core stays JDK-only, so no YAML parsing here (5.2).
 public record PolicyConfig(
         long perPurchaseCapMinor,

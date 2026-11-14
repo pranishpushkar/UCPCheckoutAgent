@@ -1,0 +1,7 @@
+# An allowlist (m6-plan section 9.2): the build context holds the Dockerfiles and the built jars, and nothing else.
+# So .env, evaluation output, evidence, reports and the untracked notes can never reach an image layer (I8).
+*
+!docker/
+!merchant/target/merchant-*.jar
+!fault-proxy/target/fault-proxy-*.jar
+!agent-service/target/agent-service-*.jar

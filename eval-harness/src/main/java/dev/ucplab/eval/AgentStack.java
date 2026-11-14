@@ -81,6 +81,7 @@ final class AgentStack implements AutoCloseable {
     private final PolicyConfig policyConfig = PolicyConfig.defaults();
     private final RuleBasedPolicyEngine policy;
     private final ApprovalTokens tokens;
+    private final String canaryFingerprint;
     private final PaymentInstrument instrument;
     private final CatalogClient catalog;
 
@@ -114,6 +115,7 @@ final class AgentStack implements AutoCloseable {
         byte[] secret = Arrays.copyOf(random, random.length + planted.length);
         System.arraycopy(planted, 0, secret, random.length, planted.length);
         tokens = new ApprovalTokens(ApprovalSecret.of(secret));
+        canaryFingerprint = fingerprint(Arrays.copyOfRange(secret, random.length, secret.length));
         Arrays.fill(secret, (byte) 0);
         instrument = PaymentInstrument.mockCard("pi_eval", paymentToken);
         approvalService = new DefaultApprovalService(intents, approvals, tokens, clock, ids, workerId, approvalLease,
@@ -144,6 +146,28 @@ final class AgentStack implements AutoCloseable {
 
     String workerId() {
         return worker.workerId();
+    }
+
+    /**
+     * SHA-256, in hex, of the part of this stack's approval secret that came from the canary. Not the canary and not
+     * the secret: a child prints it on request ({@link AgentMain}) so a test can show the child's secret holds the
+     * evaluation's canary without the canary reaching any output.
+     */
+    String canaryFingerprint() {
+        return canaryFingerprint;
+    }
+
+    /** The fingerprint of {@code canary}, as {@link #canaryFingerprint()} would give for a stack planted with it. */
+    static String fingerprintOf(String canary) {
+        return fingerprint(canary.getBytes(StandardCharsets.US_ASCII));
+    }
+
+    private static String fingerprint(byte[] bytes) {
+        try {
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     Path dbFile() {

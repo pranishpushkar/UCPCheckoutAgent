@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>UCP Checkout Lab</title>
+  <link rel="stylesheet" href="/console.css">
+</head>
+<body>
+  <header>
+    <h1>UCP Checkout Lab</h1>
+    <div class="who">
+      <span id="who">Not signed in</span>
+      <button type="button" id="sign-out" hidden>Sign out</button>
+    </div>
+  </header>
+
+  <div id="status" class="status" role="status" aria-live="polite"></div>
+
+  <main>
+    <section id="agent" aria-labelledby="agent-h">
+      <h2 id="agent-h">Agent</h2>
+      <ol id="chat" class="chat" aria-label="Conversation"></ol>
+      <ul id="tools" class="tools" aria-label="Tool calls"></ul>
+
+      <section id="approval-card" class="card" aria-labelledby="card-h" hidden>
+        <h3 id="card-h">Approval</h3>
+        <table id="card-lines">
+          <caption class="sr-only">Items in the quote</caption>
+          <thead><tr><th scope="col">Item</th><th scope="col">Qty</th><th scope="col">Unit</th><th scope="col">Line</th></tr></thead>
+          <tbody id="card-body"></tbody>
+          <tfoot id="card-foot"></tfoot>
+        </table>
+        <p class="fixed" id="card-note"></p>
+        <p id="card-expiry"></p>
+        <div class="actions">
+          <button type="button" id="approve">Approve</button>
+          <button type="button" id="reject">Reject</button>
+        </div>
+      </section>
+
+      <form id="send" autocomplete="off">
+        <label for="message">Message</label>
+        <input id="message" name="message" type="text" maxlength="2000" required>
+        <button type="submit">Send</button>
+      </form>
+    </section>
+
+    <div class="right">
+      <section id="timeline-section" aria-labelledby="timeline-h">
+        <h2 id="timeline-h">Purchase intent</h2>
+        <p id="timeline-state" class="fixed"></p>
+        <ol id="timeline" class="timeline"></ol>
+      </section>
+
+      <section id="fault-lab" aria-labelledby="lab-h" hidden>
+        <h2 id="lab-h">Fault lab</h2>
+        <div class="actions">
+          <button type="button" data-preset="drop_next_complete">Drop next complete response</button>
+          <button type="button" data-preset="merchant_503_20s">Merchant returns 503 for 20 s</button>
+          <button type="button" data-preset="merchant_down">Merchant A down</button>
+          <button type="button" data-preset="change_price">Change price before complete</button>
+          <button type="button" id="clear-faults">Clear faults</button>
+          <button type="button" id="reset-lab">Reset lab</button>
+        </div>
+      </section>
+
+      <section id="counters" aria-labelledby="orders-h" hidden>
+        <h2 id="orders-h">Merchant orders and breaks</h2>
+        <dl class="counters">
+          <div><dt>Merchant orders</dt><dd id="orders">0</dd></div>
+          <div><dt>Breaks</dt><dd id="breaks">n/a: computed by the evaluation</dd></div>
+        </dl>
+      </section>
+    </div>
+  </main>
+
+  <script src="/console.js"></script>
+</body>
+</html>

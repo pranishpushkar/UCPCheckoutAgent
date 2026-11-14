@@ -4,7 +4,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.ucplab.core.MutableClock;
+import dev.ucplab.core.agent.Conversation;
 import dev.ucplab.core.agent.InMemoryRunRepository;
+import dev.ucplab.core.agent.Message;
+import dev.ucplab.core.agent.ModelTurn;
+import dev.ucplab.core.agent.ToolCall;
+import dev.ucplab.core.agent.Usage;
 import dev.ucplab.core.agent.ModelClient;
 import dev.ucplab.core.agent.ModelFailure;
 import dev.ucplab.core.agent.RunId;
@@ -37,7 +42,7 @@ class AgentRuntimeTest {
     private static final UserChannel SILENT = (q, t) -> Optional.empty();
 
     private final MutableClock clock = new MutableClock(T0);
-    private final InMemoryRunRepository runs = new InMemoryRunRepository();
+    private final InMemoryRunRepository runs = new InMemoryRunRepository(clock);
     private final Stubs.RecordingOrchestrator orchestrator = new Stubs.RecordingOrchestrator();
     /** Every catalog call, in order. */
     private final List<String> catalogCalls = new CopyOnWriteArrayList<>();
@@ -429,5 +434,114 @@ class AgentRuntimeTest {
         assertThatThrownBy(() -> runtime(script(calls(1))).run(Stubs.ALICE, third, "m", SILENT))
                 .isInstanceOf(ScriptDriftException.class);
         assertThat(runs.find(Stubs.ALICE.user(), third).orElseThrow().reason()).contains("script_drift");
+    }
+
+    private static ToolCall call(String id, String tool, Map<String, Object> args) {
+        return new ToolCall(id, tool, args);
+    }
+
+    private static ModelTurn turn(String text, ToolCall... calls) {
+        return new ModelTurn(text, List.of(calls), Usage.NONE);
+    }
+
+    // Covers: 23.1, 6.2, m6-plan C12 (the stored record shows the tool events, the intent and the counts while the run
+    // waits in ask_user, still in progress)
+    @Test
+    void run_recordShowsToolEventsAndIntents_whileWaitingInAskUser() {
+        IntentId intent = new IntentId("intent-1");
+        orchestrator.proposal = new ProposalResult(intent, IntentState.AWAITING_APPROVAL, Optional.empty());
+        orchestrator.statuses = Map.of(intent, new IntentStatus(intent, IntentState.AWAITING_APPROVAL,
+                Optional.empty(), Optional.empty()));
+        ScriptedModel model = script("""
+                {"call": [{"tool": "propose_purchase", "args": {"merchant_id": "shop-1",
+                           "items": [{"item_id": "item_456", "quantity": 1}], "rationale": "r"}}]},
+                {"call": [{"tool": "ask_user", "args": {"question": "Anything else?"}}]},
+                {"text": "Done."}""");
+        List<RunRecord> whileWaiting = new CopyOnWriteArrayList<>();
+
+        runtime(model).run(Stubs.ALICE, RUN, "m", (q, t) -> {
+            whileWaiting.add(record());
+            return Optional.of("no");
+        });
+
+        assertThat(whileWaiting).hasSize(1);
+        RunRecord waiting = whileWaiting.getFirst();
+        assertThat(waiting.outcome()).as("still in progress").isEmpty();
+        assertThat(waiting.endedAt()).isEmpty();
+        assertThat(waiting.intentIds()).containsExactly(intent);
+        assertThat(waiting.toolEvents()).extracting(ToolEvent::tool).containsExactly("propose_purchase");
+        assertThat(waiting.modelCalls()).isEqualTo(2);
+        assertThat(waiting.toolCalls()).as("ask_user itself is counted once it returns").isEqualTo(1);
+    }
+
+    // Covers: 23.1, 6.5, m6-plan Decision 3 (a resume continues with the earlier messages and the new one last, under a
+    // fresh budget: six model calls are used up, and the resume still gets its own; the record's counts are the sum)
+    @Test
+    void resume_continuesTheConversationUnderAFreshBudget() {
+        List<Conversation> seen = new CopyOnWriteArrayList<>();
+        AtomicInteger calls = new AtomicInteger();
+        ModelClient model = (conversation, tools) -> {
+            seen.add(conversation);
+            int n = calls.incrementAndGet();
+            return n <= 5 ? turn("", call("c" + n, "search_catalog", Map.of("query", "mug", "max_results", 1)))
+                    : turn("reply " + n);
+        };
+        AgentRuntime runtime = runtime(model);
+        RunSession first = runtime.start(Stubs.ALICE, RUN, "first message", SILENT, new RunTrace(RUN));
+        assertThat(first.outcome()).isEqualTo(new RunOutcome.Done("reply 6", List.of()));
+        assertThat(record().modelCalls()).isEqualTo(6);
+
+        RunSession second = runtime.resume(Stubs.ALICE, RUN, first.conversation(), "second message", SILENT,
+                new RunTrace(RUN));
+
+        assertThat(second.outcome()).isEqualTo(new RunOutcome.Done("reply 7", List.of()));
+        Conversation resumed = seen.getLast();
+        assertThat(resumed.messages()).startsWith(new Message.User("first message"));
+        assertThat(resumed.messages().getLast()).isEqualTo(new Message.User("second message"));
+        assertThat(resumed.messages()).containsSequence(first.conversation().messages());
+        assertThat(second.conversation().messages().getLast()).isEqualTo(new Message.Model("reply 7", List.of()));
+        RunRecord record = record();
+        assertThat(record.modelCalls()).isEqualTo(7);
+        assertThat(record.toolCalls()).isEqualTo(5);
+        assertThat(record.toolEvents()).hasSize(5);
+        assertThat(record.outcome()).contains("done");
+        assertThat(record.startedAt()).isEqualTo(T0);
+    }
+
+    // Covers: 23.1, T6 (a resume of a run the caller does not own is refused and writes nothing)
+    @Test
+    void resume_anotherUsersRun_isRefused() {
+        ModelClient model = (conversation, tools) -> turn("hello");
+        AgentRuntime runtime = runtime(model);
+        RunSession first = runtime.start(Stubs.ALICE, RUN, "m", SILENT, new RunTrace(RUN));
+        dev.ucplab.core.identity.AuthContext bob = new dev.ucplab.core.identity.AuthContext(new UserId("bob"),
+                "bob@example.com", T0, "sid");
+
+        assertThatThrownBy(() -> runtime.resume(bob, RUN, first.conversation(), "again", SILENT, new RunTrace(RUN)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(record().modelCalls()).isEqualTo(1);
+    }
+
+    // Covers: 6.3, m6-plan Decision 3 (answers to ask_user never reset the budget: a model that asks again and again,
+    // each time answered, ends BudgetExceeded(MODEL_CALLS) at six model calls, and the meter's counts only grow)
+    @Test
+    void askUser_answeredAgainAndAgain_stillEndsAtSixModelCalls() {
+        AtomicInteger asked = new AtomicInteger();
+        // The cap of 20 only stops a runtime whose meter was reset; the real limit ends the run at six.
+        ModelClient model = (conversation, tools) -> asked.get() >= 20 ? turn("gave up")
+                : turn("", call("a" + asked.incrementAndGet(), "ask_user", Map.of("question", "again?")));
+        List<Integer> modelCallsAtEachAnswer = new CopyOnWriteArrayList<>();
+
+        RunOutcome outcome = runtime(model).run(Stubs.ALICE, RUN, "m", (q, t) -> {
+            modelCallsAtEachAnswer.add(record().modelCalls());
+            return Optional.of("yes");
+        });
+
+        assertThat(outcome).isEqualTo(new RunOutcome.BudgetExceeded(BudgetLimit.MODEL_CALLS, List.of()));
+        assertThat(asked.get()).isEqualTo(6);
+        assertThat(modelCallsAtEachAnswer).containsExactly(1, 2, 3, 4, 5, 6);
+        assertThat(record().modelCalls()).isEqualTo(6);
+        assertThat(record().outcome()).contains("budget_exceeded");
+        assertThat(record().reason()).contains("MODEL_CALLS");
     }
 }

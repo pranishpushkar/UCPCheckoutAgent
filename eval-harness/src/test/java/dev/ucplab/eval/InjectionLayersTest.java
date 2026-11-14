@@ -90,7 +90,7 @@ class InjectionLayersTest {
             AuthContext auth = new AuthContext(user, user.value() + "@eval.example", stack.clock.instant(),
                     "layers-session");
             AgentRuntime runtime = new AgentRuntime(recording, "scripted", stack.toolPorts(),
-                    new InMemoryRunRepository(), AgentBudget.DEFAULT, Duration.ofMinutes(5), stack.clock);
+                    new InMemoryRunRepository(stack.clock), AgentBudget.DEFAULT, Duration.ofMinutes(5), stack.clock);
             runtime.run(auth, new RunId("run-" + name), "Buy me one blue mug.", (q, t) -> Optional.empty(),
                     new RunTrace(new RunId("run-" + name)));
             model.checkToolSequence();

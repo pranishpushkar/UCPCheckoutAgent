@@ -36,9 +36,10 @@ public final class ApprovalSecret {
         return new ApprovalSecret(secret.getBytes(StandardCharsets.UTF_8));
     }
 
-    /** As {@link #of(String)}, and also refuses a placeholder starting with "change-me" (prod profile). */
-    // TODO(M6): agent-service must build APPROVAL_SECRET with ofProduction when AGENT_PROFILE is prod,
-    // and with of() otherwise, at startup, so a short or placeholder secret fails startup (9.2).
+    /**
+     * As {@link #of(String)}, and also refuses a placeholder starting with "change-me" (prod profile). agent-service's
+     * {@code ServiceProperties} uses it when {@code AGENT_PROFILE} is prod, at startup (9.2).
+     */
     public static ApprovalSecret ofProduction(String secret) {
         Objects.requireNonNull(secret, "secret");
         if (secret.startsWith(PLACEHOLDER_PREFIX)) {

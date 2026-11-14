@@ -18,6 +18,13 @@ class NoLiveInVerifyTest {
 
     private static final String LIVE_LOOKUP = "ModelClients.load(\"" + "gemini\"";
 
+    /**
+     * The one test allowed to look the client up by name (m6-plan C1): agent-service reaches agent-adk at runtime scope
+     * only, so the lookup is the only way to prove the provider works on that module's classpath. It is offline: it
+     * must point the client at a loopback stub and use a fake key, which {@link #allowedLookup_staysOffline} checks.
+     */
+    private static final String ALLOWED = "agent-service/src/test/java/dev/ucplab/service/LiveProviderClasspathTest.java";
+
     // Covers: R4, 15, I8 (no test class outside the live profiles looks up the Gemini client by name)
     @Test
     void testSources_outsideLiveProfiles_neverLoadTheGeminiClient() throws IOException {
@@ -31,8 +38,24 @@ class NoLiveInVerifyTest {
 
         assertThat(sources).as("test sources found under %s", root).hasSizeGreaterThan(100);
         for (Path source : sources) {
-            assertThat(Files.readString(source)).as(root.relativize(source).toString()).doesNotContain(LIVE_LOOKUP);
+            String relative = root.relativize(source).toString().replace('\\', '/');
+            if (relative.equals(ALLOWED)) {
+                continue;
+            }
+            assertThat(Files.readString(source)).as(relative).doesNotContain(LIVE_LOOKUP);
         }
+    }
+
+    // Covers: R4, I8 (the one allowed lookup talks only to 127.0.0.1 with a fake key, never the real API or key)
+    @Test
+    void allowedLookup_staysOffline() throws IOException {
+        String text = Files.readString(Path.of("..").toAbsolutePath().normalize().resolve(ALLOWED));
+
+        assertThat(text).contains(LIVE_LOOKUP)
+                .contains(".withBaseUrl(URI.create(\"http://127.0.0.1:")
+                .contains("ModelKey.of(FAKE_KEY)")
+                .doesNotContain("getenv")
+                .doesNotContain("GEMINI_API_KEY");
     }
 
     // Covers: R4, Decision 1 (without -Peval-live the harness has no live provider on its classpath)

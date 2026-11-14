@@ -2,6 +2,9 @@ package dev.ucplab.core.agent;
 
 import dev.ucplab.core.identity.UserId;
 import dev.ucplab.core.intent.IntentId;
+import java.time.Clock;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -14,6 +17,14 @@ public final class InMemoryRunRepository implements RunRepository {
 
     private final ReentrantLock lock = new ReentrantLock();
     private final Map<RunId, RunRecord> runs = new LinkedHashMap<>();
+    /** Each run's turn start times, turn 0 first. */
+    private final Map<RunId, List<Instant>> turns = new LinkedHashMap<>();
+    private final Map<RunId, Instant> updated = new LinkedHashMap<>();
+    private final Clock clock;
+
+    public InMemoryRunRepository(Clock clock) {
+        this.clock = Objects.requireNonNull(clock, "clock");
+    }
 
     @Override
     public void insert(UserId owner, RunRecord run) {
@@ -24,6 +35,8 @@ public final class InMemoryRunRepository implements RunRepository {
                 throw new IllegalArgumentException("run id already exists: " + run.id());
             }
             runs.put(run.id(), run);
+            turns.put(run.id(), new ArrayList<>(List.of(run.startedAt())));
+            updated.put(run.id(), clock.instant());
         } finally {
             lock.unlock();
         }
@@ -45,6 +58,7 @@ public final class InMemoryRunRepository implements RunRepository {
                 return false;
             }
             runs.put(run.id(), run);
+            updated.put(run.id(), clock.instant());
             return true;
         } finally {
             lock.unlock();
@@ -60,6 +74,68 @@ public final class InMemoryRunRepository implements RunRepository {
             return runs.values().stream()
                     .filter(r -> r.owner().equals(owner) && r.intentIds().contains(intent))
                     .toList();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
+    public boolean addTurn(UserId owner, RunId id, Instant at) {
+        Objects.requireNonNull(owner, "owner");
+        Objects.requireNonNull(id, "id");
+        Objects.requireNonNull(at, "at");
+        lock.lock();
+        try {
+            RunRecord stored = runs.get(id);
+            if (stored == null || !stored.owner().equals(owner)) {
+                return false;
+            }
+            turns.get(id).add(at);
+            updated.put(id, clock.instant());
+            return true;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
+    public int turns(UserId owner, RunId id) {
+        Objects.requireNonNull(owner, "owner");
+        Objects.requireNonNull(id, "id");
+        lock.lock();
+        try {
+            RunRecord stored = runs.get(id);
+            return stored == null || !stored.owner().equals(owner) ? 0 : turns.get(id).size();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
+    public int turnsSince(UserId owner, Instant from) {
+        Objects.requireNonNull(owner, "owner");
+        Objects.requireNonNull(from, "from");
+        lock.lock();
+        try {
+            return (int) runs.values().stream()
+                    .filter(r -> r.owner().equals(owner))
+                    .flatMap(r -> turns.get(r.id()).stream())
+                    .filter(t -> !t.isBefore(from))
+                    .count();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
+    public Optional<Instant> updatedAt(UserId owner, RunId id) {
+        Objects.requireNonNull(owner, "owner");
+        Objects.requireNonNull(id, "id");
+        lock.lock();
+        try {
+            RunRecord stored = runs.get(id);
+            return stored == null || !stored.owner().equals(owner) ? Optional.empty()
+                    : Optional.of(updated.get(id));
         } finally {
             lock.unlock();
         }

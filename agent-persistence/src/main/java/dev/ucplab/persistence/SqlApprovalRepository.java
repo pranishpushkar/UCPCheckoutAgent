@@ -190,7 +190,7 @@ public final class SqlApprovalRepository implements ApprovalRepository {
     }
 
     @SuppressWarnings("unchecked")
-    private static ApprovalSnapshot snapshot(String json) {
+    static ApprovalSnapshot snapshot(String json) {
         Map<String, Object> m = CanonicalJson.readObject(json);
         List<SnapshotLine> lines = new ArrayList<>();
         for (Object o : (List<Object>) m.get("lines")) {

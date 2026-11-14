@@ -26,6 +26,8 @@ import java.util.concurrent.CountDownLatch;
 public final class AgentMain {
 
     static final String READY = "READY";
+    /** {@code FINGERPRINT <hex>}: printed with {@code --print-canary-fingerprint true}, see {@link AgentStack}. */
+    static final String FINGERPRINT = "FINGERPRINT";
 
     private AgentMain() {
     }
@@ -35,6 +37,7 @@ public final class AgentMain {
         URI merchant = null;
         int k = 0;
         long seed = 0;
+        boolean fingerprint = false;
         try {
             for (int i = 0; i < args.length; i += 2) {
                 if (i + 1 >= args.length) {
@@ -46,6 +49,7 @@ public final class AgentMain {
                     case "--merchant-url" -> merchant = URI.create(v);
                     case "--time-scale" -> k = Integer.parseInt(v);
                     case "--seed" -> seed = Long.parseLong(v);
+                    case "--print-canary-fingerprint" -> fingerprint = Boolean.parseBoolean(v);
                     default -> throw new IllegalArgumentException("unknown argument " + args[i]);
                 }
             }
@@ -59,14 +63,20 @@ public final class AgentMain {
             return;
         }
         Clock clock = Clock.systemUTC();
-        AgentStack stack = new AgentStack(merchant, db, TimeScale.of(k), seed,
-                new UuidV7IdGenerator(clock, new SecureRandom()), Scenarios.PAY_OK);
+        TimeScale scale = TimeScale.of(k);
+        // The evaluation's canary, planted in the approval secret as the parent's stack plants it (I8, section 11).
+        String canary = System.getenv(ChildProcess.CANARY_ENV);
+        AgentStack stack = new AgentStack(merchant, db, scale, seed, new UuidV7IdGenerator(clock, new SecureRandom()),
+                Scenarios.PAY_OK, scale.orchestrator().lease(), canary == null ? "" : canary);
         CountDownLatch stopped = new CountDownLatch(1);
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             stack.close();
             stopped.countDown();
         }, "agent-shutdown"));
         stack.loop.start();
+        if (fingerprint) {
+            System.out.println(FINGERPRINT + " " + stack.canaryFingerprint());
+        }
         System.out.println(READY + " " + stack.workerId());
         System.out.flush();
         stopped.await();

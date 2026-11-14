@@ -165,12 +165,12 @@ These are the properties the evaluation checks. Each must be enforced in code an
 | `agent-persistence` | SQL repositories, migrations | core |
 | `agent-runtime` | LLM runtime (the agent loop), tool definitions, prompts, `ScriptedModel`, budgets (`AgentBudget`) | core. JDK and core only |
 | `agent-adk` | `GeminiModelClient`: the only module that imports Gemini SDK (`com.google.genai`) or ADK types | core |
-| `agent-service` | Spring Boot wiring, REST API, CLI | all agent modules |
+| `agent-service` | Spring Boot wiring, REST API, CLI | `agent-core`, `agent-ucp`, `agent-persistence`, `agent-runtime`; `agent-adk` at runtime scope only (the live client is loaded through `ModelClients`, so no Gemini SDK type is on its compile classpath). Test scope: `merchant` and `fault-proxy` |
 | `fault-proxy` | Scenario-driven HTTP proxy | JDK only |
-| `eval-harness` | Scenario runner, invariant checks, report | JDK, client libraries, `fault-proxy`. Until M6 (no REST API) it embeds the agent: `agent-core`, `agent-runtime`, `agent-ucp`, `agent-persistence`, and `merchant` to start lab merchants in process. Never `agent-adk`, ADK or Gemini SDK types at compile scope; live mode loads the model client through a service lookup, with `agent-adk` added at runtime scope by the `eval-live` profile only |
+| `eval-harness` | Scenario runner, invariant checks, report | JDK, client libraries, `fault-proxy`. Until it drives the REST API (M7) it embeds the agent: `agent-core`, `agent-runtime`, `agent-ucp`, `agent-persistence`, and `merchant` to start lab merchants in process. Never `agent-adk`, ADK or Gemini SDK types at compile scope; live mode loads the model client through a service lookup, with `agent-adk` added at runtime scope by the `eval-live` profile only |
 | `merchant` | System under test | JDK only |
 
-An ArchUnit test must fail the build if `agent-core` imports anything outside `java.*` or `javax.crypto.*`, or if any module other than `agent-adk` imports an ADK or Gemini SDK type, or if `agent-runtime` imports anything outside the JDK and `agent-core`.
+An ArchUnit test must fail the build if `agent-core` imports anything outside `java.*` or `javax.crypto.*`, or if any module other than `agent-adk` imports an ADK or Gemini SDK type, or if `agent-runtime` imports anything outside the JDK and `agent-core`. It must also fail if any module other than `agent-service` imports a Spring, Jakarta Servlet or Jackson 3 type.
 
 ### 5.3 Happy path
 
@@ -632,19 +632,48 @@ CREATE TABLE merchant (
 
 CREATE TABLE agent_run (
   id TEXT PRIMARY KEY,
-  intent_id TEXT,
   user_id TEXT NOT NULL,
-  scenario TEXT,
-  model TEXT NOT NULL,
+  model TEXT NOT NULL,                       -- "<model>/<prompt version>"
+  scenario TEXT,                             -- the harness only; NULL for service runs
   started_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,                  -- an in-progress run with no live instance is ended after a timeout (23.1)
   ended_at TEXT,
-  outcome TEXT,
-  model_calls INTEGER,
-  tool_calls INTEGER,
-  input_tokens INTEGER,
-  output_tokens INTEGER
+  outcome TEXT CHECK (outcome IN ('done','waiting_for_approval','budget_exceeded','user_timeout','failed')),
+  reason TEXT,
+  model_calls INTEGER NOT NULL DEFAULT 0 CHECK (model_calls >= 0),
+  tool_calls INTEGER NOT NULL DEFAULT 0 CHECK (tool_calls >= 0),
+  input_tokens INTEGER NOT NULL DEFAULT 0 CHECK (input_tokens >= 0),
+  output_tokens INTEGER NOT NULL DEFAULT 0 CHECK (output_tokens >= 0),
+  CHECK ((ended_at IS NULL) = (outcome IS NULL)),
+  CHECK (reason IS NULL OR ended_at IS NOT NULL)
 );
+CREATE INDEX ix_run_user ON agent_run(user_id, started_at);
+CREATE TABLE agent_run_intent (               -- the intents a run proposed, in order
+  run_id TEXT NOT NULL REFERENCES agent_run(id),
+  seq INTEGER NOT NULL,
+  intent_id TEXT NOT NULL,
+  PRIMARY KEY (run_id, seq)
+);
+CREATE INDEX ix_run_intent ON agent_run_intent(intent_id);
+CREATE TABLE agent_run_tool_event (           -- names and our own fixed codes only, never tool output (23.1)
+  run_id TEXT NOT NULL REFERENCES agent_run(id),
+  seq INTEGER NOT NULL,
+  tool TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  took_ms INTEGER NOT NULL CHECK (took_ms >= 0),
+  PRIMARY KEY (run_id, seq)
+);
+CREATE TABLE agent_run_turn (                 -- turn 0 is the run's start; each continuation adds one (23.1)
+  run_id TEXT NOT NULL REFERENCES agent_run(id),
+  seq INTEGER NOT NULL CHECK (seq >= 0),
+  user_id TEXT NOT NULL,                      -- copied from the run in the INSERT that checks the owner
+  started_at TEXT NOT NULL,
+  PRIMARY KEY (run_id, seq)
+);
+CREATE INDEX ix_run_turn_user ON agent_run_turn(user_id, started_at);
 ```
+
+**Runs (M6, migration V5).** A run row holds names, counts, codes and times only: never the system prompt, a user message, model text, an `ask_user` question or answer, tool arguments or results, or an exception message (I8, 23.1). The single `intent_id` column of Draft v3 became `agent_run_intent`, because one run can propose several intents. The hourly run limit (P5) counts rows of `agent_run_turn`, so a continuation counts as a run and the cap of 5 continuations is at most 6 turns per run (23.1); a turn holds a time only. `app_user` and `user_session` arrive in M6 (migration V6, for the local sign-in of 18.8); `login_state` arrives with OIDC in M6b.
 
 **Guards in the schema (M3, migration V4).** The tables above carry `CHECK`s on `state`, `op` and `status` (the values of the Java enums, tested), `cancel_pending IN (0, 1)` and non-negative counters, plus `CHECK (state <> 'COMPLETED' OR order_id IS NOT NULL)` and `UNIQUE (merchant_id, order_id) WHERE order_id IS NOT NULL`. They do not make at-most-one-order by themselves: a resend legitimately writes several `COMPLETE` attempt rows under one key, and the merchant owns order creation (7.4, 7.5). There is deliberately no `UNIQUE (intent_id) WHERE status = 'SENT'`: a crash leaves a `SENT` row that recovery must be free to supersede. Indexes serve `claimRecoverable` and `RecoveryScan.approvalsDue` (7.6).
 
@@ -813,7 +842,7 @@ ucp-checkout-lab/
   .env.example
 ```
 
-**Stack.** Java 21. Maven multi-module. Spring Boot 3.x in `agent-service` only. Jackson arrives with `agent-service`; `agent-ucp` does not use it (8.4). JDBC with SQLite and Flyway. JUnit 5, AssertJ, ArchUnit (no property-testing library; see 14.1). OpenTelemetry API. A small hand-written circuit breaker is acceptable (about 80 lines); record the choice in an ADR. Use the latest stable versions at generation time and record them in the parent pom. The live model client uses `com.google.genai:google-genai` (pinned in the parent pom, ADR 0004); ADK for Java was evaluated and not used.
+**Stack.** Java 21. Maven multi-module. Spring Boot 4.1 (4.1.2, ADR 0006) in `agent-service` only; its BOM is imported there and nowhere else. Jackson arrives with `agent-service`; `agent-ucp` does not use it (8.4). JDBC with SQLite and Flyway. JUnit 5, AssertJ, ArchUnit (no property-testing library; see 14.1). OpenTelemetry API. A small hand-written circuit breaker is acceptable (about 80 lines); record the choice in an ADR. Use the latest stable versions at generation time and record them in the parent pom. The live model client uses `com.google.genai:google-genai` (pinned in the parent pom, ADR 0004); ADK for Java was evaluated and not used.
 
 **Conventions.** Package root `dev.ucplab`. Records for DTOs. Sealed interfaces for outcomes. No Lombok. No null returns (use `Optional`). `Clock` and `IdGenerator` are injected. One top-level type per file. Javadoc on every port cites the contract IDs it implements.
 
@@ -983,6 +1012,8 @@ Only `sub`, `email` and `auth_time` are kept. The ID token itself is not stored.
 | Client secret | `.env` | Secret Manager |
 | Cookie | `ucplab_session`, no `Secure` | `__Host-ucplab_session`, `Secure` |
 
+**Until M6b** the `local` profile has no identity provider: `GET /auth/login` shows the configured local users (`LOCAL_USERS`, default alice and bob), and `POST /auth/dev-login` signs one in, with `auth_time` set to now and a `user_session` row exactly as 18.5 says. Startup refuses it in any other profile. M6b replaces it with the flow of 18.2. The `prod` profile has no sign-in until then, so every `/api` route answers 401.
+
 **VERIFY** the Keycloak image and realm-import options at its documentation before writing the Compose file.
 
 ## 19. Multiple merchants
@@ -1030,6 +1061,8 @@ docker compose up
   agent-service                         REST API and lab console page
   postgres                              or SQLite for a single instance
 ```
+
+The stack M6 builds is smaller (25.3, **M6**): one merchant, SQLite, and a shared network namespace.
 
 ### 21.2 Cloud Run demo (stretch, M7)
 
@@ -1082,9 +1115,15 @@ All `/api` routes require a valid session (401 otherwise) and act only on the ca
 | --- | --- | --- |
 | `POST /api/runs` | `{message}` | 201 `{run_id, status, messages[], intent_ids[]}`. Waits up to the run budget (6.3) |
 | `POST /api/runs/{run_id}/messages` | `{message}` | 200, same shape. Used to answer `ask_user` or continue the conversation |
+
+Messages are held in the serving instance's memory only (21.3): they are never stored, and `GET` returns `messages: []` with `messages_retained: false` after a restart or once the run has been idle for 30 minutes. A user has at most one active run.
+
+- **An answer.** A message sent while the run is `waiting_for_user` answers `ask_user` and continues the same run under the same budget: the model-call, tool-call and token counts carry on, and only the time spent waiting for the user is left out of the wall clock (6.3).
+- **A continuation.** A message sent after the run has settled in `done` or `waiting_for_approval` continues the conversation and starts a fresh `AgentBudget` (6.3). A run allows at most 5 continuations (the 6th is 429 `rate_limited`), and each counts as a run against the user's hourly run limit (P5). The run record's counts are the sum over the run.
+- **Anything else** (`running`, `budget_exceeded`, `user_timeout`, `failed`, or a conversation no longer in memory) is 409 `run_not_waiting`.
 | `GET /api/runs/{run_id}` |  | 200 with the full message list, tool events (names and short summaries, no raw tool output) and linked intents |
 
-`status` is one of `waiting_for_user`, `waiting_for_approval`, `done`, `budget_exceeded`, `user_timeout`.
+`status` is one of `running`, `waiting_for_user`, `waiting_for_approval`, `done`, `budget_exceeded`, `user_timeout`, `failed`. `budget_exceeded` and `failed` come with `reason`: the limit's name, or `model_error`, `tool_error`, `internal_error` or `interrupted` (the run was cut off by a restart or shutdown). `running` is returned when the run has not reached a settle point within the response wait (a call that started inside the budget may end after it, 6.3); the client polls `GET /api/runs/{run_id}`. `waiting_for_approval` is re-evaluated on every read against the intents' current states.
 
 ### 23.2 Intents and approvals
 
@@ -1094,9 +1133,9 @@ All `/api` routes require a valid session (401 otherwise) and act only on the ca
 | `GET /api/intents/{id}` | `{id, merchant_id, state, failure_reason?, order_id?, quote?, approval?: {status, expires_at}, created_at}` |
 | `GET /api/intents/{id}/events` | The intent's events in order. Payloads are redacted (I8) |
 | `GET /api/intents/{id}/approval` | The pending approval for the owner only: `{snapshot, expires_at, token}`. 404 if none is pending |
-| `POST /api/intents/{id}/approval` | Body `{token, decision: "approve" or "reject"}`. 200 with the new state; 401 `reauth_required`; 409 `approval_not_pending` (already decided, expired or consumed); 404 for anyone but the owner |
+| `POST /api/intents/{id}/approval` | Body `{token, decision: "approve" or "reject"}`. 200 with the new state; 401 `reauth_required`; 409 `approval_not_pending` (already decided, expired or consumed, or a token that does not verify against the pending approval, such as one from before a re-quote: `ApprovalDecision.InvalidToken`); 404 for anyone but the owner |
 
-The approval token is delivered only through `GET /api/intents/{id}/approval` to the owner's session. It never appears in a tool result, a prompt or a log (I6, I8).
+The approval token is delivered only through `GET /api/intents/{id}/approval` to the owner's session. It never appears in a tool result, a prompt or a log (I6, I8). That response, like every `/api` response, carries `Cache-Control: no-store`; request and response bodies are never logged.
 
 ### 23.3 Lab controls (profiles `local` and `demo` only)
 
@@ -1107,19 +1146,19 @@ The approval token is delivered only through `GET /api/intents/{id}/approval` to
 | `GET /api/lab/orders?merchant_id=` | Ground-truth orders from the caller's sandbox at each merchant |
 | `POST /api/lab/reset` | Reset the caller's sandbox at every merchant and clear their rules |
 
-In `prod` these routes do not exist (404).
+In `prod` these routes do not exist (404). Until M6b adds per-user sandboxes (24.4) the `demo` profile refuses to start, and the routes exist in `local` only.
 
 ### 23.4 Internal and health
 
 | Method and path | Behaviour |
 | --- | --- |
-| `POST /internal/recover` | Runs one recovery pass. Cloud Run only, called by Cloud Scheduler with a Google-signed OIDC token for a dedicated service account, which the endpoint verifies. Disabled locally, where the worker runs continuously |
+| `POST /internal/recover` | Runs one recovery pass. Cloud Run only, called by Cloud Scheduler with a Google-signed OIDC token for a dedicated service account, which the endpoint verifies. Disabled locally, where the worker runs continuously. Not registered until the Cloud Run deployment (M7), so it is 404 in M6 |
 | `GET /healthz` | 200 if the process is up |
 | `GET /readyz` | 200 if the database is reachable and migrations are applied |
 
 ### 23.5 Errors and limits
 
-Errors use one shape: `{code, message, request_id}`. Codes: `unauthenticated` (401), `reauth_required` (401), `csrf_failed` (403), `not_found` (404), `approval_not_pending` (409), `intent_busy` (409, with Retry-After set to the remaining lease time; returned when another worker still holds the intent's lease, for example for up to 30 s after a crash), `validation_failed` (422), `rate_limited` (429, with `Retry-After`), `internal` (500, no internals in the message). Core reports `intent_busy` as `ApprovalDecision.Busy(retryAfter)`; the REST layer maps it to 409 `intent_busy` with `Retry-After` (M6). A `LeaseLostException` from a fenced write inside `advance` or `decide` also maps to 409 `intent_busy` (the caller retries after the lease), and a `StaleVersionException` inside `decide` maps to `approval_not_pending` (M6). `POST /api/runs` is limited per user by P5 and returns 429 when exceeded.
+Errors use one shape: `{code, message, request_id}`. Codes: `unauthenticated` (401), `reauth_required` (401), `csrf_failed` (403), `not_found` (404), `approval_not_pending` (409), `intent_busy` (409, with Retry-After set to the remaining lease time; returned when another worker still holds the intent's lease, for example for up to 30 s after a crash), `validation_failed` (422), `rate_limited` (429, with `Retry-After`; also a second active run of the same user, or a 6th continuation of a run), `run_not_waiting` (409: a message for a run that is not `waiting_for_user` and cannot be continued, 23.1), `model_unavailable` (503: the live model client is not available), `internal` (500, no internals in the message). Core reports `intent_busy` as `ApprovalDecision.Busy(retryAfter)`; the REST layer maps it to 409 `intent_busy` with `Retry-After` (M6). A `LeaseLostException` from a fenced write inside `advance` or `decide` also maps to 409 `intent_busy` (the caller retries after the lease), and a `StaleVersionException` inside `decide` maps to `approval_not_pending` (M6). `POST /api/runs` is limited per user by P5 and returns 429 when exceeded.
 
 ## 24. Lab console (UI)
 
@@ -1136,8 +1175,8 @@ The console exists to demonstrate the system and record the demo video, not to b
 |  tool events (one line each) |  |  Quoted    chk_1001         |
 |                              |  |  Approved  hash matches     |
 |  [ Approval card ]           |  |  Completing  response lost  |
-|   Red T-Shirt x2    $50.00   |  |  Reconciling  GET           |
-|   Tax                $4.00   |  |  Completed  ord_5001        |
+|   item_123 x2       $50.00   |  |  Reconciling  GET           |
+|   Other charges      $4.00   |  |  Completed  ord_5001        |
 |   Total             $54.00   |  +-----------------------------+
 |   Price and stock are not    |  | Fault lab (toggles)         |
 |   held. Expires in 9:42      |  +-----------------------------+
@@ -1149,10 +1188,10 @@ The console exists to demonstrate the system and record the demo video, not to b
 ### 24.3 Behaviour \[CONTRACT\]
 
 - On load, call `/api/me`. On 401, go to `/auth/login`. Show the signed-in email and a sign-out button.
-- Every line on the approval card comes from the approval `snapshot`, never from the model's chat text (I2). The card always says that price and stock are not held, and counts down to `expires_at`.
+- Every line on the approval card comes from the approval `snapshot`, never from the model's chat text (I2). The snapshot has no titles, so a line shows the item id, quantity and unit price; "Other charges (tax)" is the total minus the lines' sum, computed from the snapshot. The card always says that price and stock are not held, and counts down to `expires_at`.
 - On `reauth_required`, go to `/auth/login?reauth=true&return_to=/intents/{id}`, then retry the approval on return.
 - The timeline polls `GET /api/intents/{id}` once a second while the intent is not terminal, and stops when it is.
-- The fault lab toggles map to preset rule sets for `PUT /api/lab/faults`: drop next complete response, change price before complete, merchant returns 503 for 20 s, and merchant A down.
+- The fault lab toggles map to preset rule sets for `PUT /api/lab/faults`: drop next complete response, merchant returns 503 for 20 s (the service removes the rule after 20 s), and merchant A down. "Change price before complete" is not a proxy rule: it is a one-shot action that raises, through the merchant's `/_lab/price`, the price of the item of the caller's newest intent awaiting approval.
 - The order counter reads `GET /api/lab/orders`, so it shows the merchants' ground truth, not the agent's report. Invariant breaks are shown only when the eval harness has computed them.
 - Text uses the browser's escaping (`textContent`), never `innerHTML` for data, so product text cannot inject markup.
 - Works at 360 px wide; keyboard reachable; status changes announced through an `aria-live` region.
@@ -1190,11 +1229,15 @@ The agent, merchant and proxy images are the same in both places. Only configura
 | `postgres` | none | Data in a named volume |
 | `lb` (profile `multi`) | 8080 | Load balancer in front of several agent instances, replacing the agent's own port |
 
+**M6.** The stack is `lab-net`, `merchant-a`, `fault-proxy` and `agent-service`, with SQLite on a named volume. The merchant and the proxy bind 127.0.0.1 only (Appendix A, section 12), so every lab container joins the network namespace of `lab-net` (`network_mode: service:lab-net`), which publishes 8080 on the host's loopback. `/_lab` and the proxy admin API are reachable only inside that namespace, which is stricter than the private Compose network of 25.2. Keycloak arrives with M6b, merchants b and c with M6a, Postgres and `lb` with M7. `GEMINI_API_KEY` is passed to `agent-service` from the shell that runs `docker compose`, at run time only; it is never a value in a Compose file, an image or a build argument. `AGENT_MODEL` is `scripted` unless set to `gemini`, so the stack starts without a key.
+
 ### 25.4 .env.example
 
 ```
 AGENT_PROFILE=local
-DATABASE_URL=jdbc:postgresql://postgres:5432/ucplab
+DATABASE_URL=jdbc:sqlite:/data/ucplab.db
+AGENT_MODEL=scripted
+# The OIDC settings are unused until M6b (18.8).
 OIDC_ISSUER=http://localhost:8081/realms/ucplab
 OIDC_CLIENT_ID=ucplab-agent
 OIDC_CLIENT_SECRET=change-me-local-only-at-least-32-bytes
@@ -1202,8 +1245,11 @@ OIDC_REDIRECT_URI=http://localhost:8080/auth/callback
 APPROVAL_SECRET=change-me-local-only-at-least-32-bytes
 MERCHANTS_FILE=/config/merchants.local.yaml
 POLICY_FILE=/config/policy.yaml
-GEMINI_API_KEY=          # live mode only
+# GEMINI_API_KEY is read from your shell only (export it before docker compose up); leave it empty here.
+GEMINI_API_KEY=
 ```
+
+`MERCHANTS_FILE` is unused until M6a's registry; M6 configures its one merchant directly.
 
 ### 25.5 Testing step by step
 

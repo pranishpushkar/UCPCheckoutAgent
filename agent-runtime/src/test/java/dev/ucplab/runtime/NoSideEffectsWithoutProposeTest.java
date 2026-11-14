@@ -65,7 +65,7 @@ class NoSideEffectsWithoutProposeTest {
         int ordersBefore = lab.merchant.orders().size();
         int approvalsOpened = lab.opened.size();
         long logFrom = lab.settledLog().stream().mapToLong(LogEntry::seq).max().orElse(0);
-        AgentRuntime runtime = new AgentRuntime(model, "scripted", lab.ports(), new InMemoryRunRepository(),
+        AgentRuntime runtime = new AgentRuntime(model, "scripted", lab.ports(), new InMemoryRunRepository(clock),
                 AgentBudget.DEFAULT, Duration.ofMinutes(5), clock);
 
         RunOutcome outcome = runtime.run(auth, new RunId("run-" + user), "I want a mug.", channel);
