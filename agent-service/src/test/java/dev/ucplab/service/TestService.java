@@ -79,6 +79,13 @@ final class TestService implements AutoCloseable {
     /** With extra singletons by bean name, such as a {@code ModelClient} or a {@code RunSupervisorConfig}. */
     static TestService start(Path dir, Map<String, String> extra, Optional<Clock> clock, List<Class<?>> beans,
                              Optional<IntentDriver> driver, Map<String, Object> singletons) throws IOException {
+        return start(dir, extra, clock, beans, driver, singletons, 0);
+    }
+
+    /** On a given port (0 for any): a client whose {@code Origin} must be the base URL needs to know it first. */
+    static TestService start(Path dir, Map<String, String> extra, Optional<Clock> clock, List<Class<?>> beans,
+                             Optional<IntentDriver> driver, Map<String, Object> singletons, int port)
+            throws IOException {
         LabMerchant merchant = LabMerchant.start();
         byte[] hmac = new byte[32];
         new SecureRandom().nextBytes(hmac);
@@ -96,7 +103,7 @@ final class TestService implements AutoCloseable {
                 beans.forEach(b -> ((GenericApplicationContext) context).registerBean(b));
             };
             ConfigurableApplicationContext context = ServiceApplication.start(Environment.of(env), List.of(overrides),
-                    "--server.port=0", "--server.address=127.0.0.1");
+                    "--server.port=" + port, "--server.address=127.0.0.1");
             return new TestService(merchant, proxy, context, env);
         } catch (RuntimeException e) {
             proxy.close();

@@ -148,6 +148,17 @@ class ArchitectureTest {
                 .check(PRODUCTION_CLASSES);
     }
 
+    // Covers: 8, m6-plan section 8 (the command line client uses the JDK and agent-core's LenientJson only, so
+    // scripts/ucplab runs it from two classes folders without Spring)
+    @Test
+    void cli_usesTheJdkAndLenientJsonOnly() {
+        classes()
+                .that().resideInAPackage("dev.ucplab.service.cli..")
+                .should().onlyDependOnClassesThat().resideInAnyPackage("java..", "dev.ucplab.service.cli..",
+                        "dev.ucplab.core.json..")
+                .check(PRODUCTION_CLASSES);
+    }
+
     // Covers: 20, m6-plan section 11 (nothing in the service caches: no Spring cache abstraction, no ETag filter, no
     // static resource handler for the API; section 20 says checkout sessions, quotes, approvals and intents are never cached)
     @Test
