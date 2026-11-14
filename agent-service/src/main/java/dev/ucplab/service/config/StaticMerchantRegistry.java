@@ -4,6 +4,7 @@ import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantProfile;
 import dev.ucplab.core.merchant.MerchantRegistry;
+import dev.ucplab.core.merchant.MerchantStatus;
 import dev.ucplab.ucp.UcpHttpGateway;
 import java.util.List;
 import java.util.Objects;
@@ -28,7 +29,7 @@ public final class StaticMerchantRegistry implements MerchantRegistry {
 
     @Override
     public List<MerchantEntry> active() {
-        return List.of(entry);
+        return entry.status() == MerchantStatus.ACTIVE ? List.of(entry) : List.of();
     }
 
     @Override
