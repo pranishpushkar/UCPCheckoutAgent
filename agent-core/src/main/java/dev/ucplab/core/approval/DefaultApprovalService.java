@@ -85,7 +85,7 @@ public final class DefaultApprovalService implements ApprovalService {
         ApprovalSnapshot snapshot = new ApprovalSnapshot(
                 intent.id(), intent.merchantId(), quote.id(),
                 quote.lines().stream().map(l -> new SnapshotLine(l.itemId(), l.quantity(), l.unitPriceMinor())).toList(),
-                quote.currency(), quote.totalMinor(), quote.totalMinor(), now.plus(ttl));
+                quote.currency(), quote.totalMinor(), quote.totalMinor(), now.plus(ttl), shipping(quote));
         String hash = snapshot.hash();
         String approvalId = ids.next();
         String token = tokens.mint(approvalId, intent.id(), hash);
@@ -99,6 +99,16 @@ public final class DefaultApprovalService implements ApprovalService {
         payload.put("max_total_minor", snapshot.maxTotalMinor());
         intents.appendEvent(intent.id(), IntentEvent.of("approval_opened", payload, now));
         return new PendingApproval(snapshot, hash, token);
+    }
+
+    /** The chosen shipping option of the quote, with the destination's country, if the merchant needed a selection. */
+    private static Optional<FulfillmentSnapshot> shipping(CheckoutView quote) {
+        return quote.fulfillment().flatMap(f -> f.methods().stream().findFirst().flatMap(method ->
+                method.groups().stream().flatMap(g -> g.selectedOptionId().flatMap(sel ->
+                        g.options().stream().filter(o -> o.id().equals(sel)).findFirst()).stream()).findFirst()
+                        .map(o -> new FulfillmentSnapshot(o.id(), o.title(), o.priceMinor(),
+                                method.selectedDestinationId().flatMap(d -> method.destinations().stream()
+                                        .filter(x -> x.id().equals(d)).findFirst()).flatMap(x -> x.country())))));
     }
 
     /**

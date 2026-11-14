@@ -73,6 +73,23 @@ public abstract class ApprovalRepositoryContract {
         assertThat(repo.findLatestForSystem(I1)).contains(a);
     }
 
+    // Covers: 9.2, D4 (a snapshot with a shipping part reads back equal, on every adapter: option, label, price and the
+    // destination's country survive, and the hash stored is the one of the snapshot with shipping)
+    @Test
+    void findLatest_returnsTheShippingPartOfTheSnapshot() {
+        ApprovalSnapshot plain = approval("a1", I1, ALICE).snapshot();
+        ApprovalSnapshot shipped = new ApprovalSnapshot(plain.intentId(), plain.merchantId(), plain.sessionId(), plain.lines(),
+                plain.currency(), 7700, 7700, plain.expiresAt(),
+                Optional.of(new FulfillmentSnapshot("exp-ship-us", "Express Shipping (US)", 1500, Optional.of("US"))));
+        ApprovalRecord a = new ApprovalRecord("a1", I1, ALICE, shipped, shipped.hash(), "token-hash-a1", shipped.expiresAt(),
+                ApprovalStatus.PENDING, Optional.empty(), Optional.empty());
+        put(a);
+
+        assertThat(repo.findLatest(ALICE, I1)).contains(a);
+        assertThat(repo.findLatest(ALICE, I1).orElseThrow().snapshot().fulfillment()).isPresent();
+        assertThat(repo.findLatest(ALICE, I1).orElseThrow().snapshotHash()).isEqualTo(shipped.hash());
+    }
+
     // Covers: T6 (another user gets empty, the same as for an intent with no approval)
     @Test
     void findLatest_returnsEmpty_forAnotherUserAndForUnknownIntent() {

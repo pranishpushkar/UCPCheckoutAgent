@@ -324,6 +324,7 @@ const LABELS = {
   complete_resent: "Complete re-sent",
   reconcile_read: "Reconciling: GET",
   reconcile_wait: "Reconciling: waiting",
+  fulfillment_selection_needed: "Shipping selection needed",
   escalated: "Escalated",
   cancel_sent: "Cancel sent",
   orphan_probe_sent: "Looking for a lost session"

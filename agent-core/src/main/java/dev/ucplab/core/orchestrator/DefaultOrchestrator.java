@@ -46,6 +46,10 @@ import dev.ucplab.core.merchant.IdempotencyKey;
 import dev.ucplab.core.merchant.MerchantGateway;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantMessage;
+import dev.ucplab.core.merchant.FulfillmentPolicy;
+import dev.ucplab.core.merchant.FulfillmentSelection;
+import dev.ucplab.core.merchant.FulfillmentSteps;
+import dev.ucplab.core.merchant.FulfillmentView;
 import dev.ucplab.core.merchant.NoGatewayException;
 import dev.ucplab.core.merchant.NoInstrumentException;
 import dev.ucplab.core.merchant.MutatingOp;
@@ -149,6 +153,7 @@ public final class DefaultOrchestrator implements Orchestrator {
     private final PolicyEngine policy;
     private final RequotePolicy requotePolicy;
     private final Function<MerchantId, PaymentInstrument> instruments;
+    private final FulfillmentPolicy fulfillmentPolicy;
     private final OrchestratorConfig config;
     private final Clock clock;
     private final IdGenerator ids;
@@ -213,6 +218,20 @@ public final class DefaultOrchestrator implements Orchestrator {
             Function<MerchantId, MerchantGateway> gateways, PolicyEngine policy, RequotePolicy requotePolicy,
             Function<MerchantId, PaymentInstrument> instruments, OrchestratorConfig config, Clock clock,
             IdGenerator ids, String workerId, RandomGenerator jitter) {
+        this(intents, approvals, approvalService, gateways, policy, requotePolicy, instruments, FulfillmentPolicy.cheapest(),
+                config, clock, ids, workerId, jitter);
+    }
+
+    /**
+     * @param fulfillmentPolicy chooses the shipping selection of a merchant that needs one (7.2); chosen by configuration,
+     *     never by the model (I6)
+     */
+    public DefaultOrchestrator(
+            IntentRepository intents, ApprovalRepository approvals, ApprovalService approvalService,
+            Function<MerchantId, MerchantGateway> gateways, PolicyEngine policy, RequotePolicy requotePolicy,
+            Function<MerchantId, PaymentInstrument> instruments, FulfillmentPolicy fulfillmentPolicy,
+            OrchestratorConfig config, Clock clock, IdGenerator ids, String workerId, RandomGenerator jitter) {
+        this.fulfillmentPolicy = Objects.requireNonNull(fulfillmentPolicy, "fulfillmentPolicy");
         this.intents = Objects.requireNonNull(intents, "intents");
         this.approvals = Objects.requireNonNull(approvals, "approvals");
         this.approvalService = Objects.requireNonNull(approvalService, "approvalService");
@@ -418,10 +437,18 @@ public final class DefaultOrchestrator implements Orchestrator {
     private Step quote(PurchaseIntent intent, List<MerchantAttempt> attempts) {
         boolean create = intent.requoteCount() == 0;
         AttemptOp op = create ? AttemptOp.CREATE : AttemptOp.UPDATE;
-        int revision = create ? 0 : intent.requoteCount() - 1;
-        // Retries live in the gateway (7.2, 8.2): an attempt already under this key (answered with a failure, or left
+        // The attempts of this quote cycle: those after the last complete (a re-quote starts a new cycle).
+        List<MerchantAttempt> cycle = quoteCycle(attempts);
+        int updates = (int) attempts.stream().filter(a -> a.op() == AttemptOp.UPDATE).count();
+        Optional<FulfillmentSelection> selection = pendingSelection(intent, cycle);
+        if (selection.isPresent()) {
+            return selectionStep(intent, attempts, cycle, updates, selection.get());
+        }
+        // The revision of an update counts every update issued (7.4); with no selection steps it is requote_count - 1.
+        int revision = create ? 0 : updates;
+        // Retries live in the gateway (7.2, 8.2): an attempt already made in this cycle (answered with a failure, or left
         // SENT by a crash) is not repeated here.
-        boolean tried = attempts.stream().anyMatch(a -> a.op() == op && a.revision() == revision);
+        boolean tried = !cycle.isEmpty();
         if (tried) {
             Move m = move(intent, TransitionEvent.RETRIES_EXHAUSTED);
             // A create left SENT may have made a session the intent never learned of: the probe finds it (7.6 M3 note).
@@ -447,14 +474,107 @@ public final class DefaultOrchestrator implements Orchestrator {
             SessionId session = requireSession(intent);
             // An update replaces the session, so it resends the line ids and buyer fields of the last response this
             // intent stored (8.4). Nothing is fetched: one merchant call per step.
-            UpdateCheckout request = UpdateCheckout.from(intent.lines(), Buyer.ofEmail(intent.buyerEmail()),
-                    lastQuoteShape(attempts));
+            Optional<QuoteShape> last = lastQuoteShape(attempts);
+            // A re-quote repeats the shipping selection the last response showed (full replacement, 8.4).
+            UpdateCheckout request = UpdateCheckout.from(intent.lines(), Buyer.ofEmail(intent.buyerEmail()), last)
+                    .withFulfillment(FulfillmentSteps.carry(last.flatMap(QuoteShape::fulfillment)));
             body = CheckoutWire.updateBody(request);
             call = () -> merchant.update(session, request, key);
         }
         MerchantAttempt attempt = newAttempt(intent.id(), op, revision, key, Optional.of(new FrozenBody(body)));
         PurchaseIntent written = writeAhead(intent, attempt, intent.withState(QUOTING, clock.instant()));
         return onQuoteOutcome(written, attempt, call.get(), create);
+    }
+
+    /** At most this many selection updates in one quote cycle: a merchant that never gets ready ends as exhausted. */
+    static final int MAX_SELECTION_STEPS = 4;
+
+    private static List<MerchantAttempt> quoteCycle(List<MerchantAttempt> attempts) {
+        int from = 0;
+        for (int i = 0; i < attempts.size(); i++) {
+            if (attempts.get(i).op() == AttemptOp.COMPLETE) {
+                from = i + 1;
+            }
+        }
+        return attempts.subList(from, attempts.size()).stream()
+                .filter(a -> a.op() == AttemptOp.CREATE || a.op() == AttemptOp.UPDATE).toList();
+    }
+
+    /**
+     * The shipping selection the newest answer of this cycle still calls for (7.2): the answer was {@code incomplete}
+     * and its fulfillment part (or, for a create that showed none, the merchant's fulfillment capability) says a method,
+     * a destination or an option is missing. Read back from the stored response; nothing is fetched.
+     */
+    private Optional<FulfillmentSelection> pendingSelection(PurchaseIntent intent, List<MerchantAttempt> cycle) {
+        if (cycle.isEmpty()) {
+            return Optional.empty();
+        }
+        MerchantAttempt last = cycle.get(cycle.size() - 1);
+        if (last.status() != AttemptStatus.RESPONDED || last.responseJson().isEmpty()) {
+            return Optional.empty();
+        }
+        String summary = last.responseJson().get();
+        Map<String, Object> root;
+        try {
+            root = CanonicalJson.readObject(summary);
+        } catch (IllegalArgumentException e) {
+            return Optional.empty();
+        }
+        if (!"incomplete".equals(root.get("status")) || !(root.get("message_codes") instanceof List<?> codes) || !codes.isEmpty()) {
+            return Optional.empty();
+        }
+        Optional<FulfillmentView> shown = CheckoutWire.fulfillmentShape(summary);
+        Optional<QuoteShape> shape = CheckoutWire.quoteShape(summary);
+        if (shape.isEmpty()) {
+            return Optional.empty();
+        }
+        if (shown.isEmpty() && !offersFulfillment(intent)) {
+            return Optional.empty();
+        }
+        List<String> lineIds = shape.get().lines().stream().flatMap(l -> l.lineId().stream()).toList();
+        return FulfillmentSteps.next(shown, lineIds, fulfillmentPolicy);
+    }
+
+    /** Whether the merchant's profile lists the fulfillment capability. A profile that cannot be had means no. */
+    private boolean offersFulfillment(PurchaseIntent intent) {
+        try {
+            return gateway(intent).discover(intent.merchantId()).capabilities().contains(FULFILLMENT_CAPABILITY);
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    private boolean selectionPending(PurchaseIntent base, CheckoutView view) {
+        List<String> lineIds = view.lines().stream().flatMap(l -> l.lineId().stream()).toList();
+        if (view.fulfillment().isEmpty() && !offersFulfillment(base)) {
+            return false;
+        }
+        return FulfillmentSteps.next(view.fulfillment(), lineIds, fulfillmentPolicy).isPresent();
+    }
+
+    private static final String FULFILLMENT_CAPABILITY = "dev.ucp.shopping.fulfillment";
+
+    /** One selection update, built from the previous response's ids, under its own key; not a re-quote (7.2). */
+    private Step selectionStep(
+            PurchaseIntent intent, List<MerchantAttempt> attempts, List<MerchantAttempt> cycle, int updates,
+            FulfillmentSelection selection) {
+        long selectionsSoFar = cycle.stream().filter(a -> a.op() == AttemptOp.UPDATE).count();
+        if (selectionsSoFar >= MAX_SELECTION_STEPS) {
+            Move m = move(intent, TransitionEvent.RETRIES_EXHAUSTED);
+            PurchaseIntent next = m.next().withFailureReason(QUOTE_RETRIES_EXHAUSTED);
+            intents.update(next, intent.version(), workerId);
+            transitionEvent(intent.id(), m.transition());
+            return moved(intent, next);
+        }
+        MerchantGateway merchant = gateway(intent);
+        SessionId session = requireSession(intent);
+        IdempotencyKey key = IdempotencyKey.derive(intent.id(), MutatingOp.UPDATE, updates);
+        UpdateCheckout request = UpdateCheckout.from(intent.lines(), Buyer.ofEmail(intent.buyerEmail()),
+                lastQuoteShape(attempts)).withFulfillment(Optional.of(selection));
+        MerchantAttempt attempt = newAttempt(intent.id(), AttemptOp.UPDATE, updates, key,
+                Optional.of(new FrozenBody(CheckoutWire.updateBody(request))));
+        PurchaseIntent written = writeAhead(intent, attempt, intent.withState(QUOTING, clock.instant()));
+        return onQuoteOutcome(written, attempt, merchant.update(session, request, key), false);
     }
 
     private Step onQuoteOutcome(
@@ -504,6 +624,13 @@ public final class DefaultOrchestrator implements Orchestrator {
                 }
                 if (view.status() == CheckoutStatus.READY_FOR_COMPLETE) {
                     yield quoteReady(base, attempt, http, summary, view);
+                }
+                if (view.status() == CheckoutStatus.INCOMPLETE && view.messages().isEmpty()
+                        && selectionPending(base, view)) {
+                    // The merchant needs a shipping selection (7.2): stay in QUOTING; the next step sends it.
+                    resolve(attempt, AttemptStatus.RESPONDED, http, summary, base, written.version());
+                    event(base.id(), "fulfillment_selection_needed", Map.of("status", "incomplete"));
+                    yield moved(written, base);
                 }
                 // An answer that is neither a quote nor a known failure: retry under the same key until exhausted.
                 yield exhaustQuoting(base, attempt, AttemptStatus.RESPONDED, http, summary);

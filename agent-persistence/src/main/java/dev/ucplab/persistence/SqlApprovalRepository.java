@@ -3,6 +3,7 @@ package dev.ucplab.persistence;
 import dev.ucplab.core.approval.ApprovalRecord;
 import dev.ucplab.core.approval.ApprovalRepository;
 import dev.ucplab.core.approval.ApprovalSnapshot;
+import dev.ucplab.core.approval.FulfillmentSnapshot;
 import dev.ucplab.core.approval.ApprovalStatus;
 import dev.ucplab.core.approval.SnapshotLine;
 import dev.ucplab.core.identity.UserId;
@@ -186,6 +187,14 @@ public final class SqlApprovalRepository implements ApprovalRepository {
         m.put("totalMinor", s.totalMinor());
         m.put("maxTotalMinor", s.maxTotalMinor());
         m.put("expiresAt", SqlTimes.format(s.expiresAt()));
+        s.fulfillment().ifPresent(f -> {
+            Map<String, Object> shipping = new LinkedHashMap<>();
+            shipping.put("optionId", f.optionId());
+            shipping.put("label", f.label());
+            shipping.put("priceMinor", f.priceMinor());
+            f.destinationCountry().ifPresent(c -> shipping.put("destinationCountry", c));
+            m.put("fulfillment", shipping);
+        });
         return CanonicalJson.write(m);
     }
 
@@ -201,6 +210,10 @@ public final class SqlApprovalRepository implements ApprovalRepository {
         return new ApprovalSnapshot(
                 new IntentId((String) m.get("intentId")), new MerchantId((String) m.get("merchantId")),
                 new SessionId((String) m.get("sessionId")), lines, (String) m.get("currency"),
-                (Long) m.get("totalMinor"), (Long) m.get("maxTotalMinor"), SqlTimes.parse((String) m.get("expiresAt")));
+                (Long) m.get("totalMinor"), (Long) m.get("maxTotalMinor"), SqlTimes.parse((String) m.get("expiresAt")),
+                m.get("fulfillment") instanceof Map<?, ?> f
+                        ? Optional.of(new FulfillmentSnapshot((String) f.get("optionId"), (String) f.get("label"),
+                                (Long) f.get("priceMinor"), Optional.ofNullable((String) f.get("destinationCountry"))))
+                        : Optional.empty());
     }
 }

@@ -11,6 +11,8 @@ import dev.ucplab.core.json.CanonicalJson;
 import dev.ucplab.core.merchant.CheckoutWire;
 import dev.ucplab.core.merchant.CreateCheckout;
 import dev.ucplab.core.merchant.FrozenBody;
+import dev.ucplab.core.merchant.FulfillmentSelection;
+import dev.ucplab.core.merchant.FulfillmentView;
 import dev.ucplab.core.merchant.IdempotencyKey;
 import dev.ucplab.core.merchant.LineView;
 import dev.ucplab.core.merchant.MerchantGateway;
@@ -103,6 +105,14 @@ public final class FaultyMerchantModel implements MerchantGateway {
     private final Map<MerchantCall, Integer> deliveredCounts = new EnumMap<>(MerchantCall.class);
     private final List<Held> held = new ArrayList<>();
     private final List<CallRecord> log = new ArrayList<>();
+    /**
+     * Fulfillment mode (H1 C6), off by default: the merchant then behaves as the lab merchant always did. On, it follows
+     * the sample merchant's flow (docs/interop/fixtures 04 to 07): a create is incomplete with no fulfillment part, an
+     * update that names a method lists the destinations, one that selects a destination lists the options of a group, one
+     * that selects an option makes the checkout ready, and the total includes the option's price.
+     */
+    private boolean fulfillmentMode;
+    private final Map<String, Long> optionPrices = new LinkedHashMap<>(Map.of("std-ship", 0L, "exp-ship-us", 1500L));
     private int seq;
     private long heldSeq;
 
@@ -149,6 +159,21 @@ public final class FaultyMerchantModel implements MerchantGateway {
         } finally {
             lock.unlock();
         }
+    }
+
+    /** Turns fulfillment mode on: this merchant now needs a shipping selection before a checkout is ready. */
+    public void enableFulfillment() {
+        withLock(() -> fulfillmentMode = true);
+    }
+
+    /** Sets the price of a shipping option: {@code std-ship} (default 0) or {@code exp-ship-us} (default 1500). */
+    public void setOptionPrice(String optionId, long priceMinor) {
+        withLock(() -> {
+            if (!optionPrices.containsKey(optionId)) {
+                throw new IllegalArgumentException("no such option: " + optionId);
+            }
+            optionPrices.put(optionId, priceMinor);
+        });
     }
 
     public void addRule(FaultRule rule) {
@@ -222,7 +247,8 @@ public final class FaultyMerchantModel implements MerchantGateway {
     @Override
     public MerchantProfile discover(MerchantId merchant) {
         return new MerchantProfile(merchant, UCP_VERSION, URI.create("http://127.0.0.1/ucp/v1"),
-                Set.of("dev.ucp.shopping.checkout"), Set.of(HANDLER_ID));
+                fulfillmentMode ? Set.of("dev.ucp.shopping.checkout", "dev.ucp.shopping.fulfillment")
+                        : Set.of("dev.ucp.shopping.checkout"), Set.of(HANDLER_ID));
     }
 
     @Override
@@ -418,6 +444,7 @@ public final class FaultyMerchantModel implements MerchantGateway {
                 }
                 s.lines = priced.lines;
                 s.buyer = request.buyer().map(FaultyMerchantModel::keptBuyerFields).orElse(NO_BUYER);
+                s.selection = request.fulfillment();
                 s.status = readiness(s);
                 return ok(200, s, priced.messages);
             }
@@ -569,8 +596,48 @@ public final class FaultyMerchantModel implements MerchantGateway {
     }
 
     /** The merchant's state rule: ready once there is a buyer email, whatever the messages say. */
-    private static CheckoutStatus readiness(Session s) {
-        return s.buyer.email().isPresent() ? CheckoutStatus.READY_FOR_COMPLETE : CheckoutStatus.INCOMPLETE;
+    private CheckoutStatus readiness(Session s) {
+        boolean shipped = !fulfillmentMode || selectedOption(s).isPresent();
+        return s.buyer.email().isPresent() && shipped ? CheckoutStatus.READY_FOR_COMPLETE : CheckoutStatus.INCOMPLETE;
+    }
+
+    /** The destinations this merchant offers, and its two options (fulfillment mode). */
+    private static final List<String> DESTINATIONS = List.of("addr_1", "addr_2");
+
+    private Optional<String> selectedDestination(Session s) {
+        return s.selection.flatMap(FulfillmentSelection::destinationId).filter(DESTINATIONS::contains);
+    }
+
+    private Optional<String> selectedOption(Session s) {
+        if (selectedDestination(s).isEmpty()) {
+            return Optional.empty();
+        }
+        return s.selection.flatMap(sel -> sel.groups().stream().findFirst()).map(FulfillmentSelection.GroupSelection::optionId)
+                .filter(optionPrices::containsKey);
+    }
+
+    private long shipping(Session s) {
+        return fulfillmentMode ? selectedOption(s).map(optionPrices::get).orElse(0L) : 0L;
+    }
+
+    /** The fulfillment part a session shows now: what its selection has unlocked so far (fulfillment mode only). */
+    private Optional<FulfillmentView> fulfillmentView(Session s) {
+        if (!fulfillmentMode || s.selection.isEmpty()) {
+            return Optional.empty();
+        }
+        FulfillmentSelection sel = s.selection.get();
+        List<FulfillmentView.Destination> destinations = DESTINATIONS.stream()
+                .map(d -> new FulfillmentView.Destination(d, Optional.of("US"))).toList();
+        Optional<String> destination = selectedDestination(s);
+        List<FulfillmentView.Group> groups = List.of();
+        if (destination.isPresent()) {
+            groups = List.of(new FulfillmentView.Group("group_" + s.id.value(), sel.lineItemIds(), List.of(
+                    new FulfillmentView.Option("std-ship", "Standard Shipping", optionPrices.get("std-ship")),
+                    new FulfillmentView.Option("exp-ship-us", "Express Shipping (US)", optionPrices.get("exp-ship-us"))),
+                    selectedOption(s)));
+        }
+        return Optional.of(new FulfillmentView(List.of(new FulfillmentView.Method(sel.methodId(), sel.type(),
+                sel.lineItemIds(), destinations, destination, groups))));
     }
 
     private CallOutcome<CheckoutView> ok(int httpStatus, Session s, List<MerchantMessage> messages) {
@@ -581,13 +648,14 @@ public final class FaultyMerchantModel implements MerchantGateway {
         return new CallOutcome.ProtocolError<>(404, "not_found", "no checkout " + id.value(), Optional.empty());
     }
 
-    private static CheckoutView view(Session s, List<MerchantMessage> messages) {
+    private CheckoutView view(Session s, List<MerchantMessage> messages) {
         long subtotal = subtotal(s);
         long tax = tax(subtotal);
+        long shipping = shipping(s);
         // The merchant reports a buyer only once it has an email.
         Optional<Buyer> buyer = s.buyer.email().isPresent() ? Optional.of(s.buyer) : Optional.empty();
-        return new CheckoutView(s.id, s.status, CURRENCY, s.lines, subtotal, tax, subtotal + tax, s.order, buyer,
-                messages);
+        return new CheckoutView(s.id, s.status, CURRENCY, s.lines, subtotal, tax, subtotal + tax + shipping, s.order, buyer,
+                messages, fulfillmentView(s), shipping);
     }
 
     private static long subtotal(Session s) {
@@ -599,9 +667,9 @@ public final class FaultyMerchantModel implements MerchantGateway {
         return (subtotalMinor * TAX_PERCENT + 50) / 100;
     }
 
-    private static long total(Session s) {
+    private long total(Session s) {
         long subtotal = subtotal(s);
-        return subtotal + tax(subtotal);
+        return subtotal + tax(subtotal) + shipping(s);
     }
 
     private static MerchantMessage error(String code, Optional<String> path, String content, String severity) {
@@ -693,6 +761,7 @@ public final class FaultyMerchantModel implements MerchantGateway {
         Buyer buyer;
         CheckoutStatus status = CheckoutStatus.INCOMPLETE;
         Optional<OrderRef> order = Optional.empty();
+        Optional<FulfillmentSelection> selection = Optional.empty();
 
         Session(SessionId id, List<LineView> lines, Buyer buyer) {
             this.id = id;

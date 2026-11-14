@@ -10,9 +10,15 @@ import java.util.Optional;
  * Full replacement of a session's buyer and line items (A.1, 8.4). Appendix B names this type without fields. Each
  * line carries the merchant's line id when the last view had one, and the buyer carries every field the merchant held.
  */
-public record UpdateCheckout(List<UpdateLine> lines, Optional<Buyer> buyer) {
+public record UpdateCheckout(List<UpdateLine> lines, Optional<Buyer> buyer, Optional<FulfillmentSelection> fulfillment) {
+
+    /** An update with no fulfillment part: the lab merchant, and every update before a merchant asks for shipping. */
+    public UpdateCheckout(List<UpdateLine> lines, Optional<Buyer> buyer) {
+        this(lines, buyer, Optional.empty());
+    }
 
     public UpdateCheckout {
+        Objects.requireNonNull(fulfillment, "fulfillment");
         lines = List.copyOf(Objects.requireNonNull(lines, "lines"));
         Objects.requireNonNull(buyer, "buyer");
         if (lines.isEmpty()) {
@@ -51,5 +57,10 @@ public record UpdateCheckout(List<UpdateLine> lines, Optional<Buyer> buyer) {
         }
         Buyer merged = last.flatMap(QuoteShape::buyer).map(buyer::withMissingFrom).orElse(buyer);
         return new UpdateCheckout(out, Optional.of(merged));
+    }
+
+    /** This update with {@code selection} as its fulfillment part. */
+    public UpdateCheckout withFulfillment(Optional<FulfillmentSelection> selection) {
+        return new UpdateCheckout(lines, buyer, selection);
     }
 }
