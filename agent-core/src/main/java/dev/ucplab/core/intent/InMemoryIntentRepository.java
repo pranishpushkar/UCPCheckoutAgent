@@ -136,8 +136,10 @@ public final class InMemoryIntentRepository implements IntentRepository {
             if (attempts.containsKey(attempt.id())) {
                 throw new IllegalArgumentException("attempt id already exists: " + attempt.id());
             }
+            // The merge holds the I4 check and counts the attempt being recorded, as the SQL adapter does; it comes first.
+            PurchaseIntent merged = merge(stored, intent, expectedVersion + 1, Optional.of(attempt));
             attempts.put(attempt.id(), attempt);
-            intents.put(intent.id(), merge(stored, intent, expectedVersion + 1));
+            intents.put(intent.id(), merged);
         } finally {
             lock.unlock();
         }
@@ -371,9 +373,16 @@ public final class InMemoryIntentRepository implements IntentRepository {
 
     /** Caller holds the lock. Refuses a session change once a complete attempt exists (I4). */
     private PurchaseIntent merge(PurchaseIntent stored, PurchaseIntent update, long newVersion) {
+        return merge(stored, update, newVersion, Optional.empty());
+    }
+
+    /** As above, and {@code recording}, an attempt written in the same call, counts as one that exists (I4). */
+    private PurchaseIntent merge(PurchaseIntent stored, PurchaseIntent update, long newVersion,
+                                 Optional<MerchantAttempt> recording) {
         if (stored.sessionId().isPresent() && !stored.sessionId().equals(update.sessionId())
-                && attempts.values().stream()
-                        .anyMatch(a -> a.intentId().equals(stored.id()) && a.op() == AttemptOp.COMPLETE)) {
+                && (recording.filter(a -> a.op() == AttemptOp.COMPLETE).isPresent()
+                || attempts.values().stream()
+                        .anyMatch(a -> a.intentId().equals(stored.id()) && a.op() == AttemptOp.COMPLETE))) {
             throw new IllegalStateException("I4: session of intent " + stored.id()
                     + " cannot change after a complete attempt");
         }

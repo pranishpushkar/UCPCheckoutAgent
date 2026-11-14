@@ -730,6 +730,43 @@ public abstract class IntentRepositoryContract {
         assertThat(repo.findForSystem(claimed.id()).orElseThrow().sessionId()).contains(new SessionId("cs_1"));
     }
 
+    // Covers: I4, 7.3 step 3 (a recordAttempt that I4 refuses records nothing: the attempt is not listed and the intent
+    // keeps its version and its session, because every check comes before the first write)
+    @Test
+    void recordAttempt_refusedByI4_recordsNothing() {
+        PurchaseIntent claimed = insertAndClaim("i1", ALICE, "d1", W1);
+        PurchaseIntent withSession = claimed.withSessionId(new SessionId("cs_1"));
+        repo.update(withSession, 0, W1);
+        repo.recordAttempt(completeAttempt("a1", withSession), withSession, 1, W1);
+
+        PurchaseIntent otherSession = withSession.withSessionId(new SessionId("cs_2"));
+        assertThatThrownBy(() -> repo.recordAttempt(attempt("a2", otherSession), otherSession, 2, W1))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("I4");
+
+        assertThat(repo.attempts(claimed.id())).extracting(a -> a.id().value()).containsExactly("a1");
+        PurchaseIntent stored = repo.findForSystem(claimed.id()).orElseThrow();
+        assertThat(stored.version()).isEqualTo(2);
+        assertThat(stored.sessionId()).contains(new SessionId("cs_1"));
+    }
+
+    // Covers: I4, 7.3 step 3 (the attempt being recorded counts: a COMPLETE attempt recorded in the same call as a change
+    // of session is refused, because from that write on a complete attempt exists, and nothing is recorded)
+    @Test
+    void recordAttempt_countsTheCompleteAttemptItRecords_forTheSessionChangeInTheSameCall() {
+        PurchaseIntent claimed = insertAndClaim("i1", ALICE, "d1", W1);
+        PurchaseIntent withSession = claimed.withSessionId(new SessionId("cs_1"));
+        repo.update(withSession, 0, W1);
+
+        PurchaseIntent otherSession = withSession.withSessionId(new SessionId("cs_2"));
+        assertThatThrownBy(() -> repo.recordAttempt(completeAttempt("a1", otherSession), otherSession, 1, W1))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("I4");
+
+        assertThat(repo.attempts(claimed.id())).isEmpty();
+        PurchaseIntent stored = repo.findForSystem(claimed.id()).orElseThrow();
+        assertThat(stored.version()).isEqualTo(1);
+        assertThat(stored.sessionId()).contains(new SessionId("cs_1"));
+    }
+
     // Covers: 7.6 (claim takes a free or expired lease, renews its own, and refuses a live lease of another worker)
     @Test
     void claim_takesFreeOrExpiredLease_andRefusesLiveForeignLease() {
