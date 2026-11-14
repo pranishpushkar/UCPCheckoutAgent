@@ -123,9 +123,13 @@ public final class InteropMain {
                     SampleWiring.SUCCESS_TOKEN, SampleWiring.FAIL_TOKEN, () -> sample.db().price(InteropRows.ITEM),
                     p -> sample.setPrice(InteropRows.ITEM, p), () -> sample.db().stock(InteropRows.ITEM),
                     n -> sample.setStock(InteropRows.ITEM, n));
+            Path wireDir = repo.resolve("docs/interop/wire");
             for (String row : WireRows.ROWS) {
-                wireDiffs.addAll(WireDiff.diff(row, WireRows.record(row, labTarget, wireWork, scale),
-                        WireRows.record(row, sampleTarget, wireWork, scale)));
+                List<WireStep> labSteps = WireRows.record(row, labTarget, wireWork, scale);
+                List<WireStep> sampleSteps = WireRows.record(row, sampleTarget, wireWork, scale);
+                WireFiles.write(wireDir, "lab", row, labSteps);
+                WireFiles.write(wireDir, "sample", row, sampleSteps);
+                wireDiffs.addAll(WireDiff.diff(row, labSteps, sampleSteps));
             }
         }
         var classified = DifferenceReport.parse(Files.readString(repo.resolve("docs/interop/differences.md")));

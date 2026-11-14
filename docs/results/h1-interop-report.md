@@ -2,37 +2,38 @@
 
 | row | runs | terminal states | orders (sample's own table) | violations | time | agreement with the lab |
 | --- | --- | --- | --- | --- | --- | --- |
-| S0 | 20 | {COMPLETED=20} | 20 | 0 | 7.2 s | agrees |
-| S1 | 20 | {COMPLETED=20} | 20 | 0 | 6.8 s | agrees |
-| S2 | 20 | {COMPLETED=20} | 20 | 0 | 6.2 s | agrees |
-| S3 | 20 | {COMPLETED=20} | 20 | 0 | 56.5 s | agrees |
-| S4 | 20 | {COMPLETED=20} | 20 | 0 | 5.0 s | agrees |
-| S5 | 20 | {COMPLETED=20} | 20 | 0 | 5.1 s | differs: no re-quote (complete-charges-held-quote) |
+| S0 | 20 | {COMPLETED=20} | 20 | 0 | 7.9 s | agrees |
+| S1 | 20 | {COMPLETED=20} | 20 | 0 | 6.9 s | agrees |
+| S2 | 20 | {COMPLETED=20} | 20 | 0 | 6.7 s | agrees |
+| S3 | 20 | {COMPLETED=20} | 20 | 0 | 56.4 s | agrees |
+| S4 | 20 | {COMPLETED=20} | 20 | 0 | 4.9 s | agrees |
+| S5 | 20 | {COMPLETED=20} | 20 | 0 | 5.3 s | differs: no re-quote (complete-charges-held-quote) |
 | S6 | 20 | {FAILED_NOT_CHARGED=20} | 0 | 0 | 4.9 s | agrees (refusal shape differs: refusal-4xx-at-complete) |
 | S7 | 20 | {FAILED_NOT_CHARGED=20} | 0 | 0 | 4.9 s | agrees (refusal shape differs: refusal-4xx-at-complete) |
-| S8 | 20 | {COMPLETED=20} | 20 | 0 | 109.6 s | agrees |
-| S13 | 20 | {COMPLETED=20} | 20 | 0 | 4.5 s | agrees |
-| S14 | 20 | {COMPLETED=20} | 20 | 0 | 5.9 s | agrees |
-| S9 | 20 | {COMPLETED=20} | 20 | 0 | 225.7 s | agrees |
+| S8 | 20 | {COMPLETED=20} | 20 | 0 | 109.4 s | agrees |
+| S13 | 20 | {COMPLETED=20} | 20 | 0 | 4.7 s | agrees |
+| S14 | 20 | {COMPLETED=20} | 20 | 0 | 5.8 s | agrees |
+| S9 | 20 | {COMPLETED=20} | 20 | 0 | 226.0 s | agrees |
 
 Totals: 240 runs, 200 orders, 0 violations.
 
 ## Wire differences
 
-330 raw wire differences, 330 explained by 12 entries, 0 unclassified.
+321 raw wire differences, 321 explained by 12 entries, 0 unclassified.
 
 | entry | class | evidence | raw differences it explains | why |
 | --- | --- | --- | --- | --- |
-| error-codes-upper-case | theirs | computed | 2 | The sample writes codes in upper case (OUT_OF_STOCK, INSUFFICIENT_FUNDS); the lab uses lower case. The agent reads them case-insensitively. |
-| complete-charges-held-quote | ambiguity | computed | 12 | After a price change in the sample's products table, a GET does not show it and complete charges the quote it holds; only an update re-prices, so the lab's re-quote steps (update, a second complete) have no counterpart. Neither the 2026-04-08 nor the 2026-08-25 text of Complete Checkout says whether a business must re-price (read 2026-11-14). |
-| refusal-4xx-at-complete | choice | computed | 68 | The sample answers a refused complete (409 OUT_OF_STOCK, 402 INSUFFICIENT_FUNDS) as a 4xx with a UCP error envelope; the lab answers 200 with a message. The lab's answer is a whole checkout with a message; the sample's is an error envelope with no checkout body, so every checkout field of the lab's answer is absent from the sample's. Both shapes are legal and the agent accepts both. |
-| fulfillment-mandatory | choice | computed | 102 | The sample needs a shipping method, destination and option (three full-replacement updates) before ready_for_complete; the lab needs none. The agent supports this through a FulfillmentPolicy and sends no address. |
-| endpoint-at-origin | theirs | computed | 6 | The sample serves its REST endpoint at the origin; the lab's is under /ucp/v1. The proxy rule paths follow the profile's endpoint. |
+| error-codes-upper-case | theirs | computed | 1 | The sample writes codes in upper case (OUT_OF_STOCK, INSUFFICIENT_FUNDS); the lab uses lower case. Only a pair of codes equal ignoring case is explained here (WireDiff emits error-code-case for it); two codes that really differ are a different difference. The agent reads codes case-insensitively. |
+| decline-code-names | theirs | computed | 1 | The lab names a declined payment payment_declined; the sample names it INSUFFICIENT_FUNDS. Two different codes, both read by the agent as a decline (the gateway maps INSUFFICIENT_FUNDS and PAYMENT_FAILED to payment_declined). |
+| complete-charges-held-quote | ambiguity | computed | 10 | After a price change in the sample's products table, a GET does not show it and complete charges the quote it holds; only an update re-prices, so the lab's re-quote steps (update, a second complete) have no counterpart. Neither the 2026-04-08 nor the 2026-08-25 text of Complete Checkout says whether a business must re-price (read 2026-11-14). |
+| refusal-4xx-at-complete | choice | computed | 52 | The sample answers a refused complete (409 OUT_OF_STOCK, 402 INSUFFICIENT_FUNDS) as a 4xx with a UCP error envelope; the lab answers 200 with a message. The lab's answer is a whole checkout with a message; the sample's is an error envelope with no checkout body, so each checkout field of the lab's answer (buyer, currency, id, line_items, totals, status, the message path, the ucp capabilities and payment_handlers blocks) is absent from the sample's; those are named, and any other field, any other status and any field only the sample has stay differences. The glob is `*` over the row only for these named fields. Both shapes are legal and the agent accepts both. |
+| fulfillment-mandatory | choice | computed | 93 | The sample needs a shipping method, destination and option (three full-replacement updates) before ready_for_complete; the lab needs none. The agent supports this through a FulfillmentPolicy and sends no address. |
+| endpoint-at-origin | theirs | history | 0 | The sample serves its REST endpoint at the origin; the lab's is under /ucp/v1. Paths are recorded relative to the endpoint the profile declares, so the two compare equal and a step that hits a different relative path stays a difference. The proxy rule paths follow the profile's endpoint (EndpointPaths). |
 | no-catalog-capability | theirs | computed | 8 | The sample declares no catalog capability, so the rows are orchestrator-direct and the agent cannot search it. |
-| optional-links-and-continue-url | choice | computed | 24 | The lab's checkout carries a terms-of-service link and a continue_url; the sample returns an empty links array and no continue_url. Both are optional content under the checkout schema, so each merchant chooses. |
-| sample-discount-capability | theirs | computed | 6 | The sample declares the discount capability and returns a discounts object; the agent ignores it. |
-| payment-handler-listing | theirs | computed | 40 | Each merchant lists its own payment handlers in its profile and in every response envelope (the sample: google_pay, mock_payment_handler, shop_pay; the lab: mock_pay_1). The agent needs only its own handler id, checked at discovery. |
-| response-envelope-status | theirs | computed | 6 | The sample's 2026-04-08 response envelope carries ucp.status; the lab's does not. The agent ignores it. |
+| optional-links-and-continue-url | choice | computed | 38 | The lab's checkout carries a terms-of-service link and a continue_url; the sample returns an empty links array and no continue_url. Both are optional content under the checkout schema, so each merchant chooses. |
+| sample-discount-capability | theirs | computed | 7 | The sample declares the discount capability and returns a discounts object; the agent ignores it. |
+| payment-handler-listing | theirs | computed | 46 | Each merchant lists its own payment handlers in its profile and in every response envelope (the sample: google_pay, mock_payment_handler, shop_pay; the lab: mock_pay_1). The agent needs only its own handler id, checked at discovery. |
+| response-envelope-status | theirs | computed | 9 | The sample's 2026-04-08 response envelope carries ucp.status; the lab's does not. The agent ignores it. |
 | sample-signing-keys | theirs | computed | 36 | The sample publishes signing keys in its profile (signatures are optional and unused until H5). |
 | sample-wider-capabilities | theirs | computed | 20 | The sample declares buyer_consent, cart, discount, fulfillment and order next to checkout; the lab declares checkout (and catalog). Fulfillment is the one that changes the agent's behaviour (fulfillment-mandatory). |
 | profile-version-2026-04-08 | theirs | history | 0 | The sample's profile declares 2026-04-08 and refuses version="2026-08-25" with 422 (fixture 35). The agent pins ucp_versions per merchant. |
@@ -45,7 +46,6 @@ Totals: 240 runs, 200 orders, 0 violations.
 
 ### Every raw difference and the entry that explains it
 
-- `S0/complete/path:/ucp/v1/checkout-sessions/{id}/complete|/checkout-sessions/{id}/complete` : endpoint-at-origin
 - `S0/complete/field-only-lab:resp:continue_url` : optional-links-and-continue-url
 - `S0/complete/field-only-sample:resp:discounts` : sample-discount-capability
 - `S0/complete/field-only-sample:resp:fulfillment` : fulfillment-mandatory
@@ -86,7 +86,6 @@ Totals: 240 runs, 200 orders, 0 violations.
 - `S0/complete/field-only-sample:resp:ucp.payment_handlers.dev.shopify.shop_pay` : payment-handler-listing
 - `S0/complete/field-only-lab:resp:ucp.payment_handlers.dev.ucplab.mock_pay` : payment-handler-listing
 - `S0/complete/field-only-sample:resp:ucp.status` : response-envelope-status
-- `S0/create/path:/ucp/v1/checkout-sessions|/checkout-sessions` : endpoint-at-origin
 - `S0/create/field-only-lab:resp:continue_url` : optional-links-and-continue-url
 - `S0/create/field-only-sample:resp:discounts` : sample-discount-capability
 - `S0/create/field-only-lab:resp:links[]` : optional-links-and-continue-url
@@ -120,7 +119,6 @@ Totals: 240 runs, 200 orders, 0 violations.
 - `S0/update/step-only-sample:` : fulfillment-mandatory
 - `S0/update#2/step-only-sample:` : fulfillment-mandatory
 - `S0/update#3/step-only-sample:` : fulfillment-mandatory
-- `S5/complete/path:/ucp/v1/checkout-sessions/{id}/complete|/checkout-sessions/{id}/complete` : endpoint-at-origin
 - `S5/complete/field-only-lab:resp:continue_url` : optional-links-and-continue-url
 - `S5/complete/field-only-sample:resp:discounts` : sample-discount-capability
 - `S5/complete/field-only-sample:resp:fulfillment` : fulfillment-mandatory
@@ -171,7 +169,6 @@ Totals: 240 runs, 200 orders, 0 violations.
 - `S5/complete/field-only-lab:resp:ucp.payment_handlers.dev.ucplab.mock_pay` : payment-handler-listing
 - `S5/complete/field-only-sample:resp:ucp.status` : response-envelope-status
 - `S5/complete#2/step-only-lab:` : complete-charges-held-quote
-- `S5/create/path:/ucp/v1/checkout-sessions|/checkout-sessions` : endpoint-at-origin
 - `S5/create/field-only-lab:resp:continue_url` : optional-links-and-continue-url
 - `S5/create/field-only-sample:resp:discounts` : sample-discount-capability
 - `S5/create/field-only-lab:resp:links[]` : optional-links-and-continue-url
@@ -202,7 +199,6 @@ Totals: 240 runs, 200 orders, 0 violations.
 - `S5/discover/field-only-sample:resp:ucp.payment_handlers.dev.mock.payment_handler` : payment-handler-listing
 - `S5/discover/field-only-sample:resp:ucp.payment_handlers.dev.shopify.shop_pay` : payment-handler-listing
 - `S5/discover/field-only-lab:resp:ucp.payment_handlers.dev.ucplab.mock_pay` : payment-handler-listing
-- `S5/update/path:/ucp/v1/checkout-sessions/{id}|/checkout-sessions/{id}` : fulfillment-mandatory
 - `S5/update/field-only-sample:req:fulfillment` : fulfillment-mandatory
 - `S5/update/field-only-sample:req:fulfillment.methods` : fulfillment-mandatory
 - `S5/update/field-only-sample:req:fulfillment.methods[]` : fulfillment-mandatory
@@ -210,8 +206,8 @@ Totals: 240 runs, 200 orders, 0 violations.
 - `S5/update/field-only-sample:req:fulfillment.methods[].line_item_ids` : fulfillment-mandatory
 - `S5/update/field-only-sample:req:fulfillment.methods[].line_item_ids[]` : fulfillment-mandatory
 - `S5/update/field-only-sample:req:fulfillment.methods[].type` : fulfillment-mandatory
-- `S5/update/field-only-lab:resp:continue_url` : fulfillment-mandatory
-- `S5/update/field-only-sample:resp:discounts` : fulfillment-mandatory
+- `S5/update/field-only-lab:resp:continue_url` : optional-links-and-continue-url
+- `S5/update/field-only-sample:resp:discounts` : sample-discount-capability
 - `S5/update/field-only-sample:resp:fulfillment` : fulfillment-mandatory
 - `S5/update/field-only-sample:resp:fulfillment.methods` : fulfillment-mandatory
 - `S5/update/field-only-sample:resp:fulfillment.methods[]` : fulfillment-mandatory
@@ -227,22 +223,21 @@ Totals: 240 runs, 200 orders, 0 violations.
 - `S5/update/field-only-sample:resp:fulfillment.methods[].line_item_ids` : fulfillment-mandatory
 - `S5/update/field-only-sample:resp:fulfillment.methods[].line_item_ids[]` : fulfillment-mandatory
 - `S5/update/field-only-sample:resp:fulfillment.methods[].type` : fulfillment-mandatory
-- `S5/update/field-only-lab:resp:links[]` : fulfillment-mandatory
-- `S5/update/field-only-lab:resp:links[].type` : fulfillment-mandatory
-- `S5/update/field-only-lab:resp:links[].url` : fulfillment-mandatory
-- `S5/update/field-only-sample:resp:ucp.payment_handlers.com.google.pay` : fulfillment-mandatory
-- `S5/update/field-only-sample:resp:ucp.payment_handlers.dev.mock.payment_handler` : fulfillment-mandatory
-- `S5/update/field-only-sample:resp:ucp.payment_handlers.dev.shopify.shop_pay` : fulfillment-mandatory
-- `S5/update/field-only-lab:resp:ucp.payment_handlers.dev.ucplab.mock_pay` : fulfillment-mandatory
-- `S5/update/field-only-sample:resp:ucp.status` : fulfillment-mandatory
-- `S5/update#2/step-only-sample:` : complete-charges-held-quote
-- `S5/update#3/step-only-sample:` : complete-charges-held-quote
-- `S6/complete/status:200|409` : refusal-4xx-at-complete
-- `S6/complete/path:/ucp/v1/checkout-sessions/{id}/complete|/checkout-sessions/{id}/complete` : refusal-4xx-at-complete
-- `S6/complete/error-code:out_of_stock|OUT_OF_STOCK` : error-codes-upper-case
+- `S5/update/field-only-lab:resp:links[]` : optional-links-and-continue-url
+- `S5/update/field-only-lab:resp:links[].type` : optional-links-and-continue-url
+- `S5/update/field-only-lab:resp:links[].url` : optional-links-and-continue-url
+- `S5/update/field-only-sample:resp:ucp.payment_handlers.com.google.pay` : payment-handler-listing
+- `S5/update/field-only-sample:resp:ucp.payment_handlers.dev.mock.payment_handler` : payment-handler-listing
+- `S5/update/field-only-sample:resp:ucp.payment_handlers.dev.shopify.shop_pay` : payment-handler-listing
+- `S5/update/field-only-lab:resp:ucp.payment_handlers.dev.ucplab.mock_pay` : payment-handler-listing
+- `S5/update/field-only-sample:resp:ucp.status` : response-envelope-status
+- `S5/update#2/step-only-sample:` : fulfillment-mandatory
+- `S5/update#3/step-only-sample:` : fulfillment-mandatory
+- `S6/complete/status:200~409` : refusal-4xx-at-complete
+- `S6/complete/error-code-case:out_of_stock~OUT_OF_STOCK` : error-codes-upper-case
 - `S6/complete/field-only-lab:resp:buyer` : refusal-4xx-at-complete
 - `S6/complete/field-only-lab:resp:buyer.email` : refusal-4xx-at-complete
-- `S6/complete/field-only-lab:resp:continue_url` : refusal-4xx-at-complete
+- `S6/complete/field-only-lab:resp:continue_url` : optional-links-and-continue-url
 - `S6/complete/field-only-lab:resp:currency` : refusal-4xx-at-complete
 - `S6/complete/field-only-lab:resp:id` : refusal-4xx-at-complete
 - `S6/complete/field-only-lab:resp:line_items` : refusal-4xx-at-complete
@@ -257,10 +252,10 @@ Totals: 240 runs, 200 orders, 0 violations.
 - `S6/complete/field-only-lab:resp:line_items[].totals[]` : refusal-4xx-at-complete
 - `S6/complete/field-only-lab:resp:line_items[].totals[].amount` : refusal-4xx-at-complete
 - `S6/complete/field-only-lab:resp:line_items[].totals[].type` : refusal-4xx-at-complete
-- `S6/complete/field-only-lab:resp:links` : refusal-4xx-at-complete
-- `S6/complete/field-only-lab:resp:links[]` : refusal-4xx-at-complete
-- `S6/complete/field-only-lab:resp:links[].type` : refusal-4xx-at-complete
-- `S6/complete/field-only-lab:resp:links[].url` : refusal-4xx-at-complete
+- `S6/complete/field-only-lab:resp:links` : optional-links-and-continue-url
+- `S6/complete/field-only-lab:resp:links[]` : optional-links-and-continue-url
+- `S6/complete/field-only-lab:resp:links[].type` : optional-links-and-continue-url
+- `S6/complete/field-only-lab:resp:links[].url` : optional-links-and-continue-url
 - `S6/complete/field-only-lab:resp:messages[].path` : refusal-4xx-at-complete
 - `S6/complete/field-only-lab:resp:status` : refusal-4xx-at-complete
 - `S6/complete/field-only-lab:resp:totals` : refusal-4xx-at-complete
@@ -270,9 +265,8 @@ Totals: 240 runs, 200 orders, 0 violations.
 - `S6/complete/field-only-lab:resp:ucp.capabilities` : refusal-4xx-at-complete
 - `S6/complete/field-only-lab:resp:ucp.capabilities.dev.ucp.shopping.checkout` : refusal-4xx-at-complete
 - `S6/complete/field-only-lab:resp:ucp.payment_handlers` : refusal-4xx-at-complete
-- `S6/complete/field-only-lab:resp:ucp.payment_handlers.dev.ucplab.mock_pay` : refusal-4xx-at-complete
-- `S6/complete/field-only-sample:resp:ucp.status` : refusal-4xx-at-complete
-- `S6/create/path:/ucp/v1/checkout-sessions|/checkout-sessions` : endpoint-at-origin
+- `S6/complete/field-only-lab:resp:ucp.payment_handlers.dev.ucplab.mock_pay` : payment-handler-listing
+- `S6/complete/field-only-sample:resp:ucp.status` : response-envelope-status
 - `S6/create/field-only-lab:resp:continue_url` : optional-links-and-continue-url
 - `S6/create/field-only-sample:resp:discounts` : sample-discount-capability
 - `S6/create/field-only-lab:resp:links[]` : optional-links-and-continue-url
@@ -306,12 +300,11 @@ Totals: 240 runs, 200 orders, 0 violations.
 - `S6/update/step-only-sample:` : fulfillment-mandatory
 - `S6/update#2/step-only-sample:` : fulfillment-mandatory
 - `S6/update#3/step-only-sample:` : fulfillment-mandatory
-- `S7/complete/status:200|402` : refusal-4xx-at-complete
-- `S7/complete/path:/ucp/v1/checkout-sessions/{id}/complete|/checkout-sessions/{id}/complete` : refusal-4xx-at-complete
-- `S7/complete/error-code:payment_declined|INSUFFICIENT_FUNDS` : error-codes-upper-case
+- `S7/complete/status:200~402` : refusal-4xx-at-complete
+- `S7/complete/error-code:payment_declined~INSUFFICIENT_FUNDS` : decline-code-names
 - `S7/complete/field-only-lab:resp:buyer` : refusal-4xx-at-complete
 - `S7/complete/field-only-lab:resp:buyer.email` : refusal-4xx-at-complete
-- `S7/complete/field-only-lab:resp:continue_url` : refusal-4xx-at-complete
+- `S7/complete/field-only-lab:resp:continue_url` : optional-links-and-continue-url
 - `S7/complete/field-only-lab:resp:currency` : refusal-4xx-at-complete
 - `S7/complete/field-only-lab:resp:id` : refusal-4xx-at-complete
 - `S7/complete/field-only-lab:resp:line_items` : refusal-4xx-at-complete
@@ -326,10 +319,10 @@ Totals: 240 runs, 200 orders, 0 violations.
 - `S7/complete/field-only-lab:resp:line_items[].totals[]` : refusal-4xx-at-complete
 - `S7/complete/field-only-lab:resp:line_items[].totals[].amount` : refusal-4xx-at-complete
 - `S7/complete/field-only-lab:resp:line_items[].totals[].type` : refusal-4xx-at-complete
-- `S7/complete/field-only-lab:resp:links` : refusal-4xx-at-complete
-- `S7/complete/field-only-lab:resp:links[]` : refusal-4xx-at-complete
-- `S7/complete/field-only-lab:resp:links[].type` : refusal-4xx-at-complete
-- `S7/complete/field-only-lab:resp:links[].url` : refusal-4xx-at-complete
+- `S7/complete/field-only-lab:resp:links` : optional-links-and-continue-url
+- `S7/complete/field-only-lab:resp:links[]` : optional-links-and-continue-url
+- `S7/complete/field-only-lab:resp:links[].type` : optional-links-and-continue-url
+- `S7/complete/field-only-lab:resp:links[].url` : optional-links-and-continue-url
 - `S7/complete/field-only-lab:resp:messages[].path` : refusal-4xx-at-complete
 - `S7/complete/field-only-lab:resp:status` : refusal-4xx-at-complete
 - `S7/complete/field-only-lab:resp:totals` : refusal-4xx-at-complete
@@ -339,9 +332,8 @@ Totals: 240 runs, 200 orders, 0 violations.
 - `S7/complete/field-only-lab:resp:ucp.capabilities` : refusal-4xx-at-complete
 - `S7/complete/field-only-lab:resp:ucp.capabilities.dev.ucp.shopping.checkout` : refusal-4xx-at-complete
 - `S7/complete/field-only-lab:resp:ucp.payment_handlers` : refusal-4xx-at-complete
-- `S7/complete/field-only-lab:resp:ucp.payment_handlers.dev.ucplab.mock_pay` : refusal-4xx-at-complete
-- `S7/complete/field-only-sample:resp:ucp.status` : refusal-4xx-at-complete
-- `S7/create/path:/ucp/v1/checkout-sessions|/checkout-sessions` : endpoint-at-origin
+- `S7/complete/field-only-lab:resp:ucp.payment_handlers.dev.ucplab.mock_pay` : payment-handler-listing
+- `S7/complete/field-only-sample:resp:ucp.status` : response-envelope-status
 - `S7/create/field-only-lab:resp:continue_url` : optional-links-and-continue-url
 - `S7/create/field-only-sample:resp:discounts` : sample-discount-capability
 - `S7/create/field-only-lab:resp:links[]` : optional-links-and-continue-url

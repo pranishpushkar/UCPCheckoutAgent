@@ -51,7 +51,7 @@ class DifferenceReportTest {
 
         assertThat(diffs).singleElement().satisfies(d -> {
             assertThat(d.kind()).isEqualTo("status");
-            assertThat(d.detail()).isEqualTo("200|409");
+            assertThat(d.detail()).isEqualTo("200~409");
             assertThat(d.id()).isEqualTo("S6/complete/status").doesNotContain("409");
         });
     }
@@ -64,7 +64,10 @@ class DifferenceReportTest {
                 new WireStep("update", "/p", 200, Map.of(), Map.of(), ""));
 
         assertThat(WireDiff.diff("S6", lab, sample)).extracting(WireDiff.Diff::kind)
-                .containsExactlyInAnyOrder("error-code", "type", "step-only-sample");
+                .containsExactlyInAnyOrder("error-code-case", "type", "step-only-sample");
+        var other = List.of(new WireStep("complete", "/p", 200, Map.of(), Map.of(), "item_unavailable"));
+        assertThat(WireDiff.diff("S6", List.of(new WireStep("complete", "/p", 200, Map.of(), Map.of(), "out_of_stock")), other))
+                .extracting(WireDiff.Diff::kind).containsExactly("error-code");
     }
 
     // Covers: R1, 13.5 (an entry that matches no wire difference fails, unless it is evidence: probe or history; an ours

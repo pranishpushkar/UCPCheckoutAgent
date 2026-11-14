@@ -52,7 +52,16 @@ public final class RecordingTransport implements HttpTransport {
         }
     }
 
+    /**
+     * The path relative to the endpoint the profile declared: everything before {@code /checkout-sessions} is the endpoint's
+     * own prefix ({@code /ucp/v1} at the lab, nothing at the sample), so the two merchants' paths compare equal. A path
+     * without it (discovery) is kept.
+     */
     static String normalisePath(String path) {
+        int at = path.indexOf("/checkout-sessions");
+        if (at > 0) {
+            path = path.substring(at);
+        }
         StringBuilder out = new StringBuilder();
         for (String seg : path.split("/")) {
             if (seg.isEmpty()) {

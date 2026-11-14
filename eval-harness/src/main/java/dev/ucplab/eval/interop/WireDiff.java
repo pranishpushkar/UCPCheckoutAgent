@@ -11,7 +11,7 @@ import java.util.TreeSet;
  * Compares two recordings of the same row, step by step (H1 C9b). A difference is a step on one side only, a different HTTP
  * status, a different endpoint path, a JSON field path on one side only or of another type (request and response), or a
  * different error code. Its {@code id} is computed from the row, step, kind and field path, never from a value; its
- * {@code matchText} is what a {@code match} pattern of differences.md is tested against.
+ * {@code matchText} is what (a pair of values is written {@code lab~sample}, because a table cell cannot hold a pipe) a {@code match} pattern of differences.md is tested against.
  */
 public final class WireDiff {
 
@@ -36,13 +36,15 @@ public final class WireDiff {
                 continue;
             }
             if (l.status() != s.status()) {
-                out.add(make(row, step, "status", l.status() + "|" + s.status()));
+                out.add(make(row, step, "status", l.status() + "~" + s.status()));
             }
             if (!l.path().equals(s.path())) {
-                out.add(make(row, step, "path", l.path() + "|" + s.path()));
+                out.add(make(row, step, "path", l.path() + "~" + s.path()));
             }
             if (!l.errorCode().equals(s.errorCode())) {
-                out.add(make(row, step, "error-code", l.errorCode() + "|" + s.errorCode()));
+                // codes equal ignoring case are a case difference only; any other pair really differs
+                out.add(make(row, step, l.errorCode().equalsIgnoreCase(s.errorCode()) ? "error-code-case" : "error-code",
+                        l.errorCode() + "~" + s.errorCode()));
             }
             fieldDiffs(out, row, step, "req:", l.requestFields(), s.requestFields());
             fieldDiffs(out, row, step, "resp:", l.responseFields(), s.responseFields());
