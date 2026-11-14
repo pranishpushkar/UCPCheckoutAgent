@@ -134,7 +134,8 @@ class RecoveryLoopCloseTest {
         boolean finished = loop.close(Duration.ofMillis(50));
 
         assertThat(finished).isFalse();
-        assertThat(interrupted.await(10, TimeUnit.SECONDS)).as("the running pass was interrupted").isTrue();
+        // An interrupt arrives within milliseconds; waiting longer only slows the failure when it never comes (H3 P6).
+        assertThat(interrupted.await(2, TimeUnit.SECONDS)).as("the running pass was interrupted").isTrue();
         assertThat(order).doesNotContain("pass finished");
     }
 

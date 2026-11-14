@@ -75,3 +75,55 @@ Format, one block per mutant. **An entry without an `approved:` line is only a p
 - description: changed conditional boundary (`>` becomes `>=`)
 - why it is equivalent: the two differ only when exactly four characters follow `\u` and the document then ends: the original reads the escape and refuses the missing closing quote ("unterminated string"), the mutation refuses the short escape ("short unicode escape"). Both are an IllegalArgumentException for a document that is malformed either way; only the text differs
 - the test that shows it: `JsonReaderMutationTest.brokenStringsAndEscapes_areRefused` (`"\u0041` and `"\u12`) passes with and without the mutation
+
+## Proposed in H3 P6 (agent-core: intent store, transitions, recovery), not yet approved
+
+### 13. dev.ucplab.core.intent.InMemoryIntentRepository.lambda$inState$11 EmptyObjectReturnValsMutator
+- description: replaced return value with "" (the id tie-break of the sort in `inState`, so intents created at one instant are not ordered by id)
+- why it is equivalent: `inState` has one consumer, `InMemoryRecoveryScan.approvalsDue`, which sorts what it gets by (expiry, id), a total order, before it limits and returns. The order `inState` returns is never observed
+- the test that shows it: `RecoveryScanContract` (approvals due, oldest expiry first, at most the limit) passes with and without the mutation
+
+### 14. dev.ucplab.core.intent.InMemoryIntentRepository.renewLease BooleanFalseReturnValsMutator
+- description: replaced boolean return with false (line `return false;` when the intent is missing or held by another owner)
+- why it is equivalent: the line already returns the constant false: the mutated return is the same value
+- the test that shows it: none possible: the bytecode result is identical
+
+### 15. dev.ucplab.core.intent.InMemoryIntentRepository.renewLease BooleanTrueReturnValsMutator
+- description: replaced boolean return with true (line `return true;` after the lease was extended)
+- why it is equivalent: the line already returns the constant true: the mutated return is the same value
+- the test that shows it: none possible: the bytecode result is identical
+
+### 16. dev.ucplab.core.recovery.RecoveryWorker.driveNow BooleanFalseReturnValsMutator (the `return false;` inside the refusal `if`)
+- description: replaced boolean return with false
+- why it is equivalent: the line already returns the constant false
+- the test that shows it: none possible: the bytecode result is identical
+
+### 17. dev.ucplab.core.recovery.RecoveryWorker.driveNow BooleanTrueReturnValsMutator (the `return true;` after the driver was started)
+- description: replaced boolean return with true
+- why it is equivalent: the line already returns the constant true
+- the test that shows it: none possible: the bytecode result is identical
+
+### 18. dev.ucplab.core.recovery.RecoveryWorker.driveNow BooleanFalseReturnValsMutator (the `return false;` in the `catch (RuntimeException)`)
+- description: replaced boolean return with false
+- why it is equivalent: the line already returns the constant false
+- the test that shows it: none possible: the bytecode result is identical
+
+### 19. dev.ucplab.core.recovery.RecoveryWorker.lambda$forgetDueUnclaimed$2 RemoveConditionalMutator_EQUAL_IF
+- description: removed conditional - replaced equality check with true (the `!claimed.contains(e.getKey())` operand of the removal test, so due entries are forgotten whether or not the claim returned them)
+- why it is equivalent: an entry that is due and that the claim returned is removed by `runOnce` itself, in the loop that starts the drivers, before the in-flight check and before any driver starts (`notBefore.remove(id, notYet)`). Forgetting it a few lines earlier leaves the same map. Checked by removing the operand outright: every `Recovery*` test, including the new ones, stays green
+- the test that shows it: `RecoveryWorkerMutationTest.aParkedIntent_isLeftAlone_untilItIsDue` and `RecoveryWorkerParkingTest` pass with and without the mutation (the other operand, `!now.isBefore(...)`, is killed by the first)
+
+### 20. dev.ucplab.core.recovery.RecoveryLoop.pass RemoveConditionalMutator_EQUAL_IF (the `closed.get()` of the first test)
+- description: removed conditional - replaced equality check with true (a closed loop does not return at the first check)
+- why it is equivalent: `pass` tests the closed flag twice: before it takes the permit and again after. A pass that gets past the first check on a closed loop returns at the second, still releasing the permit it took; no pass ever runs. The two checks only differ for a `close()` that lands between them, which one thread cannot arrange
+- the test that shows it: `RecoveryLoopMutationTest.aClosedLoop_schedulesNothing_andRunsNoPass` and `RecoveryLoopCloseTest.close_noPassStartsAfterwards` pass with and without the mutation
+
+### 21. dev.ucplab.core.recovery.RecoveryLoop.pass RemoveConditionalMutator_EQUAL_ELSE (the `closed.get()` of the second test)
+- description: removed conditional - replaced equality check with false (the re-check after the permit is taken never returns)
+- why it is equivalent: the first check, before the permit, already returns for a closed loop; the re-check only matters for a `close()` that lands between the two. A pass that started in that window would run once more; the loop is closed for every pass after it. No single-threaded test can place a `close()` inside two adjacent statements, and a stress test of it would not be deterministic
+- the test that shows it: the same tests: both pass with and without the mutation
+
+### 22. dev.ucplab.core.recovery.RecoveryLoop.pass VoidMethodCallMutator (the `passThread.set(null)` in `finally`)
+- description: removed call to java/util/concurrent/atomic/AtomicReference::set
+- why it is equivalent: `passThread` is read only by `close(Duration)`, and only after the permit could not be taken, that is while a pass is running, which has set its own thread. A stale thread left by a finished pass is overwritten by the next pass before it is read; if none is running, `close` takes the permit and returns before reading it
+- the test that shows it: `RecoveryLoopCloseTest` (a running pass is interrupted, an idle loop closes clean) passes with and without the mutation

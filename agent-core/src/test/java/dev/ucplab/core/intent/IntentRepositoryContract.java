@@ -785,4 +785,114 @@ public abstract class IntentRepositoryContract {
         assertThat(repo.claim(id, W2, LEASE)).hasValueSatisfying(i -> assertThat(i.leaseOwner()).contains(W2));
         assertThat(repo.claim(new IntentId("missing"), W1, LEASE)).isEmpty();
     }
+
+    // ---------------------------------------------------------------- found unchecked by the H3 P6 mutation pass
+
+    /** An intent in QUOTING that already has {@code session}, claimed by W1 and at version 1. */
+    private PurchaseIntent withSession(String id, String dedupeKey, String session) {
+        PurchaseIntent claimed = insertAndClaim(id, ALICE, dedupeKey, W1);
+        PurchaseIntent withSession = claimed.withSessionId(new SessionId(session));
+        repo.update(withSession, 0, W1);
+        return repo.findForSystem(claimed.id()).orElseThrow();
+    }
+
+    // Covers: I4, 7.2. Kills InMemoryIntentRepository.lambda$merge$14:386 (BooleanTrue, RemoveConditional_EQUAL_IF) and
+    // lambda$merge$15:388 (RemoveConditional_EQUAL_IF): only a COMPLETE attempt freezes the session. Before one exists the
+    // session may change (a re-quote that starts over), with a CREATE or UPDATE attempt on record or being recorded
+    @Test
+    void sessionMayChange_whileNoCompleteAttemptExists() {
+        PurchaseIntent stored = withSession("i1", "d1", "cs_1");
+        repo.recordAttempt(attempt("a1", stored), stored, 1, W1);
+        PurchaseIntent other = repo.findForSystem(stored.id()).orElseThrow().withSessionId(new SessionId("cs_2"));
+
+        repo.update(other, 2, W1);
+
+        assertThat(repo.findForSystem(stored.id()).orElseThrow().sessionId()).contains(new SessionId("cs_2"));
+        PurchaseIntent again = repo.findForSystem(stored.id()).orElseThrow().withSessionId(new SessionId("cs_3"));
+        repo.recordAttempt(attempt("a2", again), again, 3, W1);
+        assertThat(repo.findForSystem(stored.id()).orElseThrow().sessionId()).contains(new SessionId("cs_3"));
+    }
+
+    // Covers: I4, 7.2. Kills InMemoryIntentRepository.lambda$merge$15:388 RemoveConditional_EQUAL_IF (the complete attempt
+    // that freezes a session is the intent's own: another intent's complete attempt does not freeze this one)
+    @Test
+    void anotherIntentsCompleteAttempt_doesNotFreezeThisIntentsSession() {
+        PurchaseIntent first = withSession("i1", "d1", "cs_1");
+        repo.recordAttempt(completeAttempt("a1", first), first, 1, W1);
+        PurchaseIntent second = withSession("i2", "d2", "cs_9");
+        PurchaseIntent changed = repo.findForSystem(second.id()).orElseThrow().withSessionId(new SessionId("cs_10"));
+
+        repo.update(changed, 1, W1);
+
+        assertThat(repo.findForSystem(second.id()).orElseThrow().sessionId()).contains(new SessionId("cs_10"));
+        assertThat(repo.findForSystem(first.id()).orElseThrow().sessionId()).contains(new SessionId("cs_1"));
+    }
+
+    // Covers: I4, 7.2. Kills InMemoryIntentRepository.merge:385 RemoveConditional_EQUAL_IF (a session that is set for the
+    // first time, or written back unchanged, is not a change: it is allowed after a complete attempt, as the SQL adapter
+    // allows it)
+    @Test
+    void settingTheFirstSession_orWritingTheSameOne_isNotAChange_afterACompleteAttempt() {
+        PurchaseIntent claimed = insertAndClaim("i1", ALICE, "d1", W1);
+        repo.recordAttempt(completeAttempt("a1", claimed), claimed, 0, W1);
+        PurchaseIntent stored = repo.findForSystem(claimed.id()).orElseThrow();
+
+        repo.update(stored.withSessionId(new SessionId("cs_1")), 1, W1);
+        PurchaseIntent withSession = repo.findForSystem(claimed.id()).orElseThrow();
+        repo.update(withSession.withState(IntentState.RECONCILING, clock.instant()), 2, W1);
+
+        PurchaseIntent last = repo.findForSystem(claimed.id()).orElseThrow();
+        assertThat(last.sessionId()).contains(new SessionId("cs_1"));
+        assertThat(last.state()).isEqualTo(IntentState.RECONCILING);
+    }
+
+    // Covers: 7.3 step 5. Kills InMemoryIntentRepository.resolveAttempt:182 RemoveConditional_EQUAL_ELSE and :185
+    // RemoveConditional_EQUAL_ELSE: a fenced resolve of an attempt that does not exist is "not found", and of one that
+    // belongs to another intent is refused; both leave the intent's version and every attempt as they were
+    @Test
+    void resolveAttemptWithIntent_refusesAnUnknownOrForeignAttempt_andWritesNothing() {
+        PurchaseIntent mine = insertAndClaim("i1", ALICE, "d1", W1);
+        PurchaseIntent theirs = insertAndClaim("i2", ALICE, "d2", W1);
+        repo.recordAttempt(attempt("a-theirs", theirs), theirs, 0, W1);
+        PurchaseIntent moved = mine.withState(IntentState.AWAITING_APPROVAL, clock.instant());
+
+        assertThatThrownBy(() -> repo.resolveAttempt(new AttemptId("nope"), AttemptStatus.RESPONDED, Optional.empty(),
+                Optional.empty(), moved, 0, W1)).isInstanceOf(IntentNotFoundException.class);
+        assertThatThrownBy(() -> repo.resolveAttempt(new AttemptId("a-theirs"), AttemptStatus.RESPONDED, Optional.empty(),
+                Optional.empty(), moved, 0, W1)).isInstanceOf(IllegalArgumentException.class);
+
+        assertThat(repo.findForSystem(mine.id()).orElseThrow().version()).isZero();
+        assertThat(repo.findForSystem(mine.id()).orElseThrow().state()).isEqualTo(IntentState.QUOTING);
+        assertThat(repo.attempts(theirs.id())).singleElement()
+                .satisfies(a -> assertThat(a.status()).isEqualTo(AttemptStatus.SENT));
+    }
+
+    // Covers: 7.6. Kills InMemoryIntentRepository.lambda$claimRecoverable$9:270 EmptyObjectReturnVals: recoverable intents
+    // are claimed oldest first, and intents created at the same instant in id order, so a pass with a limit is the same
+    // pass every time
+    @Test
+    void claimRecoverable_claimsOldestFirst_thenByIdOnATie() {
+        repo.insert(proposed("b", ALICE, "d-b").withState(IntentState.QUOTING, clock.instant()));
+        repo.insert(proposed("a", ALICE, "d-a").withState(IntentState.QUOTING, clock.instant()));
+        clock.advance(Duration.ofSeconds(1));
+        PurchaseIntent older = proposed("z", ALICE, "d-z").withState(IntentState.QUOTING, clock.instant());
+        // created later in time but inserted last; the oldest are a and b, then z
+        repo.insert(older);
+
+        List<PurchaseIntent> claimed = repo.claimRecoverable(W1, LEASE, 2);
+
+        assertThat(claimed).extracting(i -> i.id().value()).containsExactly("a", "b");
+    }
+
+    // Covers: 7.7. Kills InMemoryIntentRepository.insert:87 RemoveConditional_EQUAL_IF: a terminal intent never conflicts
+    // on the dedupe key, even when an active intent has the same key (a finished intent is history, not a duplicate)
+    @Test
+    void insert_ofATerminalIntent_neverConflictsOnTheDedupeKey() {
+        repo.insert(proposed("i1", ALICE, "same-key"));
+
+        repo.insert(inState(proposed("i2", ALICE, "same-key"), IntentState.COMPLETED));
+
+        assertThat(repo.findActiveByDedupeKey("same-key")).hasValueSatisfying(i -> assertThat(i.id().value()).isEqualTo("i1"));
+        assertThat(repo.findForSystem(new IntentId("i2"))).isPresent();
+    }
 }
