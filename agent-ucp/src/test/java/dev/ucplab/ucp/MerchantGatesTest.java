@@ -462,4 +462,30 @@ class MerchantGatesTest {
                 new SequentialIdGenerator("r"), Set.of("api.shop.example"))).isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("host:port");
     }
+
+    // Covers: 19, H1 C3 (the handler a merchant's profile must list is the one named for that merchant: a gateway for a
+    // merchant paid through mock_payment_handler accepts a profile that lists it, and fails handler_missing, with no
+    // create sent, on the lab profile that lists only mock_pay_1; the lab default still wants mock_pay_1)
+    @Test
+    void theRequiredPaymentHandler_isPerMerchant() {
+        String sample = fixture("discovery").replace("mock_pay_1", "mock_payment_handler");
+        Transport sampleProfile = new Transport(call -> call.uri().getPath().equals("/.well-known/ucp")
+                ? reply(200, sample) : reply(201, fixture("create_incomplete_no_buyer")));
+        Transport labProfile = new Transport(call -> reply(200, fixture("discovery")));
+        MerchantEntry shop = new MerchantEntry(A, URI.create("http://127.0.0.1:8081"), "A", MerchantStatus.ACTIVE);
+        UcpHttpGateway forSample = new UcpHttpGateway(shop, NO_RETRY, sampleProfile, gates, clock, d -> { },
+                new SplittableRandom(1), new SequentialIdGenerator("r"), Set.of(), "mock_payment_handler");
+        UcpHttpGateway forSampleAtLab = new UcpHttpGateway(shop, NO_RETRY, labProfile, gates, clock, d -> { },
+                new SplittableRandom(1), new SequentialIdGenerator("r"), Set.of(), "mock_payment_handler");
+        UcpHttpGateway labDefaultAtSample = new UcpHttpGateway(shop, NO_RETRY, sampleProfile, gates, clock, d -> { },
+                new SplittableRandom(1), new SequentialIdGenerator("r"));
+
+        assertThat(forSample.create(request(), KEY)).isInstanceOf(CallOutcome.Ok.class);
+        assertThatThrownBy(() -> forSampleAtLab.discover(A)).isInstanceOf(DiscoveryFailedException.class)
+                .hasMessageContaining(UcpHttpGateway.HANDLER_MISSING);
+        assertThat(forSampleAtLab.create(request(), KEY)).isInstanceOf(CallOutcome.NotSent.class);
+        assertThat(labProfile.calls).filteredOn(c -> c.method().equals("POST")).isEmpty();
+        assertThatThrownBy(() -> labDefaultAtSample.discover(A)).isInstanceOf(DiscoveryFailedException.class)
+                .hasMessageContaining(UcpHttpGateway.HANDLER_MISSING);
+    }
 }

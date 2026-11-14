@@ -47,6 +47,7 @@ import dev.ucplab.core.merchant.MerchantGateway;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantMessage;
 import dev.ucplab.core.merchant.NoGatewayException;
+import dev.ucplab.core.merchant.NoInstrumentException;
 import dev.ucplab.core.merchant.MutatingOp;
 import dev.ucplab.core.merchant.PaymentInstrument;
 import dev.ucplab.core.merchant.QuoteShape;
@@ -145,7 +146,7 @@ public final class DefaultOrchestrator implements Orchestrator {
     private final Function<MerchantId, MerchantGateway> gateways;
     private final PolicyEngine policy;
     private final RequotePolicy requotePolicy;
-    private final PaymentInstrument payment;
+    private final Function<MerchantId, PaymentInstrument> instruments;
     private final OrchestratorConfig config;
     private final Clock clock;
     private final IdGenerator ids;
@@ -189,13 +190,34 @@ public final class DefaultOrchestrator implements Orchestrator {
             Function<MerchantId, MerchantGateway> gateways, PolicyEngine policy, RequotePolicy requotePolicy,
             PaymentInstrument payment, OrchestratorConfig config, Clock clock, IdGenerator ids, String workerId,
             RandomGenerator jitter) {
+        this(intents, approvals, approvalService, gateways, policy, requotePolicy, onlyInstrument(payment), config, clock,
+                ids, workerId, jitter);
+    }
+
+    /** One instrument for every merchant: a deployment with a single merchant, or merchants that share a handler. */
+    private static Function<MerchantId, PaymentInstrument> onlyInstrument(PaymentInstrument payment) {
+        Objects.requireNonNull(payment, "payment");
+        return id -> payment;
+    }
+
+    /**
+     * @param instruments the instrument of an intent's merchant (19: the payment handler and credential shape belong to
+     *     the merchant), for example {@link dev.ucplab.core.merchant.MerchantInstruments#of}. A merchant with none throws
+     *     {@link NoInstrumentException} before anything is written or sent. It is called once per new complete (7.4); a
+     *     resend uses the stored frozen body (I7).
+     */
+    public DefaultOrchestrator(
+            IntentRepository intents, ApprovalRepository approvals, ApprovalService approvalService,
+            Function<MerchantId, MerchantGateway> gateways, PolicyEngine policy, RequotePolicy requotePolicy,
+            Function<MerchantId, PaymentInstrument> instruments, OrchestratorConfig config, Clock clock,
+            IdGenerator ids, String workerId, RandomGenerator jitter) {
         this.intents = Objects.requireNonNull(intents, "intents");
         this.approvals = Objects.requireNonNull(approvals, "approvals");
         this.approvalService = Objects.requireNonNull(approvalService, "approvalService");
         this.gateways = Objects.requireNonNull(gateways, "gateways");
         this.policy = Objects.requireNonNull(policy, "policy");
         this.requotePolicy = Objects.requireNonNull(requotePolicy, "requotePolicy");
-        this.payment = Objects.requireNonNull(payment, "payment");
+        this.instruments = Objects.requireNonNull(instruments, "instruments");
         this.config = Objects.requireNonNull(config, "config");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.ids = Objects.requireNonNull(ids, "ids");
@@ -371,6 +393,22 @@ public final class DefaultOrchestrator implements Orchestrator {
             throw new NoGatewayException(intent.merchantId());
         }
         return gateway;
+    }
+
+    /** The instrument of the intent's merchant (19), or {@link NoInstrumentException}; never another merchant's. */
+    private PaymentInstrument instrument(PurchaseIntent intent) {
+        PaymentInstrument instrument;
+        try {
+            instrument = instruments.apply(intent.merchantId());
+        } catch (NoInstrumentException e) {
+            LOG.log(System.Logger.Level.ERROR, "no payment instrument for merchant {0}", intent.merchantId());
+            throw e;
+        }
+        if (instrument == null) {
+            LOG.log(System.Logger.Level.ERROR, "no payment instrument for merchant {0}", intent.merchantId());
+            throw new NoInstrumentException(intent.merchantId());
+        }
+        return instrument;
     }
 
     // ---------------------------------------------------------------- QUOTING
@@ -630,7 +668,7 @@ public final class DefaultOrchestrator implements Orchestrator {
         }
 
         MerchantGateway merchant = gateway(intent);
-        FrozenBody body = CheckoutWire.completeBody(payment);
+        FrozenBody body = CheckoutWire.completeBody(instrument(intent));
         IdempotencyKey key = IdempotencyKey.derive(intent.id(), MutatingOp.COMPLETE, revision);
         MerchantAttempt attempt = newAttempt(intent.id(), AttemptOp.COMPLETE, revision, key, Optional.of(body));
         Move m = move(intent, TransitionEvent.SEND_COMPLETE, TransitionGuard.ATTEMPT_PERSISTED);

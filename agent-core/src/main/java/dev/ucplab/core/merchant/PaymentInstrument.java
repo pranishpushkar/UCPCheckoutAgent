@@ -21,6 +21,14 @@ public record PaymentInstrument(String id, String handlerId, String type, String
         return new PaymentInstrument(id, "mock_pay_1", "mock_card", "MOCK", token);
     }
 
+    /**
+     * A card token for the official Python sample merchant's {@code mock_payment_handler}: type {@code card}, credential
+     * {@code {"type": "token", "token": ...}} (docs/interop/fixtures/08-happy-complete.json).
+     */
+    public static PaymentInstrument sampleCard(String id, String token) {
+        return new PaymentInstrument(id, "mock_payment_handler", "card", "token", token);
+    }
+
     @Override
     public String toString() {
         return "PaymentInstrument[id=" + id + ", handlerId=" + handlerId + ", type=" + type + ", token=redacted]";

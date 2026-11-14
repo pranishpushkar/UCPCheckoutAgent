@@ -53,7 +53,10 @@ public final class UcpHttpGateway implements MerchantGateway {
     public static final String SUPPORTED_VERSION = "2026-08-25";
     /** The capability a merchant must offer (19). */
     public static final String CHECKOUT_CAPABILITY = "dev.ucp.shopping.checkout";
-    /** The payment handler the agent's mock instrument uses (Appendix A): a merchant that lacks it cannot be paid (19). */
+    /**
+     * The lab merchant's payment handler (Appendix A), kept as the default of the constructors that name no handler. A
+     * merchant that lacks the handler the agent's instrument uses cannot be paid (19); another merchant names its own.
+     */
     public static final String PAYMENT_HANDLER = "mock_pay_1";
     /** Discovery failure reasons, fixed texts (8.5). */
     public static final String ENDPOINT_NOT_ALLOWED = "endpoint_not_allowed";
@@ -66,6 +69,7 @@ public final class UcpHttpGateway implements MerchantGateway {
     private final URI base;
     private final String hostPort;
     private final Set<String> allowedHostPorts;
+    private final String paymentHandlerId;
     private final Clock clock;
     private final RetryExecutor executor;
     private final AtomicReference<Cached> cache = new AtomicReference<>();
@@ -84,6 +88,18 @@ public final class UcpHttpGateway implements MerchantGateway {
     public UcpHttpGateway(
             MerchantEntry merchant, UcpConfig config, HttpTransport transport, CircuitBreakers breakers, Clock clock,
             Sleeper sleeper, RandomGenerator random, IdGenerator ids, Set<String> endpointHosts) {
+        this(merchant, config, transport, breakers, clock, sleeper, random, ids, endpointHosts, PAYMENT_HANDLER);
+    }
+
+    /**
+     * @param paymentHandlerId the id the merchant's profile must list under {@code payment_handlers} (19): the handler of
+     *     the instrument the agent pays this merchant with; a profile without it fails discovery as {@code handler_missing}
+     */
+    public UcpHttpGateway(
+            MerchantEntry merchant, UcpConfig config, HttpTransport transport, CircuitBreakers breakers, Clock clock,
+            Sleeper sleeper, RandomGenerator random, IdGenerator ids, Set<String> endpointHosts,
+            String paymentHandlerId) {
+        this.paymentHandlerId = Objects.requireNonNull(paymentHandlerId, "paymentHandlerId");
         this.merchant = Objects.requireNonNull(merchant, "merchant");
         Objects.requireNonNull(config, "config");
         this.clock = Objects.requireNonNull(clock, "clock");
@@ -157,7 +173,7 @@ public final class UcpHttpGateway implements MerchantGateway {
                 || !base.getScheme().equalsIgnoreCase(p.checkoutEndpoint().getScheme())) {
             return Optional.of(ENDPOINT_NOT_ALLOWED);
         }
-        if (!p.paymentHandlers().contains(PAYMENT_HANDLER)) {
+        if (!p.paymentHandlers().contains(paymentHandlerId)) {
             return Optional.of(HANDLER_MISSING);
         }
         return Optional.empty();

@@ -98,4 +98,15 @@ class CheckoutWireTest {
         assertThat(CheckoutWire.quoteShape("not json")).isEmpty();
         assertThat(CheckoutWire.quoteShape("{\"lines\":[{\"quantity\":1}]}")).isEmpty();
     }
+
+    // Covers: 19, 8.4, H1 C3 (the sample merchant's card-token instrument has the shape the sample accepted in
+    // docs/interop/fixtures/08-happy-complete.json: handler mock_payment_handler, type card, credential type token)
+    @Test
+    void completeBody_ofTheSampleCard_hasTheShapeOfFixture08() {
+        FrozenBody body = CheckoutWire.completeBody(PaymentInstrument.sampleCard("instr_spike", "t0k"));
+
+        assertThat(body.json()).isEqualTo("{\"payment\":{\"instruments\":[{\"credential\":{\"token\":\"t0k\","
+                + "\"type\":\"token\"},\"handler_id\":\"mock_payment_handler\",\"id\":\"instr_spike\",\"type\":\"card\"}]}}");
+        assertThat(CheckoutWire.paymentToken(body)).contains("t0k");
+    }
 }
