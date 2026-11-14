@@ -3,6 +3,7 @@ package dev.ucplab.ucp;
 import dev.ucplab.core.id.IdGenerator;
 import dev.ucplab.core.intent.AttemptOp;
 import dev.ucplab.core.merchant.CallOutcome;
+import dev.ucplab.core.merchant.CheckoutStatus;
 import dev.ucplab.core.merchant.CheckoutView;
 import dev.ucplab.core.merchant.CheckoutWire;
 import dev.ucplab.core.merchant.CreateCheckout;
@@ -11,6 +12,7 @@ import dev.ucplab.core.merchant.FrozenBody;
 import dev.ucplab.core.merchant.IdempotencyKey;
 import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantGateway;
+import dev.ucplab.core.merchant.MerchantMessage;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantProfile;
 import dev.ucplab.core.merchant.SessionId;
@@ -20,6 +22,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Objects;
 import java.util.LinkedHashSet;
 import java.util.Optional;
@@ -51,6 +54,11 @@ public final class UcpHttpGateway implements MerchantGateway {
 
     /** The only UCP version this client speaks (R1, 26.2). */
     public static final String SUPPORTED_VERSION = "2026-08-25";
+    /**
+     * The versions the agent speaks (26.2). A version is here only because it has contract tests that pass: 2026-08-25
+     * against the lab merchant, 2026-04-08 against the wire records of the official sample (docs/interop/fixtures).
+     */
+    public static final Set<String> SUPPORTED_VERSIONS = Set.of("2026-08-25", "2026-04-08");
     /** The capability a merchant must offer (19). */
     public static final String CHECKOUT_CAPABILITY = "dev.ucp.shopping.checkout";
     /**
@@ -61,15 +69,18 @@ public final class UcpHttpGateway implements MerchantGateway {
     /** Discovery failure reasons, fixed texts (8.5). */
     public static final String ENDPOINT_NOT_ALLOWED = "endpoint_not_allowed";
     public static final String HANDLER_MISSING = "handler_missing";
+    public static final String INCOMPATIBLE_VERSION = "incompatible_version";
     private static final Duration PROFILE_TTL = Duration.ofMinutes(5);
 
-    private record Cached(MerchantProfile profile, Instant fetchedAt) {}
+    /** A checked profile, when it was fetched, and the UCP version negotiated with it (26.2). */
+    private record Cached(MerchantProfile profile, Instant fetchedAt, String version) {}
 
     private final MerchantEntry merchant;
     private final URI base;
     private final String hostPort;
     private final Set<String> allowedHostPorts;
     private final String paymentHandlerId;
+    private final Set<String> ucpVersions;
     private final Clock clock;
     private final RetryExecutor executor;
     private final AtomicReference<Cached> cache = new AtomicReference<>();
@@ -99,7 +110,31 @@ public final class UcpHttpGateway implements MerchantGateway {
             MerchantEntry merchant, UcpConfig config, HttpTransport transport, CircuitBreakers breakers, Clock clock,
             Sleeper sleeper, RandomGenerator random, IdGenerator ids, Set<String> endpointHosts,
             String paymentHandlerId) {
+        this(merchant, config, transport, breakers, clock, sleeper, random, ids, endpointHosts, paymentHandlerId,
+                Set.of("2026-08-25"));
+    }
+
+    /**
+     * @param ucpVersions the versions the operator pins for this merchant (26.2, {@code ucp_versions}); each must be one
+     *     the agent supports ({@link #SUPPORTED_VERSIONS}), or construction fails. Discovery picks the highest that the
+     *     profile declares, and every later request says it in {@code UCP-Agent}.
+     */
+    public UcpHttpGateway(
+            MerchantEntry merchant, UcpConfig config, HttpTransport transport, CircuitBreakers breakers, Clock clock,
+            Sleeper sleeper, RandomGenerator random, IdGenerator ids, Set<String> endpointHosts,
+            String paymentHandlerId, Set<String> ucpVersions) {
         this.paymentHandlerId = Objects.requireNonNull(paymentHandlerId, "paymentHandlerId");
+        Set<String> pinned = Set.copyOf(Objects.requireNonNull(ucpVersions, "ucpVersions"));
+        if (pinned.isEmpty()) {
+            throw new IllegalArgumentException("a merchant is pinned to at least one UCP version");
+        }
+        for (String v : pinned) {
+            if (!SUPPORTED_VERSIONS.contains(v)) {
+                throw new IllegalArgumentException("unsupported UCP version " + v + " (the agent speaks "
+                        + new java.util.TreeSet<>(SUPPORTED_VERSIONS) + ")");
+            }
+        }
+        this.ucpVersions = pinned;
         this.merchant = Objects.requireNonNull(merchant, "merchant");
         Objects.requireNonNull(config, "config");
         this.clock = Objects.requireNonNull(clock, "clock");
@@ -150,9 +185,10 @@ public final class UcpHttpGateway implements MerchantGateway {
             case RetryExecutor.Fetched.Body b -> {
                 try {
                     MerchantProfile profile = ProfileParser.parse(merchant.id(), b.reply().body());
-                    Optional<String> problem = incompatible(profile);
+                    Optional<String> version = negotiate(profile);
+                    Optional<String> problem = version.isEmpty() ? Optional.of(INCOMPATIBLE_VERSION) : incompatible(profile);
                     if (problem.isEmpty()) {
-                        cache.set(new Cached(profile, clock.instant()));
+                        cache.set(new Cached(profile, clock.instant(), version.get()));
                     }
                     yield problem;
                 } catch (IllegalArgumentException e) {
@@ -162,10 +198,15 @@ public final class UcpHttpGateway implements MerchantGateway {
         };
     }
 
+    /**
+     * The version to speak (26.2): the highest that the pin, the agent's set and the profile all name. The profile
+     * declares one version, so this is that version if the other two accept it, and never one newer than the profile's.
+     */
+    private Optional<String> negotiate(MerchantProfile p) {
+        return Optional.of(p.ucpVersion()).filter(v -> ucpVersions.contains(v) && SUPPORTED_VERSIONS.contains(v));
+    }
+
     private Optional<String> incompatible(MerchantProfile p) {
-        if (!SUPPORTED_VERSION.equals(p.ucpVersion())) {
-            return Optional.of("incompatible UCP version");
-        }
         if (!p.capabilities().contains(CHECKOUT_CAPABILITY)) {
             return Optional.of("checkout capability missing");
         }
@@ -180,10 +221,10 @@ public final class UcpHttpGateway implements MerchantGateway {
     }
 
     /** The profile for a call: fresh for a create, any cached one otherwise, fetched if there is none. */
-    private Optional<MerchantProfile> profileFor(boolean newIntent, String[] why) {
+    private Optional<Cached> profileFor(boolean newIntent, String[] why) {
         Cached cached = cache.get();
         if (cached != null && (!newIntent || fresh(cached))) {
-            return Optional.of(cached.profile());
+            return Optional.of(cached);
         }
         Optional<String> failure = refresh(!newIntent);
         Cached now = cache.get();
@@ -191,7 +232,7 @@ public final class UcpHttpGateway implements MerchantGateway {
             why[0] = failure.orElse("no profile");
             return Optional.empty();
         }
-        return Optional.of(now.profile());
+        return Optional.of(now);
     }
 
     // ---------------------------------------------------------------- the six calls
@@ -243,15 +284,16 @@ public final class UcpHttpGateway implements MerchantGateway {
             Optional<FrozenBody> body, boolean newIntent, boolean bypassGate, String suffix) {
         Redactor redactor = new Redactor(body.flatMap(CheckoutWire::paymentToken).stream().toList());
         String[] why = new String[1];
-        Optional<MerchantProfile> profile = profileFor(newIntent, why);
+        Optional<Cached> profile = profileFor(newIntent, why);
         if (profile.isEmpty()) {
             // Nothing was sent to the call's own endpoint, so NotSent is true; a create is never sent without it (K).
             return new CallOutcome.NotSent<>(redactor.scrub("merchant profile unavailable: " + why[0]));
         }
-        URI uri = URI.create(profile.get().checkoutEndpoint() + path
+        URI uri = URI.create(profile.get().profile().checkoutEndpoint() + path
                 + session.map(s -> segment(s.value())).orElse("") + suffix);
         CallOutcome<CheckoutView> outcome = redactor.scrub(executor.execute(
-                new ApiCall(op, method, uri, key, body, bypassGate)));
+                new ApiCall(op, method, uri, key, body, bypassGate, Optional.of(profile.get().version()))));
+        outcome = refusalAsAnswer(op, session, outcome);
         if (newIntent && outcome instanceof CallOutcome.ProtocolError<CheckoutView> e && e.httpStatus() >= 400
                 && e.httpStatus() < 500 && e.httpStatus() != 429) {
             // Section 20: a 4xx of a create may mean the profile changed; the next create fetches a fresh one. A 429
@@ -259,6 +301,35 @@ public final class UcpHttpGateway implements MerchantGateway {
             cache.set(null);
         }
         return session.isPresent() ? checkSession(op, session.get(), outcome) : outcome;
+    }
+
+    /**
+     * A payment or stock refusal of {@code complete} that the sample merchant sends as a 4xx (402 INSUFFICIENT_FUNDS,
+     * 409 OUT_OF_STOCK, in a UCP error envelope) is the same answer our lab gives with a 200: the merchant did not
+     * charge. It is reported the way the lab's is, as {@code Ok} with the session still {@code ready_for_complete}
+     * (what the merchant's own GET shows after a decline, fixture 32) and one error message with the lab's code, so the
+     * orchestrator ends FAILED_NOT_CHARGED through the rows it already has (7.2). The view has no lines or totals: the
+     * refusal did not carry them. Any other 4xx of complete stays a ProtocolError, which reconciles.
+     */
+    private static CallOutcome<CheckoutView> refusalAsAnswer(
+            AttemptOp op, Optional<SessionId> session, CallOutcome<CheckoutView> outcome) {
+        if (op != AttemptOp.COMPLETE || session.isEmpty()
+                || !(outcome instanceof CallOutcome.ProtocolError<CheckoutView> e)
+                || (e.httpStatus() != 402 && e.httpStatus() != 409)) {
+            return outcome;
+        }
+        String labCode = switch (e.code()) {
+            case "out_of_stock" -> "out_of_stock";
+            case "insufficient_funds", "payment_failed" -> "payment_declined";
+            default -> null;
+        };
+        if (labCode == null) {
+            return outcome;
+        }
+        MerchantMessage message = new MerchantMessage("error", labCode, Optional.empty(), e.content(), Optional.empty());
+        CheckoutView view = new CheckoutView(session.get(), CheckoutStatus.READY_FOR_COMPLETE, "", List.of(), 0, 0, 0,
+                Optional.empty(), Optional.empty(), List.of(message));
+        return new CallOutcome.Ok<>(e.httpStatus(), view, List.of(message));
     }
 
     /** A reply about another session than the one asked for is not trusted (I4). */

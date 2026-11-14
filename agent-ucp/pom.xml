@@ -31,4 +31,17 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <build>
+        <testResources>
+            <testResource>
+                <directory>src/test/resources</directory>
+            </testResource>
+            <!-- H1: the wire records of the official sample merchant (docs/interop/fixtures), read by the contract tests only. -->
+            <testResource>
+                <directory>${project.basedir}/../docs/interop/fixtures</directory>
+                <targetPath>interop</targetPath>
+            </testResource>
+        </testResources>
+    </build>
 </project>

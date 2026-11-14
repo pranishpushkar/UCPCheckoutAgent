@@ -93,11 +93,31 @@ public final class CheckoutParser {
         Objects.requireNonNull(body, "body");
         try {
             Map<String, Object> root = LenientJson.readObject(decode(body));
-            String code = root.get("code") instanceof String s && !s.isBlank() ? clean(s, 64) : "unknown";
-            String content = root.get("content") instanceof String s ? clean(s, MAX_ERROR_CONTENT) : "";
+            // The lab's error body has code and content at the top; a UCP error envelope (the sample merchant's) has them
+            // in its first message. Codes are lower-cased: the sample writes some in upper case (H1 C4).
+            Map<?, ?> first = root.get("messages") instanceof List<?> l && !l.isEmpty() && l.get(0) instanceof Map<?, ?> m
+                    ? m : Map.of();
+            Object rawCode = root.get("code") instanceof String ? root.get("code") : first.get("code");
+            Object rawContent = root.get("content") instanceof String ? root.get("content") : first.get("content");
+            String code = rawCode instanceof String s && !s.isBlank()
+                    ? clean(s, 64).toLowerCase(java.util.Locale.ROOT) : "unknown";
+            String content = rawContent instanceof String s ? clean(s, MAX_ERROR_CONTENT) : "";
             return new ErrorBody(code, content);
         } catch (IllegalArgumentException | CharacterCodingException e) {
             return new ErrorBody("unknown", "");
+        }
+    }
+
+    /** Whether {@code body} is a UCP error envelope: {@code ucp.status} is {@code error} and a message carries a code. */
+    public static boolean isErrorEnvelope(byte[] body) {
+        Objects.requireNonNull(body, "body");
+        try {
+            Map<String, Object> root = LenientJson.readObject(decode(body));
+            return root.get("ucp") instanceof Map<?, ?> ucp && "error".equals(ucp.get("status"))
+                    && root.get("messages") instanceof List<?> l && !l.isEmpty() && l.get(0) instanceof Map<?, ?> m
+                    && m.get("code") instanceof String c && !c.isBlank();
+        } catch (IllegalArgumentException | CharacterCodingException e) {
+            return false;
         }
     }
 

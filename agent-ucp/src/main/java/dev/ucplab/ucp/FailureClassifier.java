@@ -109,6 +109,11 @@ public final class FailureClassifier {
         if (status == 400 || status == 401 || status == 403 || status == 404 || status == 409 || status == 422) {
             return protocolError(reply, Optional.empty());
         }
+        if (status == 402 && CheckoutParser.isErrorEnvelope(reply.body())) {
+            // A payment refusal in a UCP error envelope (the sample merchant's decline): the merchant answered, so it is
+            // a ProtocolError that is not retried, never Uncertain. A 402 without an envelope stays Uncertain (below).
+            return protocolError(reply, Optional.empty());
+        }
         if (status == 429 || status == 503) {
             if (op == AttemptOp.COMPLETE) {
                 // Decision D: it does not prove that complete never reached the merchant, so the intent reconciles.

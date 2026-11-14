@@ -256,7 +256,7 @@ class UcpHttpGatewayTest {
         HttpCall post = transport.callsTo("POST /ucp/v1/checkout-sessions").get(0);
         assertThat(post.body().orElseThrow().json()).isEqualTo(CheckoutWire.createBody(createRequest()));
         assertThat(post.headers()).containsEntry("Idempotency-Key", CREATE_KEY.value())
-                .containsEntry("UCP-Agent", CONFIG.ucpAgent()).containsKey("Request-Id")
+                .containsEntry("UCP-Agent", CONFIG.ucpAgent() + "; version=\"2026-08-25\"").containsKey("Request-Id")
                 .containsEntry("Content-Type", "application/json").doesNotContainKey("Authorization");
     }
 

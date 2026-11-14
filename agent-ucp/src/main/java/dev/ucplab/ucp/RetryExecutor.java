@@ -192,7 +192,7 @@ public final class RetryExecutor {
 
     private Map<String, String> headers(ApiCall call) {
         Map<String, String> h = new LinkedHashMap<>();
-        h.put("UCP-Agent", config.ucpAgent());
+        h.put("UCP-Agent", config.ucpAgent() + call.ucpVersion().map(v -> "; version=\"" + v + "\"").orElse(""));
         h.put("Request-Id", requestId());
         h.put("Accept", "application/json");
         call.key().ifPresent(k -> h.put("Idempotency-Key", k.value()));

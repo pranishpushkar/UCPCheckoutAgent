@@ -113,7 +113,7 @@ class StubFaultContractTest {
         assertThat(outcome).isInstanceOf(CallOutcome.Ok.class);
         List<StubMerchant.Seen> seen = stub.requestsTo(CREATE);
         assertThat(seen).hasSize(4).allSatisfy(s -> {
-            assertThat(s.headers().get("ucp-agent")).isEqualTo(CONFIG.ucpAgent());
+            assertThat(s.headers().get("ucp-agent")).isEqualTo(CONFIG.ucpAgent() + "; version=\"2026-08-25\"");
             assertThat(UUID.fromString(s.headers().get("request-id"))).isNotNull();
             assertThat(s.headers().get("idempotency-key")).isEqualTo(CREATE_KEY.value());
             assertThat(s.headers().get("content-type")).isEqualTo("application/json");
