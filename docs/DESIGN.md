@@ -1380,7 +1380,17 @@ public sealed interface CallOutcome<T> {
 
 public record CheckoutView(SessionId id, CheckoutStatus status, String currency,
     List<LineView> lines, long subtotalMinor, long taxMinor, long totalMinor,
-    Optional<OrderRef> order, List<MerchantMessage> messages) {}
+    Optional<OrderRef> order, List<MerchantMessage> messages,
+    Optional<FulfillmentView> fulfillment, long fulfillmentMinor) {}   // H1 C5; the buyer field (Optional<Buyer>) sits before messages in the code
+
+/** The shipping part of a quote. Destinations are ids and a country only: an address is never parsed (9.2). */
+public record FulfillmentView(List<Method> methods) {
+  record Method(String id, String type, List<String> lineItemIds, List<Destination> destinations,
+      Optional<String> selectedDestinationId, List<Group> groups) {}
+  record Destination(String id, Optional<String> country) {}
+  record Group(String id, List<String> lineItemIds, List<Option> options, Optional<String> selectedOptionId) {}
+  record Option(String id, String title, long priceMinor) {}
+}
 
 public enum CheckoutStatus {
   INCOMPLETE, REQUIRES_ESCALATION, READY_FOR_COMPLETE, COMPLETE_IN_PROGRESS, COMPLETED, CANCELED;

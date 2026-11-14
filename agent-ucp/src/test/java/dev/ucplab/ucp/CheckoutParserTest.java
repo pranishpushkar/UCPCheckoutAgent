@@ -184,8 +184,7 @@ class CheckoutParserTest {
     static Stream<Arguments> invalidBodies() {
         return Stream.of(
                 Arguments.of("unknown status", checkoutJson("\"weird\"", "\"USD\"", LINES, TOTALS, "")),
-                // The raw 2026-08-25 schema has a sixth status that CheckoutStatus does not model (spec-notes.md).
-                Arguments.of("requires_escalation", checkoutJson("\"requires_escalation\"", "\"USD\"", LINES, TOTALS, "")),
+                // requires_escalation is parsed since H1 C5 (D6): FulfillmentParserTest reads it.
                 Arguments.of("status not a string", checkoutJson("3", "\"USD\"", LINES, TOTALS, "")),
                 Arguments.of("currency missing", "{\"id\":\"chk_1\",\"status\":\"incomplete\",\"line_items\":" + LINES
                         + ",\"totals\":" + TOTALS + "}"),

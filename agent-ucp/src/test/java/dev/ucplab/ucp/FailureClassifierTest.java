@@ -404,13 +404,12 @@ class FailureClassifierTest {
                 + TOTALS + "}";
     }
 
-    // Covers: 8.1, decision B (an unknown status string, requires_escalation, a missing required field, or an unparseable
+    // Covers: 8.1, decision B (an unknown status string, a missing required field, or an unparseable
     // body, on a 200 or 201: Uncertain for create, update, complete and cancel; ProtocolError for get)
     @Test
     void classifyReply_invalidBody_isUncertainForMutating_andProtocolErrorForGet() {
         List<String> bodies = List.of(
                 checkout("\"weird\""),
-                checkout("\"requires_escalation\""),
                 "{\"status\":\"incomplete\",\"currency\":\"USD\",\"line_items\":" + LINES + ",\"totals\":" + TOTALS + "}",
                 "{\"id\":\"chk_1\",\"status\":\"incomplete\",\"currency\":\"USD\",\"line_items\":" + LINES + "}",
                 "{\"id\":\"chk_1\",\"status\":\"incomplete\"",
@@ -438,12 +437,13 @@ class FailureClassifierTest {
         }
     }
 
-    // Covers: 8.1, 7.2 (requires_escalation is a status the contract does not model; on complete it must be Uncertain,
-    // so the intent reconciles instead of being settled by a body we cannot read), spec-notes.md
+    // Covers: 8.1, 7.2, D6 (requires_escalation is parsed since H1 C5: on complete it is an Ok with that status, not
+    // Uncertain; the orchestrator reconciles and never resends, RequiresEscalationTest), spec-notes.md
     @Test
-    void classifyReply_requiresEscalationOnComplete_isUncertain() {
+    void classifyReply_requiresEscalationOnComplete_isOkWithThatStatus() {
         assertThat(classify(AttemptOp.COMPLETE, reply(200, checkout("\"requires_escalation\""))))
-                .isInstanceOf(CallOutcome.Uncertain.class);
+                .isInstanceOfSatisfying(CallOutcome.Ok.class,
+                        ok -> assertThat(((CheckoutView) ok.value()).status()).isEqualTo(dev.ucplab.core.merchant.CheckoutStatus.REQUIRES_ESCALATION));
     }
 
     // Covers: I8 (an Uncertain or ProtocolError built from an invalid body never repeats merchant text)

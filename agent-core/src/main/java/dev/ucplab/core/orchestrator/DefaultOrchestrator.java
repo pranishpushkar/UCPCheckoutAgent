@@ -122,6 +122,8 @@ public final class DefaultOrchestrator implements Orchestrator {
     static final String CANCELED_BY_MERCHANT = "canceled_by_merchant";
     static final String OUTCOME_UNKNOWN = "outcome_unknown";
     static final String APPROVAL_INVALID = "approval_invalid";
+    /** The fixed reason of a merchant that wants the buyer to take over (8.1): not completable by the agent. */
+    static final String REQUIRES_ESCALATION = "requires_escalation";
     static final String POLICY_PREFIX = "policy_";
     static final String MERCHANT_ERROR_PREFIX = "merchant_error_";
     static final String COMPLETE_ERROR_PREFIX = "complete_error:";
@@ -477,6 +479,12 @@ public final class DefaultOrchestrator implements Orchestrator {
                     yield moved(written, next);
                 }
                 PurchaseIntent base = create ? written.withSessionId(view.id()) : written;
+                if (view.status() == CheckoutStatus.REQUIRES_ESCALATION) {
+                    // Not Uncertain and not a quote (8.1): no state of its own until M6c, so it ends like an answer that
+                    // cannot be used, with a fixed reason (the session is cancelled, best effort).
+                    yield finish(base, attempt, AttemptStatus.RESPONDED, http, summary,
+                            move(base, TransitionEvent.RETRIES_EXHAUSTED), REQUIRES_ESCALATION);
+                }
                 Set<String> codes = codes(view);
                 if (codes.contains(OUT_OF_STOCK)) {
                     yield finish(base, attempt, AttemptStatus.RESPONDED, http, summary,
@@ -696,6 +704,10 @@ public final class DefaultOrchestrator implements Orchestrator {
             Optional<Integer> http = Optional.of(ok.httpStatus());
             Optional<String> summary = Optional.of(CheckoutWire.responseSummary(view));
             Set<String> codes = codes(view);
+            if (view.status() == CheckoutStatus.REQUIRES_ESCALATION) {
+                // Not an order and not a refusal that proves no charge: reconcile, never resend (8.1).
+                return toReconciling(written, attempt, http, summary);
+            }
             if (view.status() == CheckoutStatus.COMPLETED && view.order().isPresent()) {
                 Move m = move(written, TransitionEvent.MERCHANT_COMPLETED);
                 PurchaseIntent next = m.next().withOrderId(view.order().get().id());
@@ -864,6 +876,8 @@ public final class DefaultOrchestrator implements Orchestrator {
             case COMPLETE_IN_PROGRESS -> pastDeadline
                     ? escalate(intent, attempts)
                     : pollAgain(intent, TransitionEvent.OBSERVED_COMPLETE_IN_PROGRESS);
+            // Parsed only (8.1): the buyer must take over, which the agent cannot do. Nothing is resent; the deadline ends it.
+            case REQUIRES_ESCALATION -> pastDeadline ? escalate(intent, attempts) : waiting(intent, REQUIRES_ESCALATION);
             case READY_FOR_COMPLETE -> {
                 if (pastDeadline) {
                     yield escalate(intent, attempts);

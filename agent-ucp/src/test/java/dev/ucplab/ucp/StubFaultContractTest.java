@@ -78,18 +78,20 @@ class StubFaultContractTest {
         return new CreateCheckout(List.of(new ProposedLine("item_123", 2)), Optional.of("a@example.com"));
     }
 
-    // Covers: 8.1, decision B (an unknown status string, and the sixth spec status requires_escalation: Uncertain on
-    // complete, one request; ProtocolError on get)
+    // Covers: 8.1, decision B, D6 (an unknown status string: Uncertain on complete, one request; ProtocolError on get.
+    // requires_escalation is parsed since H1 C5, so a read of it is an Ok)
     @Test
     void unknownStatusString_isUncertainOnComplete_andProtocolErrorOnGet() {
         String weird = new String(fixtureBytes("get_ready")).replace("ready_for_complete", "weird");
         String escalation = new String(fixtureBytes("get_ready")).replace("ready_for_complete", "requires_escalation");
-        stub.on(COMPLETE, reply(200, weird)).on(GET, reply(200, escalation));
+        stub.on(COMPLETE, reply(200, weird)).on(GET, reply(200, weird));
         UcpHttpGateway gateway = gateway();
 
         assertThat(gateway.complete(CHK, PAY, COMPLETE_KEY)).isInstanceOf(CallOutcome.Uncertain.class);
         assertThat(stub.requestsTo(COMPLETE)).hasSize(1);
         assertThat(gateway.get(CHK)).isInstanceOf(CallOutcome.ProtocolError.class);
+        stub.on(GET, reply(200, escalation));
+        assertThat(gateway.get(CHK)).isInstanceOf(CallOutcome.Ok.class);
     }
 
     private static byte[] fixtureBytes(String name) {
