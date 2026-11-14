@@ -23,6 +23,11 @@ Status: accepted (H1 C10). The H1 plan sections 1, 7, 9 and 12, and docs/interop
   (`NoInteropInVerifyTest`). `./mvnw clean` deletes the clone, so the fetch runs again before each `-Pinterop`.
 - **The job's permissions.** `.github/workflows/interop.yml`: `permissions: contents: read`, no secrets, a 20-minute
   timeout, path filters plus `workflow_dispatch`, every action pinned by commit SHA, `uv` pinned by version.
+- **Hardening (H1 C10b).** The job runs third-party Python in the same runner as our checkout. (1) `actions/checkout` has
+  `persist-credentials: false`, so the job's `GITHUB_TOKEN` is not left in `.git/config` where the sample's code could read it
+  (nothing after checkout needs it). (2) There is no Maven cache: `setup-java` has no `cache:`, because code that runs in the
+  job could write into `~/.m2` and a saved cache could be restored by `ci.yml`. (3) The trigger is `pull_request`, never
+  `pull_request_target`: a pull request from a fork gets a read-only token and no secrets, which is what this job wants.
 
 ## What the job can and cannot prove
 
