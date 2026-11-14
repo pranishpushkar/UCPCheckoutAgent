@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import dev.ucplab.core.MutableClock;
 import dev.ucplab.core.approval.ApprovalDecision;
 import dev.ucplab.core.approval.ApprovalRecord;
+import dev.ucplab.core.approval.ApprovalRepository;
 import dev.ucplab.core.approval.ApprovalSecret;
 import dev.ucplab.core.approval.ApprovalStatus;
 import dev.ucplab.core.approval.ApprovalTokens;
@@ -125,6 +126,28 @@ class DefaultApprovalServiceMutationTest {
         assertThat(lab.decide(w, id, true)).isInstanceOf(ApprovalDecision.Approved.class);
 
         assertThat(w.approvalService().pending(lab.alice(), id)).isEmpty();
+    }
+
+    // Covers: I10, 18, T6. Kills DefaultApprovalService.pending:122 RemoveConditional_EQUAL_ELSE (the owner check before the
+    // approval lookup, the second line of defence for I10): even when the approval store does not scope its read by user, a
+    // user who does not own the intent is shown nothing to decide, and the owner still is
+    @Test
+    void pending_asANonOwner_isEmpty_evenWhenTheApprovalStoreIgnoresTheUser() {
+        ApprovalRepository ignoringTheUser = (ApprovalRepository) Proxy.newProxyInstance(
+                ApprovalRepository.class.getClassLoader(), new Class<?>[] {ApprovalRepository.class}, (proxy, method, args) -> {
+                    try {
+                        if (method.getName().equals("findLatest")) {
+                            return lab.approvals.findLatestForSystem((IntentId) args[1]);
+                        }
+                        return method.invoke(lab.approvals, args);
+                    } catch (InvocationTargetException e) {
+                        throw e.getCause();
+                    }
+                });
+        Lab.Worker unscoped = lab.worker("worker-b", lab.merchant, ignoringTheUser);
+
+        assertThat(unscoped.approvalService().pending(lab.bob(), id)).isEmpty();
+        assertThat(unscoped.approvalService().pending(lab.alice(), id)).isPresent();
     }
 
     // ---------------------------------------------------------------- decide
