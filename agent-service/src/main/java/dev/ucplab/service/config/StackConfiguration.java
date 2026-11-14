@@ -185,16 +185,24 @@ public class StackConfiguration {
                 DefaultApprovalService.DEFAULT_MAX_AUTH_AGE);
     }
 
+    /** The mock card of the lab (merchant {@code tok_ok}); a test registers its own to plant a canary token. */
+    @Bean
+    @ConditionalOnMissingBean
+    PaymentInstrument paymentInstrument() {
+        return PaymentInstrument.mockCard("pi_lab", PAYMENT_TOKEN);
+    }
+
     @Bean
     DefaultOrchestrator orchestrator(SqlIntentRepository intents, SqlApprovalRepository approvals,
                                      DefaultApprovalService approvalService, UcpHttpGateway merchantGateway,
                                      StaticMerchantRegistry merchantRegistry, Database db,
                                      ServiceProperties properties, OrchestratorConfig orchestratorConfig, Clock clock,
-                                     IdGenerator ids, WorkerId workerId, RandomGenerator random) {
+                                     IdGenerator ids, WorkerId workerId, RandomGenerator random,
+                                     PaymentInstrument paymentInstrument) {
         RuleBasedPolicyEngine policy = new RuleBasedPolicyEngine(properties.policy(), merchantRegistry::find,
                 new SqlPolicyUsage(db), clock);
         return new DefaultOrchestrator(intents, approvals, approvalService, merchantGateway, policy,
-                new RequotePolicy(properties.policy()), PaymentInstrument.mockCard("pi_lab", PAYMENT_TOKEN),
+                new RequotePolicy(properties.policy()), paymentInstrument,
                 orchestratorConfig, clock, ids, workerId.value(), random);
     }
 

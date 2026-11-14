@@ -48,10 +48,11 @@ class ServiceApplicationTest {
             Logger.getLogger("dev.ucplab.runtime.c1probe").warning("c1-jul-probe");
         }
 
-        // Logback's console pattern writes " WARN " and the (abbreviated) logger name; JUL's own ConsoleHandler would
-        // write "WARNING: <message>" instead, so that form must be absent.
-        assertThat(output.getAll()).containsPattern(" WARN .*c1probe.*c1-system-logger-probe")
-                .containsPattern(" WARN .*c1probe.*c1-jul-probe")
+        // Logback writes a structured line (C16): the level, the logger and the message as JSON members. JUL's own
+        // ConsoleHandler would write "WARNING: <message>" instead, so that form must be absent.
+        assertThat(output.getAll())
+                .containsPattern("\"level\":\"WARN\",\"logger\":\"dev.ucplab.core.c1probe\".*\"message\":\"c1-system-logger-probe\"")
+                .containsPattern("\"level\":\"WARN\",\"logger\":\"dev.ucplab.runtime.c1probe\".*\"message\":\"c1-jul-probe\"")
                 .doesNotContain("WARNING: c1-system-logger-probe")
                 .doesNotContain("WARNING: c1-jul-probe");
     }

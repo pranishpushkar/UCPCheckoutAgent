@@ -370,7 +370,7 @@ public final class RunScript {
             int n = done.size() + 1;
             currentDb = db;
             currentLog = db.resolveSibling(name + "-child-" + n + ".log");
-            current = ChildProcess.startAgent(db, lane.agentFacingUrl(), scale, seed + n, currentLog);
+            current = ChildProcess.startAgent(db, lane.agentFacingUrl(), scale, seed + n, currentLog, canary);
             currentWorker = current.awaitReady(READY_LIMIT);
         }
 

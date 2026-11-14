@@ -3,11 +3,13 @@ package dev.ucplab.service;
 import dev.ucplab.service.config.Environment;
 import dev.ucplab.service.config.ProfileGuard;
 import dev.ucplab.service.config.ServiceProperties;
+import dev.ucplab.service.logging.BodyLogGuard;
 import java.util.List;
 import java.util.Objects;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.event.ApplicationEnvironmentPreparedEvent;
+import org.springframework.boot.context.event.ApplicationPreparedEvent;
 import org.springframework.context.ApplicationContextInitializer;
 import org.springframework.context.ApplicationListener;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -38,6 +40,8 @@ public class ServiceApplication {
         app.setAdditionalProfiles(properties.springProfile());
         app.addListeners((ApplicationListener<ApplicationEnvironmentPreparedEvent>) event ->
                 ProfileGuard.check(properties.profile(), event.getEnvironment().getActiveProfiles()));
+        // Once the logging system is configured, and again for every start in one JVM (a test).
+        app.addListeners((ApplicationListener<ApplicationPreparedEvent>) event -> BodyLogGuard.install());
         app.addInitializers(context -> {
             context.getBeanFactory().registerSingleton("serviceEnvironment", env);
             context.getBeanFactory().registerSingleton("serviceProperties", properties);

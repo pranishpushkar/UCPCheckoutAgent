@@ -34,6 +34,9 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 /**
  * Runs the agent for the HTTP API and holds the conversations (23.1, m6-plan section 3.3). A run goes on a virtual
@@ -58,6 +61,8 @@ public final class RunSupervisor implements AutoCloseable {
     /** The reason for a run cut off by shutdown or orphaned by a restart (23.1); only the service writes it. */
     public static final String INTERRUPTED = "interrupted";
     private static final String INTERNAL_ERROR = "internal_error";
+    private static final Logger LOG = LoggerFactory.getLogger(RunSupervisor.class);
+    private static final Logger TRACE = LoggerFactory.getLogger("dev.ucplab.trace");
 
     /** Where a live run is. */
     private sealed interface Phase permits Running, Waiting, Settled {
@@ -86,7 +91,13 @@ public final class RunSupervisor implements AutoCloseable {
     private final AnswerWait answerWait;
     private final ConcurrentHashMap<RunId, LiveRun> live = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UserId, RunId> active = new ConcurrentHashMap<>();
-    private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+    /**
+     * A run thread that ends with an {@code Error} has already settled its run; the Error is then handed to this handler
+     * instead of the JVM's, which would print its message and stack to stderr, outside the redacted log (I8).
+     */
+    private final ExecutorService executor = Executors.newThreadPerTaskExecutor(Thread.ofVirtual()
+            .uncaughtExceptionHandler((thread, e) -> LOG.error("run thread ended with {}", e.getClass().getName()))
+            .factory());
     private volatile boolean closing;
 
     public RunSupervisor(AgentRuntime runtime, RunRepository runs, IntentRepository intents, Clock clock,
@@ -180,7 +191,8 @@ public final class RunSupervisor implements AutoCloseable {
         run.say(RunMessage.USER, RunMessage.MESSAGE, message);
         live.put(id, run);
         CompletableFuture<Phase> first = run.settled.get();
-        launch(run, () -> runtime.start(auth, id, message, run.channel(), new RunTrace(id)));
+        RunTrace trace = new RunTrace(id);
+        launch(run, trace, () -> runtime.start(auth, id, message, run.channel(), trace));
         return await(run, first);
     }
 
@@ -262,7 +274,8 @@ public final class RunSupervisor implements AutoCloseable {
         run.settled.set(next);
         run.say(RunMessage.USER, RunMessage.MESSAGE, message);
         Conversation history = run.conversation;
-        launch(run, () -> runtime.resume(auth, run.id, history, message, run.channel(), new RunTrace(run.id)));
+        RunTrace trace = new RunTrace(run.id);
+        launch(run, trace, () -> runtime.resume(auth, run.id, history, message, run.channel(), trace));
         return await(run, next);
     }
 
@@ -274,7 +287,7 @@ public final class RunSupervisor implements AutoCloseable {
      * The run on a virtual thread; whatever it throws, an {@link Error} included, the run settles and its user is free
      * again. An {@code Error} ends the run {@code failed}/{@code internal_error} and is then rethrown.
      */
-    private void launch(LiveRun run, Supplier<RunSession> body) {
+    private void launch(LiveRun run, RunTrace trace, Supplier<RunSession> body) {
         executor.execute(() -> {
             Settled end = new Settled(RunView.FAILED, Optional.of(INTERNAL_ERROR));
             try {
@@ -294,9 +307,22 @@ public final class RunSupervisor implements AutoCloseable {
                 run.conversation = null;
                 throw t;
             } finally {
+                logTrace(run, trace);
                 settle(run, end);
             }
         });
+    }
+
+    /**
+     * The run's spans at its end, one JSON line each under {@code dev.ucplab.trace} (m6-plan section 10). A line holds
+     * names, counts, durations and fixed codes only (RunTrace), never a message, a question or a tool argument.
+     */
+    private static void logTrace(LiveRun run, RunTrace trace) {
+        try (MDC.MDCCloseable ignored = MDC.putCloseable("run_id", run.id.value())) {
+            trace.lines().forEach(TRACE::info);
+        } catch (RuntimeException e) {
+            // A logging failure must not stop the run settling.
+        }
     }
 
     private void settle(LiveRun run, Settled reached) {

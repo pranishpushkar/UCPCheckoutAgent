@@ -103,6 +103,33 @@ org.junit.jupiter:junit-jupiter:jar:6.1.3:test
   Not yet shown, for C20: a `docker kill` and restart of a joined service while `lab-net` stays up (25.5 step 8), and
   the same on the GitHub runner's Docker.
 
+## Logging and I8 (C16)
+
+**VERIFY, 2026-11-14,** https://docs.spring.io/spring-boot/reference/features/logging.html, and the Boot 4.1.2 jar:
+- `logging.structured.format.console=ecs` is as the plan wrote it (the other built-in formats are `gelf` and `logstash`).
+- The customiser hook is `logging.structured.json.customizer`, naming a class that implements
+  `org.springframework.boot.logging.structured.StructuredLoggingJsonMembersCustomizer<T>`. The docs page doesn't show its
+  method; the jar has one, `customize(JsonWriter.Members<T>)`, and `Members.applyingValueProcessor(ValueProcessor)` can
+  rewrite every string value. `RedactingLogCustomizer` does that with `Redaction.mask`, so the message and the exception
+  text of every event are masked. The plan said "a customiser that rewrites the message and the exception text"; the
+  value processor covers those and every other string member, which is wider.
+
+**A second guard the plan didn't have.** With `org.springframework.web` or the container at DEBUG or TRACE, Spring MVC
+logs request and response *bodies* ("Read ... to [{message=...}]", "Writing [...]", the handler's "Arguments: [...]")
+and Tomcat dumps the bytes it reads. A body printed as a Java map (`{token=...}`) has no shape for the masking to find,
+and the approval token and the user's messages were in the log. `BodyLogGuard`, a Logback turbo filter installed once the
+logging system is configured, drops events from those loggers at any level. `ServiceLeakTest` runs with every logger at
+DEBUG and the web and container loggers at TRACE, and found this; without the guard it fails.
+
+**What the database holds, by design.** The scan of the SQLite file allows two canaries in one column each: the CSRF token
+in `user_session.csrf_token` (18.5: "the session row holds a random `csrf_token`") and the payment token in
+`merchant_attempt.request_body` (section 7: the `complete` body is built once and stored, so a resend is byte-identical,
+I7). The session cookie is stored only as a hash and the approval token not at all; both are scanned for in every column.
+
+**An `Error` on a run thread** (Stage 4 review fix 1) is rethrown after the run settles, and would reach the JVM's default
+handler, which prints the message and stack to stderr, outside the redacted log. `RunSupervisor`'s virtual threads have an
+uncaught-exception handler that logs the class name only; `ServiceLeakTest` plants a canary in an `Error`'s message.
+
 ## Known gaps left for later
 
 - **21.3's rule that P3 and P5 are checked and updated in the same transaction as the intent insert is left for M7**

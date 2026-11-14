@@ -27,6 +27,8 @@ final class ChildProcess implements AutoCloseable {
     static final int MAX_CHILDREN = 16;
     /** SIGKILL is signal 9; a JVM killed by a signal exits with 128 plus the signal. */
     static final int SIGKILL_EXIT = 137;
+    /** The environment variable that carries the evaluation's canary to a child JVM. */
+    static final String CANARY_ENV = "UCPLAB_CANARY";
 
     private static final Duration POLL = Duration.ofMillis(10);
     private static final Duration EXIT_LIMIT = Duration.ofSeconds(30);
@@ -43,17 +45,31 @@ final class ChildProcess implements AutoCloseable {
      * Starts {@link AgentMain} on {@code db}, pointed at {@code merchantUrl}, at time scale {@code scale}.
      *
      * @param log the file the child's stdout and stderr go to (created or replaced)
+     * @param canary the evaluation's I8 canary, handed to the child in {@value #CANARY_ENV} (never on the command line,
+     *     where {@code ps} would show it), which plants it in the child's approval secret as the parent's stack does
      */
-    static ChildProcess startAgent(Path db, URI merchantUrl, TimeScale scale, long seed, Path log)
+    static ChildProcess startAgent(Path db, URI merchantUrl, TimeScale scale, long seed, Path log, String canary)
             throws IOException {
+        return startAgent(db, merchantUrl, scale, seed, log, canary, false);
+    }
+
+    /** As above; {@code probe} makes the child also print the canary's fingerprint ({@link AgentMain#FINGERPRINT}). */
+    static ChildProcess startAgent(Path db, URI merchantUrl, TimeScale scale, long seed, Path log, String canary,
+                                   boolean probe) throws IOException {
         String java = ProcessHandle.current().info().command()
                 .orElseThrow(() -> new IOException("the path of this JVM's java binary is not known"));
         List<String> command = new ArrayList<>(List.of(java, "-XX:+UseSerialGC", "-XX:TieredStopAtLevel=1",
                 "-Xmx128m", "-cp", System.getProperty("java.class.path"), AgentMain.class.getName(),
                 "--db", db.toString(), "--merchant-url", merchantUrl.toString(),
                 "--time-scale", Integer.toString(scale.k()), "--seed", Long.toString(seed)));
-        Process p = new ProcessBuilder(command).redirectErrorStream(true)
-                .redirectOutput(ProcessBuilder.Redirect.to(log.toFile())).start();
+        if (probe) {
+            command.add("--print-canary-fingerprint");
+            command.add("true");
+        }
+        ProcessBuilder builder = new ProcessBuilder(command).redirectErrorStream(true)
+                .redirectOutput(ProcessBuilder.Redirect.to(log.toFile()));
+        builder.environment().put(CANARY_ENV, canary);
+        Process p = builder.start();
         return new ChildProcess(p, log);
     }
 
