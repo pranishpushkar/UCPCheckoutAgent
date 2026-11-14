@@ -148,6 +148,18 @@ class ArchitectureTest {
                 .check(PRODUCTION_CLASSES);
     }
 
+    // Covers: 20, m6-plan section 11 (nothing in the service caches: no Spring cache abstraction, no ETag filter, no
+    // static resource handler for the API; section 20 says checkout sessions, quotes, approvals and intents are never cached)
+    @Test
+    void nothingCaches_noCacheAbstraction_noEtagFilter() {
+        noClasses()
+                .should().dependOnClassesThat().resideInAnyPackage("org.springframework.cache..",
+                        "org.springframework.boot.cache..", "org.springframework.boot.autoconfigure.cache..")
+                .orShould().dependOnClassesThat().haveFullyQualifiedName(
+                        "org.springframework.web.filter.ShallowEtagHeaderFilter")
+                .check(PRODUCTION_CLASSES);
+    }
+
     // Covers: 23.3, m6-plan section 6 (every top-level class in the lab package is a local-profile bean, so in prod the routes are
     // not mapped and answer 404)
     @Test

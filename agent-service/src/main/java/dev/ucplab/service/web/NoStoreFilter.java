@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
- * {@code Cache-Control: no-store} on every {@code /api} and {@code /auth} response, errors included (section 20
+ * {@code Cache-Control: no-store} and {@code Pragma: no-cache} on every {@code /api} and {@code /auth} response, errors included (section 20
  * [CONTRACT], m6-plan section 11): sessions, quotes, approvals and the approval token are never cached anywhere.
  */
 @Component
@@ -23,6 +23,7 @@ public final class NoStoreFilter extends OncePerRequestFilter {
             throws ServletException, IOException {
         if (applies(request.getRequestURI())) {
             response.setHeader("Cache-Control", "no-store");
+            response.setHeader("Pragma", "no-cache");
         }
         chain.doFilter(request, response);
     }
