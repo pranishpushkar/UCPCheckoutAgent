@@ -2,19 +2,20 @@
 
 | row | runs | terminal states | orders (sample's own table) | violations | time | agreement with the lab |
 | --- | --- | --- | --- | --- | --- | --- |
-| S0 | 20 | {COMPLETED=20} | 20 | 0 | 6.1 s | agrees |
-| S1 | 20 | {COMPLETED=20} | 20 | 0 | 7.0 s | agrees |
-| S2 | 20 | {COMPLETED=20} | 20 | 0 | 7.7 s | agrees |
-| S3 | 20 | {COMPLETED=20} | 20 | 0 | 57.2 s | agrees |
-| S4 | 20 | {COMPLETED=20} | 20 | 0 | 5.7 s | agrees |
-| S5 | 20 | {COMPLETED=20} | 20 | 0 | 5.0 s | differs: no re-quote (complete-charges-held-quote) |
-| S6 | 20 | {FAILED_NOT_CHARGED=20} | 0 | 0 | 5.6 s | agrees (refusal shape differs: refusal-4xx-at-complete) |
-| S7 | 20 | {FAILED_NOT_CHARGED=20} | 0 | 0 | 5.5 s | agrees (refusal shape differs: refusal-4xx-at-complete) |
-| S8 | 20 | {COMPLETED=20} | 20 | 0 | 110.3 s | agrees |
-| S13 | 20 | {COMPLETED=20} | 20 | 0 | 4.8 s | agrees |
-| S14 | 20 | {COMPLETED=20} | 20 | 0 | 5.8 s | agrees |
+| S0 | 20 | {COMPLETED=20} | 20 | 0 | 7.2 s | agrees |
+| S1 | 20 | {COMPLETED=20} | 20 | 0 | 6.8 s | agrees |
+| S2 | 20 | {COMPLETED=20} | 20 | 0 | 6.2 s | agrees |
+| S3 | 20 | {COMPLETED=20} | 20 | 0 | 56.5 s | agrees |
+| S4 | 20 | {COMPLETED=20} | 20 | 0 | 5.0 s | agrees |
+| S5 | 20 | {COMPLETED=20} | 20 | 0 | 5.1 s | differs: no re-quote (complete-charges-held-quote) |
+| S6 | 20 | {FAILED_NOT_CHARGED=20} | 0 | 0 | 4.9 s | agrees (refusal shape differs: refusal-4xx-at-complete) |
+| S7 | 20 | {FAILED_NOT_CHARGED=20} | 0 | 0 | 4.9 s | agrees (refusal shape differs: refusal-4xx-at-complete) |
+| S8 | 20 | {COMPLETED=20} | 20 | 0 | 109.6 s | agrees |
+| S13 | 20 | {COMPLETED=20} | 20 | 0 | 4.5 s | agrees |
+| S14 | 20 | {COMPLETED=20} | 20 | 0 | 5.9 s | agrees |
+| S9 | 20 | {COMPLETED=20} | 20 | 0 | 225.7 s | agrees |
 
-Totals: 220 runs, 180 orders, 0 violations.
+Totals: 240 runs, 200 orders, 0 violations.
 
 ## Wire differences
 

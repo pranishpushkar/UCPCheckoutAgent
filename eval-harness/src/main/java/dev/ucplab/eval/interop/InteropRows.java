@@ -9,6 +9,9 @@ import dev.ucplab.core.intent.ProposedLine;
 import dev.ucplab.core.intent.StepResult;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.eval.AgentStack;
+import dev.ucplab.eval.ChildProcess;
+import dev.ucplab.eval.EndpointPaths;
+import dev.ucplab.eval.KillPoint;
 import dev.ucplab.eval.Scenarios;
 import dev.ucplab.eval.TimeScale;
 import dev.ucplab.faultproxy.Action;
@@ -48,7 +51,7 @@ final class InteropRows {
     }
 
     /** How the run is driven beyond propose, approve and advance. */
-    enum Mode { NORMAL, RACE, WINDOW }
+    enum Mode { NORMAL, RACE, WINDOW, KILL }
 
     /** What one run saw. */
     record Result(String row, int run, IntentState state, int newOrders, long millis, List<String> violations) {
@@ -99,7 +102,10 @@ final class InteropRows {
                                         : Action.DuplicateRequest.Mode.SEQUENTIAL)).withTimes(1)), none,
                         SampleWiring.SUCCESS_TOKEN, Set.of(IntentState.COMPLETED), false, false),
                 new Row("S14", "24 workers advance one APPROVED intent together", (t, r) -> RuleSet.empty(), none,
-                        SampleWiring.SUCCESS_TOKEN, Set.of(IntentState.COMPLETED), false, false, Mode.RACE));
+                        SampleWiring.SUCCESS_TOKEN, Set.of(IntentState.COMPLETED), false, false, Mode.RACE),
+                new Row("S9", "the agent process is killed with kill -9 in COMPLETING or RECONCILING (K1 to K3) and restarted",
+                        (t, r) -> KillPoint.forS9(r).rules(t, r, EndpointPaths.ofEndpoint(java.net.URI.create("http://127.0.0.1"))), none,
+                        SampleWiring.SUCCESS_TOKEN, Set.of(IntentState.COMPLETED), false, false, Mode.KILL));
     }
 
     /** Runs one row once against a lane's sample and proxy. */
@@ -122,7 +128,7 @@ final class InteropRows {
         String reason = "";
         String sessionId = "";
         try (AgentStack stack = new AgentStack(proxy.baseUrl(), db, scale, run, new SequentialIdGenerator(row.id() + "r" + run),
-                row.token(), row.mode() == Mode.RACE ? AgentStack.DECISION_ONLY : scale.orchestrator().lease(), "", SampleWiring.of(ucpAgent))) {
+                row.token(), row.mode() == Mode.RACE || row.mode() == Mode.KILL ? AgentStack.DECISION_ONLY : scale.orchestrator().lease(), "", SampleWiring.of(ucpAgent))) {
             UserId user = new UserId("interop-user");
             AuthContext auth = new AuthContext(user, "john.doe@example.com", stack.clock.instant(), "interop-session");
             IntentId id = stack.orchestrator.propose(auth, SHOP, BASKET, "interop " + row.id()).intentId();
@@ -171,6 +177,10 @@ final class InteropRows {
                     if (row.mode() == Mode.RACE) {
                         race(stack, id, run, scale);
                     }
+                    if (row.mode() == Mode.KILL) {
+                        state = killRun(stack, id, proxy, run, scale, db, ucpAgent, sample.baseUrl().toString(), violations);
+                        break;
+                    }
                     continue;
                 }
                 long wait = r.nextAttemptAt().map(t -> Math.max(10, Duration.between(Instant.now(), t).toMillis())).orElse(50L);
@@ -201,6 +211,49 @@ final class InteropRows {
         }
         violations.addAll(groundTruth(state, sessionId, orders.subList(ordersBefore, orders.size()), approvedTotal));
         return new Result(row.id(), run, state, newOrders, (System.nanoTime() - started) / 1_000_000, violations);
+    }
+
+    /**
+     * S9 (H1 C8c): after the decision the agent runs as a child JVM with the sample's wiring, through the proxy. The harness polls
+     * the proxy log and the database for the kill point's moment, kills the child with kill -9, starts a new one on the same file,
+     * and waits for the intent to end. Returns the state the database shows.
+     */
+    private static IntentState killRun(AgentStack stack, IntentId id, FaultProxy proxy, int run, TimeScale scale, Path db,
+                                       String ucpAgent, String origin, List<String> violations) throws Exception {
+        KillPoint point = KillPoint.forS9(run);
+        EndpointPaths paths = EndpointPaths.ofEndpoint(java.net.URI.create(origin));
+        long mark = proxy.log(0).isEmpty() ? 0 : proxy.log(0).getLast().seq();
+        List<String> extra = List.of("--sample-ucp-agent", ucpAgent);
+        Path log1 = db.resolveSibling(db.getFileName() + "-child-1.log");
+        ChildProcess child = ChildProcess.startAgent(db, proxy.baseUrl(), scale, run * 10L + 1, log1, "", false, extra);
+        boolean killed = false;
+        try {
+            child.awaitReady(Duration.ofSeconds(30));
+            Instant bound = Instant.now().plus(scale.orchestrator().reconcileDeadline().multipliedBy(3).plusSeconds(60));
+            while (Instant.now().isBefore(bound)) {
+                var intent = stack.intents.findForSystem(id);
+                if (intent.map(i -> i.state().isTerminal()).orElse(false)) {
+                    break;
+                }
+                if (!killed && point.due(proxy.log(mark), intent, scale, Instant.now(), paths)) {
+                    int exit = child.kill();
+                    if (exit != ChildProcess.SIGKILL_EXIT) {
+                        violations.add("the child exited " + exit + ", not 137");
+                    }
+                    killed = true;
+                    Path log2 = db.resolveSibling(db.getFileName() + "-child-2.log");
+                    child = ChildProcess.startAgent(db, proxy.baseUrl(), scale, run * 10L + 2, log2, "", false, extra);
+                    child.awaitReady(Duration.ofSeconds(30));
+                }
+                Thread.sleep(10);
+            }
+            if (!killed) {
+                violations.add("S9: the intent ended before kill point " + point + " was reached");
+            }
+        } finally {
+            child.close();
+        }
+        return stack.intents.findForSystem(id).map(i -> i.state()).orElse(IntentState.QUOTING);
     }
 
     /** S14: 24 workers on the same database file call advance together once the decision's lease has run out. */

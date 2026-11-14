@@ -38,6 +38,7 @@ public final class AgentMain {
         int k = 0;
         long seed = 0;
         boolean fingerprint = false;
+        String sampleAgent = null;
         try {
             for (int i = 0; i < args.length; i += 2) {
                 if (i + 1 >= args.length) {
@@ -50,6 +51,7 @@ public final class AgentMain {
                     case "--time-scale" -> k = Integer.parseInt(v);
                     case "--seed" -> seed = Long.parseLong(v);
                     case "--print-canary-fingerprint" -> fingerprint = Boolean.parseBoolean(v);
+                    case "--sample-ucp-agent" -> sampleAgent = v;
                     default -> throw new IllegalArgumentException("unknown argument " + args[i]);
                 }
             }
@@ -67,7 +69,8 @@ public final class AgentMain {
         // The evaluation's canary, planted in the approval secret as the parent's stack plants it (I8, section 11).
         String canary = System.getenv(ChildProcess.CANARY_ENV);
         AgentStack stack = new AgentStack(merchant, db, scale, seed, new UuidV7IdGenerator(clock, new SecureRandom()),
-                Scenarios.PAY_OK, scale.orchestrator().lease(), canary == null ? "" : canary);
+                sampleAgent == null ? Scenarios.PAY_OK : dev.ucplab.eval.interop.SampleWiring.SUCCESS_TOKEN, scale.orchestrator().lease(),
+                canary == null ? "" : canary, sampleAgent == null ? MerchantWiring.LAB : dev.ucplab.eval.interop.SampleWiring.of(sampleAgent));
         CountDownLatch stopped = new CountDownLatch(1);
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             stack.close();

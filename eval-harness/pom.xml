@@ -170,7 +170,7 @@
                 <interop.lanes>4</interop.lanes>
                 <interop.k>4</interop.k>
                 <interop.trace>false</interop.trace>
-                <interop.rows>S0,S1,S2,S3,S4,S5,S6,S7,S8,S13,S14</interop.rows>
+                <interop.rows>S0,S1,S2,S3,S4,S5,S6,S7,S8,S9,S13,S14</interop.rows>
             </properties>
             <build>
                 <plugins>

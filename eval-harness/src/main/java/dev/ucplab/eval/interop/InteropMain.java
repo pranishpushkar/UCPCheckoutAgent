@@ -29,7 +29,7 @@ public final class InteropMain {
         int runs = Integer.getInteger("interop.runs", 20);
         int lanes = Integer.getInteger("interop.lanes", 4);
         TimeScale scale = TimeScale.of(Integer.getInteger("interop.k", 4));
-        Set<String> wanted = Set.of(System.getProperty("interop.rows", "S0,S1,S2,S3,S4,S5,S6,S7,S8,S13,S14").split(","));
+        Set<String> wanted = Set.of(System.getProperty("interop.rows", "S0,S1,S2,S3,S4,S5,S6,S7,S8,S9,S13,S14").split(","));
         Path work = repo.resolve("eval-harness/target/interop-work");
         if (Files.exists(work)) {
             try (java.util.stream.Stream<Path> walk = Files.walk(work)) {
@@ -37,7 +37,7 @@ public final class InteropMain {
             }
         }
         Files.createDirectories(work);
-        List<InteropRows.Row> rows = InteropRows.rows("").stream().filter(r -> wanted.contains(r.id())).toList();
+        List<InteropRows.Row> rows = InteropRows.rows(null).stream().filter(r -> wanted.contains(r.id())).toList();
         long started = System.nanoTime();
         List<InteropRows.Result> all = new ArrayList<>();
         int[] fetches = new int[lanes];
@@ -85,7 +85,7 @@ public final class InteropMain {
                  FaultProxy proxy = FaultProxy.start(sample.baseUrl(), 0, InteropRows.key())) {
                 String agent = profile.ucpAgent();
                 profile.close();
-                InteropRows.Result r = InteropRows.run(InteropRows.rows("").get(0), 0, sample, proxy, profile, laneWork, scale, agent);
+                InteropRows.Result r = InteropRows.run(InteropRows.rows(null).get(0), 0, sample, proxy, profile, laneWork, scale, agent);
                 findings.add("unreachable agent profile URL: the agent's run ended " + r.state() + ", new orders " + r.newOrders()
                         + ", violations " + r.violations());
             }
@@ -145,7 +145,7 @@ public final class InteropMain {
         }
         diffViolations.forEach(v -> report.append("DIFFERENCE ").append(v).append('\n'));
         failed |= !diffViolations.isEmpty();
-        if (rows.size() == InteropRows.rows("").size() && runs >= 20) {
+        if (rows.size() == InteropRows.rows(null).size() && runs >= 20) {
             Path results = repo.resolve("docs/results");
             Files.createDirectories(results);
             Files.writeString(results.resolve("h1-interop-report.md"), DifferenceReport.markdown(rowResults, classified, wireDiffs, evaluation, findings));
