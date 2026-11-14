@@ -296,7 +296,7 @@ Any event that is not in this table for the current state is a programming error
 | COMPLETING or RECONCILING | price\_changed, checkout incomplete or observed incomplete | requote\_count has reached the P8 cap | REJECTED | failure\_reason price\_unstable, cancel session. Not ESCALATED: no money has moved and the outcome is known |
 | RECONCILING | observed ready\_for\_complete | quiet period (7.5) not yet elapsed | RECONCILING | poll again; do not resend |
 | QUOTING | an update or GET shows the session completed or complete_in_progress | none | RECONCILING | send nothing new; reconciliation records the order. Defensive: a correct orchestrator should never reach this, but it must never throw here |
-| QUOTING | shipping selection needed | a create or update answer is `incomplete` and offers fulfillment | QUOTING | PUT update (a revision of its own, its own key) that selects the next of method, destination and option, chosen by `FulfillmentPolicy`. Not a re-quote: `requote_count` does not change. Repeated, each built from the previous response, until `ready_for_complete` |
+| QUOTING | shipping selection needed | a create or update answer is `incomplete` and offers fulfillment | QUOTING | PUT update (a revision of its own, its own key) that selects the next of method, destination and option, chosen by `FulfillmentPolicy`. Not a re-quote: `requote_count` does not change. Whether the merchant offers fulfillment is read from the view (`fulfillmentOffered`, set by the gateway from the profile the call went out under), never by a discovery inside a step. An answer with more than one method or group is `fulfillment_unsupported` and ends QUOTING as exhausted, because the snapshot (9.2) names one method and one group. Repeated, each built from the previous response, until `ready_for_complete` |
 | QUOTING | create_rejected | none | FAILED\_NOT\_CHARGED | no side effect: the merchant answered a create with every item unavailable (200, `ucp.status` error, no session id), so no session exists and nothing is cancelled. The gateway reports it as `CallOutcome.Rejected` (Appendix B, 8.1) |
 | COMPLETING | protocol\_error | none | RECONCILING | a `ProtocolError` on `complete` never settles the outcome, so it is never FAILED\_NOT\_CHARGED. Reconciliation reads the session and decides |
 
@@ -429,7 +429,7 @@ The port is in Appendix B. The key idea is that every call returns one of four o
 
 A mutating call can have created or changed state before an invalid answer arrives, so a body the client cannot read never settles an outcome. When in doubt, classify as `Uncertain`. Wrongly calling something `NotSent` is the dangerous mistake. In particular, anything ambiguous on `complete` is `Uncertain`.
 
-The 2026-04-08 and 2026-08-25 schemas have a sixth checkout status, `requires_escalation` (buyer handoff). `CheckoutStatus.REQUIRES_ESCALATION` is parsed only: a view with it is not completable by the agent, a mutating call that returns it is not `Uncertain` but ends as "not completable" with a fixed reason, and there is no new state or behaviour for it until M6c.
+The 2026-04-08 and 2026-08-25 schemas have a sixth checkout status, `requires_escalation` (buyer handoff). `CheckoutStatus.REQUIRES_ESCALATION` is parsed only: a view with it is not completable by the agent, a mutating call that returns it is not `Uncertain`. A create or an update that returns it ends QUOTING as FAILED\_NOT\_CHARGED with the fixed reason `requires_escalation` (cancel owed). A `complete` that returns it, or a reconciliation read that shows it, is not proof of no charge: the intent reconciles, nothing is resent, and it ends ESCALATED at the deadline. There is no new state or behaviour for it until M6c.
 
 ### 8.2 Retry matrix \[CONTRACT\]
 
@@ -1381,7 +1381,8 @@ public sealed interface CallOutcome<T> {
 public record CheckoutView(SessionId id, CheckoutStatus status, String currency,
     List<LineView> lines, long subtotalMinor, long taxMinor, long totalMinor,
     Optional<OrderRef> order, List<MerchantMessage> messages,
-    Optional<FulfillmentView> fulfillment, long fulfillmentMinor) {}   // H1 C5; the buyer field (Optional<Buyer>) sits before messages in the code
+    Optional<FulfillmentView> fulfillment, long fulfillmentMinor,
+    boolean fulfillmentOffered) {}   // offered: the profile the call went out under lists dev.ucp.shopping.fulfillment; set by the gateway   // H1 C5; the buyer field (Optional<Buyer>) sits before messages in the code
 
 /** The shipping part of a quote. Destinations are ids and a country only: an address is never parsed (9.2). */
 public record FulfillmentView(List<Method> methods) {

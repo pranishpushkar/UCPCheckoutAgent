@@ -528,31 +528,28 @@ public final class DefaultOrchestrator implements Orchestrator {
         if (shape.isEmpty()) {
             return Optional.empty();
         }
-        if (shown.isEmpty() && !offersFulfillment(intent)) {
+        if (shown.isEmpty() && !CheckoutWire.fulfillmentOffered(summary)) {
             return Optional.empty();
         }
         List<String> lineIds = shape.get().lines().stream().flatMap(l -> l.lineId().stream()).toList();
         return FulfillmentSteps.next(shown, lineIds, fulfillmentPolicy);
     }
 
-    /** Whether the merchant's profile lists the fulfillment capability. A profile that cannot be had means no. */
-    private boolean offersFulfillment(PurchaseIntent intent) {
-        try {
-            return gateway(intent).discover(intent.merchantId()).capabilities().contains(FULFILLMENT_CAPABILITY);
-        } catch (RuntimeException e) {
-            return false;
-        }
+
+
+    private static boolean unsupportedFulfillment(CheckoutView view) {
+        return view.fulfillment().filter(f -> f.methods().size() > 1
+                || f.methods().stream().anyMatch(m -> m.groups().size() > 1)).isPresent();
     }
 
+    /** Whether the answer needs a shipping selection: read from the view alone (it says whether fulfillment is offered). */
     private boolean selectionPending(PurchaseIntent base, CheckoutView view) {
         List<String> lineIds = view.lines().stream().flatMap(l -> l.lineId().stream()).toList();
-        if (view.fulfillment().isEmpty() && !offersFulfillment(base)) {
+        if (view.fulfillment().isEmpty() && !view.fulfillmentOffered()) {
             return false;
         }
         return FulfillmentSteps.next(view.fulfillment(), lineIds, fulfillmentPolicy).isPresent();
     }
-
-    private static final String FULFILLMENT_CAPABILITY = "dev.ucp.shopping.fulfillment";
 
     /** One selection update, built from the previous response's ids, under its own key; not a re-quote (7.2). */
     private Step selectionStep(
@@ -624,6 +621,11 @@ public final class DefaultOrchestrator implements Orchestrator {
                 }
                 if (view.status() == CheckoutStatus.READY_FOR_COMPLETE) {
                     yield quoteReady(base, attempt, http, summary, view);
+                }
+                if (unsupportedFulfillment(view)) {
+                    // One method and one group only (9.2): the snapshot could not name the rest of what was chosen.
+                    event(base.id(), "fulfillment_unsupported", Map.of("reason", "more than one method or group"));
+                    yield exhaustQuoting(base, attempt, AttemptStatus.RESPONDED, http, summary);
                 }
                 if (view.status() == CheckoutStatus.INCOMPLETE && view.messages().isEmpty()
                         && selectionPending(base, view)) {

@@ -112,6 +112,7 @@ public final class FaultyMerchantModel implements MerchantGateway {
      * that selects an option makes the checkout ready, and the total includes the option's price.
      */
     private boolean fulfillmentMode;
+    private int groupCount = 1;
     private final Map<String, Long> optionPrices = new LinkedHashMap<>(Map.of("std-ship", 0L, "exp-ship-us", 1500L));
     private int seq;
     private long heldSeq;
@@ -164,6 +165,11 @@ public final class FaultyMerchantModel implements MerchantGateway {
     /** Turns fulfillment mode on: this merchant now needs a shipping selection before a checkout is ready. */
     public void enableFulfillment() {
         withLock(() -> fulfillmentMode = true);
+    }
+
+    /** Lab control: how many groups the merchant lists once a destination is selected (default 1; fulfillment mode). */
+    public void setGroupCount(int groups) {
+        withLock(() -> groupCount = groups);
     }
 
     /** Sets the price of a shipping option: {@code std-ship} (default 0) or {@code exp-ship-us} (default 1500). */
@@ -631,10 +637,15 @@ public final class FaultyMerchantModel implements MerchantGateway {
         Optional<String> destination = selectedDestination(s);
         List<FulfillmentView.Group> groups = List.of();
         if (destination.isPresent()) {
-            groups = List.of(new FulfillmentView.Group("group_" + s.id.value(), sel.lineItemIds(), List.of(
-                    new FulfillmentView.Option("std-ship", "Standard Shipping", optionPrices.get("std-ship")),
-                    new FulfillmentView.Option("exp-ship-us", "Express Shipping (US)", optionPrices.get("exp-ship-us"))),
-                    selectedOption(s)));
+            List<FulfillmentView.Group> made = new ArrayList<>();
+            for (int i = 0; i < groupCount; i++) {
+                made.add(new FulfillmentView.Group("group_" + s.id.value() + (i == 0 ? "" : "_" + i), sel.lineItemIds(),
+                        List.of(new FulfillmentView.Option("std-ship", "Standard Shipping", optionPrices.get("std-ship")),
+                                new FulfillmentView.Option("exp-ship-us", "Express Shipping (US)",
+                                        optionPrices.get("exp-ship-us"))),
+                        selectedOption(s)));
+            }
+            groups = made;
         }
         return Optional.of(new FulfillmentView(List.of(new FulfillmentView.Method(sel.methodId(), sel.type(),
                 sel.lineItemIds(), destinations, destination, groups))));
@@ -655,7 +666,7 @@ public final class FaultyMerchantModel implements MerchantGateway {
         // The merchant reports a buyer only once it has an email.
         Optional<Buyer> buyer = s.buyer.email().isPresent() ? Optional.of(s.buyer) : Optional.empty();
         return new CheckoutView(s.id, s.status, CURRENCY, s.lines, subtotal, tax, subtotal + tax + shipping, s.order, buyer,
-                messages, fulfillmentView(s), shipping);
+                messages, fulfillmentView(s), shipping, fulfillmentMode);
     }
 
     private static long subtotal(Session s) {

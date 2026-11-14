@@ -88,4 +88,87 @@ class FulfillmentQuoteTest {
         assertThat(lab.intents.attempts(id)).extracting(a -> a.op().name()).containsExactly("CREATE");
         assertThat(lab.approvals.findLatestForSystem(id).orElseThrow().snapshot().fulfillment()).isEmpty();
     }
+
+    /** The fake merchant, counting every merchant call and optionally failing discovery. */
+    private final class Counting implements dev.ucplab.core.merchant.MerchantGateway {
+        final java.util.List<String> calls = new java.util.ArrayList<>();
+        boolean discoveryDown;
+
+        public dev.ucplab.core.merchant.MerchantProfile discover(dev.ucplab.core.merchant.MerchantId m) {
+            calls.add("discover");
+            if (discoveryDown) {
+                throw new dev.ucplab.core.merchant.DiscoveryFailedException("down");
+            }
+            return lab.merchant.discover(m);
+        }
+
+        public dev.ucplab.core.merchant.CallOutcome<dev.ucplab.core.merchant.CheckoutView> create(
+                dev.ucplab.core.merchant.CreateCheckout r, dev.ucplab.core.merchant.IdempotencyKey k) {
+            calls.add("create");
+            return lab.merchant.create(r, k);
+        }
+
+        public dev.ucplab.core.merchant.CallOutcome<dev.ucplab.core.merchant.CheckoutView> update(
+                dev.ucplab.core.merchant.SessionId id, dev.ucplab.core.merchant.UpdateCheckout r,
+                dev.ucplab.core.merchant.IdempotencyKey k) {
+            calls.add("update");
+            return lab.merchant.update(id, r, k);
+        }
+
+        public dev.ucplab.core.merchant.CallOutcome<dev.ucplab.core.merchant.CheckoutView> complete(
+                dev.ucplab.core.merchant.SessionId id, dev.ucplab.core.merchant.FrozenBody b,
+                dev.ucplab.core.merchant.IdempotencyKey k) {
+            calls.add("complete");
+            return lab.merchant.complete(id, b, k);
+        }
+
+        public dev.ucplab.core.merchant.CallOutcome<dev.ucplab.core.merchant.CheckoutView> cancel(
+                dev.ucplab.core.merchant.SessionId id, dev.ucplab.core.merchant.IdempotencyKey k) {
+            calls.add("cancel");
+            return lab.merchant.cancel(id, k);
+        }
+
+        public dev.ucplab.core.merchant.CallOutcome<dev.ucplab.core.merchant.CheckoutView> get(
+                dev.ucplab.core.merchant.SessionId id) {
+            calls.add("get");
+            return lab.merchant.get(id);
+        }
+    }
+
+    // Covers: 8.4, 7.3 (one merchant call per step: a selection step makes exactly one call and never discovers, whatever
+    // the state of the profile cache; and when discovery is down between the create and the first selection, the selection
+    // still goes ahead from the stored create response and the intent reaches approval)
+    @Test
+    void aSelectionStep_makesOneCall_andNeverDiscovers_evenWhenDiscoveryIsDown() {
+        lab.merchant.enableFulfillment();
+        Counting g = new Counting();
+        Lab.Worker w = lab.worker("worker-a", g);
+        IntentId id = lab.propose(w, TWO_SHIRTS).intentId();
+        g.discoveryDown = true;
+        g.calls.clear();
+
+        w.orchestrator().advance(id);
+
+        assertThat(g.calls).containsExactly("update");
+        assertThat(settleQuote(w, id)).isEqualTo(IntentState.AWAITING_APPROVAL);
+        assertThat(g.calls).doesNotContain("discover");
+        assertThat(lab.intent(id).failureReason()).isEmpty();
+    }
+
+    // Covers: 7.2, 9.2 (a merchant that answers with more than one group is not approved on a snapshot naming part of it:
+    // the quote ends exhausted with the event fulfillment_unsupported, and nothing is approved)
+    @Test
+    void anAnswerWithTwoGroups_endsQuotingAsUnsupported() {
+        lab.merchant.enableFulfillment();
+        lab.merchant.setGroupCount(2);
+        Lab.Worker w = lab.worker("worker-a");
+        IntentId id = lab.propose(w, TWO_SHIRTS).intentId();
+
+        settleQuote(w, id);
+
+        assertThat(lab.intent(id).state()).isEqualTo(IntentState.FAILED_NOT_CHARGED);
+        assertThat(lab.intent(id).failureReason()).contains("quote_retries_exhausted");
+        assertThat(lab.events(id)).anySatisfy(e -> assertThat(e.toString()).contains("fulfillment_unsupported"));
+        assertThat(lab.approvals.findLatestForSystem(id)).isEmpty();
+    }
 }

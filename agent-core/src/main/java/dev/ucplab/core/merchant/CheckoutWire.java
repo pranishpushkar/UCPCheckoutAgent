@@ -111,6 +111,9 @@ public final class CheckoutWire {
             return line;
         }).toList());
         view.buyer().map(CheckoutWire::buyerObject).filter(b -> !b.isEmpty()).ifPresent(b -> m.put("buyer", b));
+        if (view.fulfillmentOffered()) {
+            m.put("fulfillment_offered", true);    // only when true, so a summary of the lab path is unchanged
+        }
         view.fulfillment().ifPresent(f -> {
             m.put("fulfillment", fulfillmentSummary(f));
             m.put("fulfillment_minor", view.fulfillmentMinor());
@@ -190,6 +193,16 @@ public final class CheckoutWire {
             return Optional.of(new FulfillmentView(out));
         } catch (IllegalArgumentException e) {
             return Optional.empty();
+        }
+    }
+
+    /** Whether the view a {@link #responseSummary} was made from said the merchant offers fulfillment. Absent: false. */
+    public static boolean fulfillmentOffered(String summaryJson) {
+        Objects.requireNonNull(summaryJson, "summaryJson");
+        try {
+            return Boolean.TRUE.equals(CanonicalJson.readObject(summaryJson).get("fulfillment_offered"));
+        } catch (IllegalArgumentException e) {
+            return false;
         }
     }
 

@@ -222,4 +222,19 @@ class SampleMerchantContractTest {
         assertThat(read).isInstanceOfSatisfying(CallOutcome.Ok.class, ok ->
                 assertThat(((CheckoutView) ok.value()).order()).isPresent());
     }
+
+    // Covers: 8.4, 7.2 (fulfillmentOffered comes from the profile the call went out under: the sample's profile lists the
+    // fulfillment capability, so its create view says offered, and the lab profile's does not)
+    @Test
+    void theViewSaysWhetherTheProfileOffersFulfillment() {
+        UcpHttpGateway g = gateway(sample(profile01(), "04-happy-create", "08-happy-complete", "09-get-after-complete"));
+
+        CallOutcome<CheckoutView> out = g.create(request(), CREATE_KEY);
+
+        assertThat(out).isInstanceOfSatisfying(CallOutcome.Ok.class, ok -> assertThat(((CheckoutView) ok.value()).fulfillmentOffered()).isTrue());
+        String noFulfillment = profile01().replace("dev.ucp.shopping.fulfillment", "dev.ucp.shopping.other");
+        UcpHttpGateway lab = gateway(sample(noFulfillment, "04-happy-create", "08-happy-complete", "09-get-after-complete"));
+        assertThat(lab.create(request(), CREATE_KEY)).isInstanceOfSatisfying(CallOutcome.Ok.class,
+                ok -> assertThat(((CheckoutView) ok.value()).fulfillmentOffered()).isFalse());
+    }
 }

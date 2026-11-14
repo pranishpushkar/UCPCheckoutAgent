@@ -61,6 +61,8 @@ public final class UcpHttpGateway implements MerchantGateway {
     public static final Set<String> SUPPORTED_VERSIONS = Set.of("2026-08-25", "2026-04-08");
     /** The capability a merchant must offer (19). */
     public static final String CHECKOUT_CAPABILITY = "dev.ucp.shopping.checkout";
+    /** The capability whose presence in the profile means the merchant needs a shipping selection (7.2). */
+    public static final String FULFILLMENT_CAPABILITY = "dev.ucp.shopping.fulfillment";
     /**
      * The lab merchant's payment handler (Appendix A), kept as the default of the constructors that name no handler. A
      * merchant that lacks the handler the agent's instrument uses cannot be paid (19); another merchant names its own.
@@ -293,7 +295,7 @@ public final class UcpHttpGateway implements MerchantGateway {
                 + session.map(s -> segment(s.value())).orElse("") + suffix);
         CallOutcome<CheckoutView> outcome = redactor.scrub(executor.execute(
                 new ApiCall(op, method, uri, key, body, bypassGate, Optional.of(profile.get().version()))));
-        outcome = refusalAsAnswer(op, session, outcome);
+        outcome = refusalAsAnswer(op, session, offered(outcome, profile.get().profile()));
         if (newIntent && outcome instanceof CallOutcome.ProtocolError<CheckoutView> e && e.httpStatus() >= 400
                 && e.httpStatus() < 500 && e.httpStatus() != 429) {
             // Section 20: a 4xx of a create may mean the profile changed; the next create fetches a fresh one. A 429
@@ -301,6 +303,16 @@ public final class UcpHttpGateway implements MerchantGateway {
             cache.set(null);
         }
         return session.isPresent() ? checkSession(op, session.get(), outcome) : outcome;
+    }
+
+    /** An {@code Ok} view says whether the profile this call went out under lists the fulfillment capability. */
+    private static CallOutcome<CheckoutView> offered(CallOutcome<CheckoutView> outcome, MerchantProfile profile) {
+        if (outcome instanceof CallOutcome.Ok<CheckoutView> ok) {
+            return new CallOutcome.Ok<>(ok.httpStatus(),
+                    ok.value().withFulfillmentOffered(profile.capabilities().contains(FULFILLMENT_CAPABILITY)),
+                    ok.messages());
+        }
+        return outcome;
     }
 
     /**
