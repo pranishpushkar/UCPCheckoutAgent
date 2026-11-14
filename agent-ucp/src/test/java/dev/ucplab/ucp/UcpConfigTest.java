@@ -26,6 +26,22 @@ class UcpConfigTest {
         assertThat(c.breakerOpenFor()).isEqualTo(Duration.ofSeconds(30));
     }
 
+    // Covers: 8.3 (the rate limit defaults to a burst of 10 and 5 a second, the older ten-argument form keeps those, and
+    // a burst below 1 or a rate that is not positive is refused)
+    @Test
+    void rateLimit_defaults_andIsValidated() {
+        UcpConfig d = UcpConfig.defaults(AGENT);
+        UcpConfig old = new UcpConfig(AGENT, d.connectTimeout(), d.requestTimeout(), d.completeTimeout(), d.maxRetries(),
+                d.backoffInitial(), d.backoffCap(), d.breakerThreshold(), d.breakerOpenFor(), d.maxResponseBytes());
+
+        assertThat(d.rateBurst()).isEqualTo(10);
+        assertThat(d.ratePerSecond()).isEqualTo(5);
+        assertThat(old).isEqualTo(d);
+        assertThat(d.withRate(3, 0.5).rateBurst()).isEqualTo(3);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> d.withRate(0, 5)).isInstanceOf(IllegalArgumentException.class);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> d.withRate(1, 0)).isInstanceOf(IllegalArgumentException.class);
+    }
+
     // Covers: 8.4 (UCP-Agent comes from configuration and is required)
     @Test
     void config_rejectsBlankAgent() {

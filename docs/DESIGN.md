@@ -226,7 +226,7 @@ Exactly these five. A test asserts the tool list (I6).
 
 | Tool | Input | Output | Notes |
 | --- | --- | --- | --- |
-| `search_catalog` | `query: string`, `max_results: int (1..10)` | `items[{merchant_id, item_id, title, price_minor, currency, in_stock}]` | Backed by the merchant catalog. In M2, switch to UCP Catalog search (`POST /catalog/search`, `/catalog/lookup`, `/catalog/product`; **VERIFY** the Catalog REST spec at https://ucp.dev/latest/specification/shopping/catalog/rest/). The reference merchant does not serve these yet; M2 adds them to `merchant/` as one additive commit before `CatalogClient` (2.2, section 16) |
+| `search_catalog` | `query: string`, `max_results: int (1..10)` | `items[{merchant_id, item_id, title, price_minor, currency, in_stock}]`, and `unavailable[merchant_id]` when a merchant timed out or failed | Asks all active merchants in parallel, 2 s each, and merges round-robin in registry order. When every merchant failed the result is `{"error":"unavailable"}`. Backed by the merchant catalog. In M2, switch to UCP Catalog search (`POST /catalog/search`, `/catalog/lookup`, `/catalog/product`; **VERIFY** the Catalog REST spec at https://ucp.dev/latest/specification/shopping/catalog/rest/). The reference merchant does not serve these yet; M2 adds them to `merchant/` as one additive commit before `CatalogClient` (2.2, section 16) |
 | `get_product` | `item_id` | one item with description | The description is untrusted text |
 | `propose_purchase` | merchant\_id, `items[{item_id, quantity 1..5}]`, `rationale (max 300 chars)` | `{intent_id, state, quote?}` | Creates the intent and obtains the quote. Returns `AWAITING_APPROVAL` or a failure state. It does not buy |
 | `get_purchase_status` | `intent_id` | `{state, order_id?, failure_reason?}` | Read only |
@@ -448,12 +448,13 @@ Backoff: exponential from 200 ms, factor 2, cap 2 s, full jitter.
 
 Connect timeout 2 s. Request timeout 5 s, except `complete` at 10 s.
 
-One circuit breaker per `host:port`, held in memory and driven by the injected `Clock`. In the lab every merchant is on localhost, so the port is part of the key.
+One circuit breaker and one rate limiter per merchant (by `MerchantId`, shared by that merchant's checkout and catalog calls), held in memory and driven by the injected `Clock`. A merchant may use more than one host (8.5), so the host and port are not the key.
 
 - **Failures** are `NotSent`, `Uncertain` and 5xx. A 4xx, a 429, and business messages are not failures.
 - It opens after 5 consecutive failures, stays open 30 s, then allows one probe.
 - A call rejected by the open breaker is `NotSent`. An open breaker blocks new quoting.
 - `get` calls used for reconciliation bypass it.
+- The rate limiter is a token bucket (default burst 10, 5 per second). A refused token is `NotSent`. A 429 with `Retry-After` blocks the merchant's bucket for that long (at most 30 s). `get` calls used for reconciliation bypass it.
 
 ### 8.4 Request rules
 
@@ -471,7 +472,8 @@ One circuit breaker per `host:port`, held in memory and driven by the injected `
 
 - One `UcpHttpGateway` per merchant, bound at construction to its base URL. `discover(MerchantId)` throws `IllegalArgumentException` if the id is not the bound merchant.
 - `discover` retries like `get` (8.2) and is cached per gateway. The profile must show version 2026-08-25 and the capability `dev.ucp.shopping.checkout`. If discovery fails or the check fails, no create is sent to that merchant.
-- The M2 check that the checkout endpoint is on the same host and port as the merchant's base URL is a lab simplification (it also stops a profile from pointing the client at another server): M6a must allow a checkout endpoint on another host of the same merchant, for example one of the endpoints the profile declares.
+- The checkout endpoint a profile declares must be on the merchant's base host and port or on a host and port the registry lists for that merchant (`endpoint_hosts`, section 19), with the base URL's scheme. The operator, not the profile, decides which hosts may carry checkout traffic, so a profile cannot point the client at another server. A profile that names any other host fails discovery with `endpoint_not_allowed`.
+- Discovery also confirms the payment handler the agent's instrument uses (`mock_pay_1`; a profile without it fails with `handler_missing`) and refreshes the cached profile on a 4xx of a create (section 20).
 
 ## 9. Policy and approval
 
@@ -548,6 +550,7 @@ CREATE TABLE purchase_intent (
 );
 CREATE UNIQUE INDEX ux_intent_active_dedupe ON purchase_intent(dedupe_key)
   WHERE state NOT IN ('COMPLETED','REJECTED','FAILED_NOT_CHARGED','ESCALATED');
+-- I11: a trigger (migration V7) refuses any update of purchase_intent.merchant_id.
 
 CREATE TABLE intent_event (
   intent_id TEXT NOT NULL,
@@ -771,7 +774,7 @@ Two modes. **Scripted** uses `ScriptedModel`: deterministic, free, used in CI, 2
 | S19 | approval sent with a sign-in older than 15 minutes; then with a freshly refreshed token whose auth\_time is still old; then after signing in again | first two refused with reauth\_required; third accepted; COMPLETED | I3, I10 | scripted |
 | S20 | three merchants; one returns 503 on every call | search returns the healthy merchants' items; a purchase at a healthy merchant completes; only the failing merchant's breaker opens | I1, I11 | scripted |
 | S21 | two users race for the last unit (stock 1) | exactly one order; the other intent FAILED\_NOT\_CHARGED with out\_of\_stock; no oversell | I1 | scripted |
-| S22 | a basket spanning two merchants; the user approves only one | two intents and two approvals; one order at the approved merchant; the other REJECTED | I3, I11 | scripted |
+| S22 | a basket spanning two merchants; the user approves only one | two intents and two approvals; one order at the approved merchant; the user rejects the other explicitly, so it ends REJECTED | I3, I11 | scripted |
 | S23 | three agent instances on Postgres; the one holding the lease is killed during RECONCILING | another instance claims the intent after the lease expires; COMPLETED with one order | I1, I4, I5 | scripted |
 | S24 | POST approval without X-CSRF-Token, and with another session's token | 403 csrf\_failed for both; intent unchanged | I10 | scripted |
 | S25 | callback with a reused state, a wrong nonce, a wrong audience, an expired token, and a missing auth\_time | every case refused; no session created | I9 | scripted |
@@ -1020,7 +1023,7 @@ Only `sub`, `email` and `auth_time` are kept. The ID token itself is not stored.
 
 In production the agent talks to many independent merchants, each with its own inventory, prices and rules. The lab models this with several merchant instances.
 
-**Registry.** Merchants are listed in `merchants.yaml` (id, base URL, display name, status) and loaded into the `merchant` table at startup. Only `ACTIVE` merchants are used for new intents. This replaces the plain allowlist in P1.
+**Registry.** Merchants are listed in `merchants.yaml` (id, name, URL, status, and optionally `endpoint_hosts`, `lab_url`, `transport: rest` and `completion: agent`) and held in memory; there is no `merchant` table before M7. A merchant is ACTIVE when its file status is `active` and its last discovery check passed; otherwise the registry reports it SUSPENDED with a fixed reason. Only ACTIVE merchants are used for new intents. This replaces the plain allowlist in P1. A SUSPENDED merchant is re-checked on demand, at most every 30 s, by a single caller (one wins a compare-and-set and no lock is held across the network call); every other caller gets the last known status without waiting. A merchant removed from the file while any intent is in flight refuses startup.
 
 **Discovery check.** Before a merchant is used for a new intent, fetch `/.well-known/ucp` and confirm: a compatible spec version (2026-08-25), the checkout capability, and the payment handler the agent supports. If any check fails, the merchant is skipped for new intents. In-flight intents keep reconciling against the stored profile.
 
@@ -1032,7 +1035,7 @@ In production the agent talks to many independent merchants, each with its own i
 
 **Shared inventory.** Many users compete for the same merchant's stock, and that is correct behaviour. The agent never assumes price or stock is held between quote and complete. The approval card says so, and an `out_of_stock` at complete ends in `FAILED_NOT_CHARGED`. **VERIFY** whether UCP offers stock reservations during checkout; if it does, use them.
 
-**Lab setup.** The merchant gains an optional `--catalog <file.json>` argument (an additive change, not one made to pass agent tests). Compose runs three merchants on different ports with different catalogs and prices.
+**Lab setup.** The merchant gains an optional `--catalog <file.json>` argument (an additive change, not one made to pass agent tests; `/_lab/reset` restores that file's items). Compose runs three merchants on ports 9001 to 9003, each behind its own fault proxy (9101 to 9103), with different catalogs, item ids and prices.
 
 ## 20. Caching \[CONTRACT\]
 
@@ -1132,7 +1135,7 @@ Messages are held in the serving instance's memory only (21.3): they are never s
 | `GET /api/intents?state=&cursor=&limit=` | The caller's intents, newest first, cursor-paginated (limit 1 to 50, default 20) |
 | `GET /api/intents/{id}` | `{id, merchant_id, state, failure_reason?, order_id?, quote?, approval?: {status, expires_at}, created_at}` |
 | `GET /api/intents/{id}/events` | The intent's events in order. Payloads are redacted (I8) |
-| `GET /api/intents/{id}/approval` | The pending approval for the owner only: `{snapshot, expires_at, token}`. 404 if none is pending |
+| `GET /api/intents/{id}/approval` | The pending approval for the owner only: `{snapshot, expires_at, token}`; the snapshot's `merchant_id` is the merchant's. 404 if none is pending |
 | `POST /api/intents/{id}/approval` | Body `{token, decision: "approve" or "reject"}`. 200 with the new state; 401 `reauth_required`; 409 `approval_not_pending` (already decided, expired or consumed, or a token that does not verify against the pending approval, such as one from before a re-quote: `ApprovalDecision.InvalidToken`); 404 for anyone but the owner |
 
 The approval token is delivered only through `GET /api/intents/{id}/approval` to the owner's session. It never appears in a tool result, a prompt or a log (I6, I8). That response, like every `/api` response, carries `Cache-Control: no-store`; request and response bodies are never logged.
@@ -1141,8 +1144,8 @@ The approval token is delivered only through `GET /api/intents/{id}/approval` to
 
 | Method and path | Behaviour |
 | --- | --- |
-| `PUT /api/lab/faults` | Replace the caller's fault rules (the proxy rule format in section 12). Rules apply only to the caller's lab id |
-| `DELETE /api/lab/faults` | Remove the caller's rules |
+| `PUT /api/lab/faults` | Replace the fault rules at one merchant (`merchant_id`, default `merchant-a`; the proxy rule format in section 12). Rules apply only to the caller's lab id |
+| `DELETE /api/lab/faults` | Remove the rules at one merchant (`merchant_id`, default `merchant-a`) |
 | `GET /api/lab/orders?merchant_id=` | Ground-truth orders from the caller's sandbox at each merchant |
 | `POST /api/lab/reset` | Reset the caller's sandbox at every merchant and clear their rules |
 
@@ -1185,14 +1188,16 @@ The console exists to demonstrate the system and record the demo video, not to b
 +------------------------------+  +-----------------------------+
 ```
 
+With several merchants (M6a) the console shows one approval card per intent awaiting approval, each headed by its merchant, and the order counter shows one number per merchant.
+
 ### 24.3 Behaviour \[CONTRACT\]
 
 - On load, call `/api/me`. On 401, go to `/auth/login`. Show the signed-in email and a sign-out button.
 - Every line on the approval card comes from the approval `snapshot`, never from the model's chat text (I2). The snapshot has no titles, so a line shows the item id, quantity and unit price; "Other charges (tax)" is the total minus the lines' sum, computed from the snapshot. The card always says that price and stock are not held, and counts down to `expires_at`.
 - On `reauth_required`, go to `/auth/login?reauth=true&return_to=/intents/{id}`. On return, show the intent and its approval card again and wait: the approval is sent only when the person presses Approve or Reject on the returned page, never by the page on its own.
 - The timeline polls `GET /api/intents/{id}` once a second while the intent is not terminal, and stops when it is.
-- The fault lab toggles map to preset rule sets for `PUT /api/lab/faults`: drop next complete response, merchant returns 503 for 20 s (the service removes the rule after 20 s), and merchant A down. "Change price before complete" is not a proxy rule: it is a one-shot action that raises, through the merchant's `/_lab/price`, the price of the item of the caller's newest intent awaiting approval.
-- The order counter reads `GET /api/lab/orders`, so it shows the merchants' ground truth, not the agent's report. Invariant breaks are shown only when the eval harness has computed them.
+- The fault lab toggles map to preset rule sets for `PUT /api/lab/faults`: drop next complete response, merchant returns 503 for 20 s (the service removes the rule after 20 s), and merchant down (at the merchant chosen next to the toggles; `merchant_id` on the request). "Change price before complete" is not a proxy rule: it is a one-shot action that raises, through the merchant's `/_lab/price`, the price of the item of the caller's newest intent awaiting approval.
+- The order counter reads `GET /api/lab/orders` for each merchant, so it shows the merchants' ground truth, not the agent's report. When a run proposes several intents, the console shows one approval card per awaiting intent, each headed by the merchant from its own snapshot (never from the chat text), with its own Approve and Reject. Invariant breaks are shown only when the eval harness has computed them.
 - Text uses the browser's escaping (`textContent`), never `innerHTML` for data, so product text cannot inject markup.
 - Works at 360 px wide; keyboard reachable; status changes announced through an `aria-live` region.
 
@@ -1225,11 +1230,11 @@ The agent, merchant and proxy images are the same in both places. Only configura
 | `agent-service` | 8080 | Lab console and REST API |
 | `keycloak` | 8081 | Sign-in. Realm imported from `dev/keycloak/realm.json` |
 | `merchant-a`, `merchant-b`, `merchant-c` | none | Catalogs from `dev/catalogs/a.json` and so on |
-| `fault-proxy` | none | Admin API reachable only from the agent and the eval harness |
+| `fault-proxy` (one per merchant: `fault-proxy-a`, `-b`, `-c` in M6a) | none | Admin API reachable only from the agent and the eval harness |
 | `postgres` | none | Data in a named volume |
 | `lb` (profile `multi`) | 8080 | Load balancer in front of several agent instances, replacing the agent's own port |
 
-**M6.** The stack is `lab-net`, `merchant-a`, `fault-proxy` and `agent-service`, with SQLite on a named volume. The merchant and the proxy bind 127.0.0.1 only (Appendix A, section 12), so every lab container joins the network namespace of `lab-net` (`network_mode: service:lab-net`), which publishes 8080 on the host's loopback. `/_lab` and the proxy admin API are reachable only inside that namespace, which is stricter than the private Compose network of 25.2. Keycloak arrives with M6b, merchants b and c with M6a, Postgres and `lb` with M7. `GEMINI_API_KEY` is passed to `agent-service` from the shell that runs `docker compose`, at run time only; it is never a value in a Compose file, an image or a build argument. `AGENT_MODEL` is `scripted` unless set to `gemini`, so the stack starts without a key.
+**M6.** The stack is `lab-net`, `merchant-a`, `fault-proxy` and `agent-service`, with SQLite on a named volume. **M6a** makes it `lab-net`, `merchant-a` to `-c`, `fault-proxy-a` to `-c` and `agent-service`: one merchant image reused three times with bind-mounted catalogs, and `merchants.yaml` bind-mounted for the service. The merchant and the proxy bind 127.0.0.1 only (Appendix A, section 12), so every lab container joins the network namespace of `lab-net` (`network_mode: service:lab-net`), which publishes 8080 on the host's loopback. `/_lab` and the proxy admin API are reachable only inside that namespace, which is stricter than the private Compose network of 25.2. Keycloak arrives with M6b, Postgres and `lb` with M7. `GEMINI_API_KEY` is passed to `agent-service` from the shell that runs `docker compose`, at run time only; it is never a value in a Compose file, an image or a build argument. `AGENT_MODEL` is `scripted` unless set to `gemini`, so the stack starts without a key.
 
 ### 25.4 .env.example
 
@@ -1243,13 +1248,13 @@ OIDC_CLIENT_ID=ucplab-agent
 OIDC_CLIENT_SECRET=change-me-local-only-at-least-32-bytes
 OIDC_REDIRECT_URI=http://localhost:8080/auth/callback
 APPROVAL_SECRET=change-me-local-only-at-least-32-bytes
-MERCHANTS_FILE=/config/merchants.local.yaml
+MERCHANTS_FILE=/config/merchants.yaml
 POLICY_FILE=/config/policy.yaml
 # GEMINI_API_KEY is read from your shell only (export it before docker compose up); leave it empty here.
 GEMINI_API_KEY=
 ```
 
-`MERCHANTS_FILE` is unused until M6a's registry; M6 configures its one merchant directly.
+`MERCHANTS_FILE` is used from M6a, when Compose passes it; without it the service has one merchant from `MERCHANT_URL` and `MERCHANT_LAB_URL`, as in M6.
 
 ### 25.5 Testing step by step
 

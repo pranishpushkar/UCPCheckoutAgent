@@ -116,7 +116,8 @@ class CatalogContractTest extends ContractTestBase {
             stub.on("GET /.well-known/ucp", StubMerchant.reply(200, "{\"ucp\":{\"version\":\"2026-08-25\","
                     + "\"capabilities\":{\"dev.ucp.shopping.checkout\":[{\"version\":\"2026-08-25\"}]},"
                     + "\"services\":{\"dev.ucp.shopping\":[{\"transport\":\"rest\",\"version\":\"2026-08-25\","
-                    + "\"endpoint\":\"http://127.0.0.1:" + port + "/ucp/v1\"}]}}}"));
+                    + "\"endpoint\":\"http://127.0.0.1:" + port + "/ucp/v1\"}]},"
+                + "\"payment_handlers\":{\"dev.ucplab.mock_pay\":[{\"id\":\"mock_pay_1\",\"version\":\"2026-08-25\"}]}}}"));
             UcpHttpGateway gateway = new UcpHttpGateway(new MerchantEntry(SHOP, stub.baseUrl(), "Shop",
                     dev.ucplab.core.merchant.MerchantStatus.ACTIVE), CONFIG, new JdkHttpTransport(CONFIG),
                     new CircuitBreakers(CONFIG, Clock.systemUTC()), Clock.systemUTC(), d -> { }, new SplittableRandom(3),

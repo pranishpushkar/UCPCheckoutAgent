@@ -52,7 +52,7 @@ public final class CatalogClient implements CatalogGateway {
         Objects.requireNonNull(breakers, "breakers");
         this.executor = new RetryExecutor(Objects.requireNonNull(config, "config"),
                 Objects.requireNonNull(transport, "transport"), new FailureClassifier(Objects.requireNonNull(clock, "clock")),
-                breakers.forHostPort(hostPort(gateway)), sleeper, random, ids);
+                breakers.gateFor(gateway.merchant().id()), sleeper, random, ids);
     }
 
     @Override
@@ -123,10 +123,5 @@ public final class CatalogClient implements CatalogGateway {
             case CallOutcome.Rejected<CheckoutView> r ->
                     new CallOutcome.ProtocolError<>(r.httpStatus(), "invalid_response", "unexpected outcome", Optional.empty());
         };
-    }
-
-    private static String hostPort(UcpHttpGateway gateway) {
-        URI base = gateway.merchant().baseUrl();
-        return base.getHost() + ":" + (base.getPort() == -1 ? ("https".equals(base.getScheme()) ? 443 : 80) : base.getPort());
     }
 }

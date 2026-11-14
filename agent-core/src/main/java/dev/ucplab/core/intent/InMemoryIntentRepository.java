@@ -101,6 +101,7 @@ public final class InMemoryIntentRepository implements IntentRepository {
         lock.lock();
         try {
             PurchaseIntent stored = fenced(intent.id(), expectedVersion, leaseOwner);
+            requireSameMerchant(stored, intent);
             intents.put(intent.id(), merge(stored, intent, expectedVersion + 1));
         } finally {
             lock.unlock();
@@ -131,11 +132,14 @@ public final class InMemoryIntentRepository implements IntentRepository {
         try {
             // Every check comes before the first write, so a failure leaves nothing behind (7.3 step 3).
             PurchaseIntent stored = fenced(intent.id(), expectedVersion, leaseOwner);
+            requireSameMerchant(stored, intent);
             if (attempts.containsKey(attempt.id())) {
                 throw new IllegalArgumentException("attempt id already exists: " + attempt.id());
             }
+            // The merge holds the I4 check and counts the attempt being recorded, as the SQL adapter does; it comes first.
+            PurchaseIntent merged = merge(stored, intent, expectedVersion + 1, Optional.of(attempt));
             attempts.put(attempt.id(), attempt);
-            intents.put(intent.id(), merge(stored, intent, expectedVersion + 1));
+            intents.put(intent.id(), merged);
         } finally {
             lock.unlock();
         }
@@ -173,6 +177,7 @@ public final class InMemoryIntentRepository implements IntentRepository {
         try {
             // Every check comes before the first write, so a failure leaves nothing behind (7.3 step 5).
             PurchaseIntent stored = fenced(intent.id(), expectedVersion, leaseOwner);
+            requireSameMerchant(stored, intent);
             MerchantAttempt attempt = attempts.get(id);
             if (attempt == null) {
                 throw new IntentNotFoundException("no such attempt: " + id);
@@ -359,11 +364,25 @@ public final class InMemoryIntentRepository implements IntentRepository {
         return stored;
     }
 
+    /** I11: an intent belongs to one merchant for its whole life. Checked before any write, so a refusal leaves nothing. */
+    private static void requireSameMerchant(PurchaseIntent stored, PurchaseIntent update) {
+        if (!stored.merchantId().equals(update.merchantId())) {
+            throw new IllegalArgumentException("I11: the merchant of intent " + stored.id() + " cannot change");
+        }
+    }
+
     /** Caller holds the lock. Refuses a session change once a complete attempt exists (I4). */
     private PurchaseIntent merge(PurchaseIntent stored, PurchaseIntent update, long newVersion) {
+        return merge(stored, update, newVersion, Optional.empty());
+    }
+
+    /** As above, and {@code recording}, an attempt written in the same call, counts as one that exists (I4). */
+    private PurchaseIntent merge(PurchaseIntent stored, PurchaseIntent update, long newVersion,
+                                 Optional<MerchantAttempt> recording) {
         if (stored.sessionId().isPresent() && !stored.sessionId().equals(update.sessionId())
-                && attempts.values().stream()
-                        .anyMatch(a -> a.intentId().equals(stored.id()) && a.op() == AttemptOp.COMPLETE)) {
+                && (recording.filter(a -> a.op() == AttemptOp.COMPLETE).isPresent()
+                || attempts.values().stream()
+                        .anyMatch(a -> a.intentId().equals(stored.id()) && a.op() == AttemptOp.COMPLETE))) {
             throw new IllegalStateException("I4: session of intent " + stored.id()
                     + " cannot change after a complete attempt");
         }

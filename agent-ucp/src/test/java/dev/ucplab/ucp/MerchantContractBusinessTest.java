@@ -226,7 +226,7 @@ class MerchantContractBusinessTest extends ContractTestBase {
     // exactly one order, and every caller gets the same completed answer)
     @Test
     void twentyFourConcurrentCompletes_underOneKey_giveExactlyOneOrder() throws Exception {
-        UcpHttpGateway gateway = gateway();
+        UcpHttpGateway gateway = unlimitedGateway();
         SessionId id = readySession(gateway, "item_123", 2);
         merchant.setPaymentLatencyMs(200);
         IdempotencyKey key = key(MutatingOp.COMPLETE, 0);
@@ -250,7 +250,7 @@ class MerchantContractBusinessTest extends ContractTestBase {
     // one order whatever the keys; the others see the finished or in-progress checkout)
     @Test
     void twentyFourConcurrentCompletes_underDifferentKeys_stillGiveOneOrder() throws Exception {
-        UcpHttpGateway gateway = gateway();
+        UcpHttpGateway gateway = unlimitedGateway();
         SessionId id = readySession(gateway, "item_123", 2);
         merchant.setPaymentLatencyMs(200);
         List<Thread> threads = new ArrayList<>();
@@ -264,5 +264,13 @@ class MerchantContractBusinessTest extends ContractTestBase {
         }
 
         assertThat(merchant.orders()).hasSize(1);
+    }
+
+    /**
+     * A gateway whose rate limiter is out of the way: these two tests fire 24 concurrent completes through one gateway
+     * to show the merchant's idempotency, which a burst of 10 (8.3) would cut short before it reached the merchant.
+     */
+    private UcpHttpGateway unlimitedGateway() {
+        return gateway(merchant.baseUrl(), CONFIG.withRate(1000, 1000));
     }
 }

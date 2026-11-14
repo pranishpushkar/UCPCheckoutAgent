@@ -57,7 +57,9 @@ final class RuntimeLab implements AutoCloseable {
 
     static final MerchantId SHOP = new MerchantId("shop-1");
     static final String PAYMENT_TOKEN = "tok_ok";
-    private static final UcpConfig UCP = UcpConfig.defaults("profile=\"https://runtime.ucplab.dev/agent\"");
+    /** The rate limiter (8.3) is out of the way: these tests run many cases a second against one lab merchant. */
+    private static final UcpConfig UCP = UcpConfig.defaults("profile=\"https://runtime.ucplab.dev/agent\"")
+            .withRate(1000, 1000);
     private static final PolicyUsage NO_USAGE = new PolicyUsage() {
         @Override
         public long committedSpendMinor(UserId user, Instant from, Instant to) {

@@ -305,7 +305,7 @@ public final class SqlIntentRepository implements IntentRepository {
                 s.setString(2, leaseOwner);
                 s.setLong(3, expectedVersion);
                 if (s.executeUpdate() == 0) {
-                    throw fenceFailure(c, intentId, expectedVersion, leaseOwner);
+                    throw fenceFailure(c, intentId, null, expectedVersion, leaseOwner);
                 }
             }
             // Check every attempt before the first write, so a refusal leaves nothing changed.
@@ -426,7 +426,8 @@ public final class SqlIntentRepository implements IntentRepository {
         try (PreparedStatement s = c.prepareStatement(
                 "UPDATE purchase_intent SET state = ?, version = ?, session_id = ?, approved_snapshot_hash = ?,"
                         + " requote_count = ?, order_id = ?, failure_reason = ?, uncertain_since = ?,"
-                        + " cancel_pending = ?, updated_at = ? WHERE id = ? AND lease_owner = ? AND version = ?")) {
+                        + " cancel_pending = ?, updated_at = ? WHERE id = ? AND lease_owner = ? AND version = ?"
+                        + " AND merchant_id = ?")) {
             int n = 1;
             s.setString(n++, i.state().name());
             s.setLong(n++, expectedVersion + 1);
@@ -440,21 +441,30 @@ public final class SqlIntentRepository implements IntentRepository {
             s.setString(n++, SqlTimes.format(i.updatedAt()));
             s.setString(n++, i.id().value());
             s.setString(n++, leaseOwner);
-            s.setLong(n, expectedVersion);
+            s.setLong(n++, expectedVersion);
+            s.setString(n, i.merchantId().value());
             if (s.executeUpdate() == 0) {
-                throw fenceFailure(c, i.id(), expectedVersion, leaseOwner);
+                throw fenceFailure(c, i.id(), i.merchantId(), expectedVersion, leaseOwner);
             }
         }
     }
 
-    /** Re-reads the row in the writing transaction to say why the fenced write matched nothing: not found, lease, version. */
-    private static RuntimeException fenceFailure(Connection c, IntentId id, long expectedVersion, String leaseOwner)
-            throws SQLException {
-        try (PreparedStatement s = c.prepareStatement("SELECT lease_owner, version FROM purchase_intent WHERE id = ?")) {
+    /**
+     * Re-reads the row in the writing transaction to say why the fenced write matched nothing: not found, another
+     * merchant (I11, only when {@code merchant} is given), lease, version. The merchant is checked first, because a
+     * caller that names another merchant is wrong whatever the lease and the version are.
+     */
+    private static RuntimeException fenceFailure(Connection c, IntentId id, MerchantId merchant, long expectedVersion,
+                                                 String leaseOwner) throws SQLException {
+        try (PreparedStatement s = c.prepareStatement(
+                "SELECT lease_owner, version, merchant_id FROM purchase_intent WHERE id = ?")) {
             s.setString(1, id.value());
             try (ResultSet r = s.executeQuery()) {
                 if (!r.next()) {
                     return new IntentNotFoundException("no such intent: " + id);
+                }
+                if (merchant != null && !merchant.value().equals(r.getString(3))) {
+                    return new IllegalArgumentException("I11: the merchant of intent " + id + " cannot change");
                 }
                 if (!leaseOwner.equals(r.getString(1))) {
                     return new LeaseLostException(id, leaseOwner);

@@ -46,4 +46,21 @@ class ArchitectureTest {
                 .resideInAnyPackage("org.springframework..", "jakarta.servlet..", "tools.jackson..")
                 .check(PRODUCTION_CLASSES);
     }
+
+    // Covers: 7.8 (no synchronized block or method anywhere in agent-ucp's main source: the breaker and the rate limiter
+    // use a ReentrantLock around in-memory state only, never across a call)
+    @Test
+    void source_hasNoSynchronized_always() throws java.io.IOException {
+        java.util.regex.Pattern word = java.util.regex.Pattern.compile("\\bsynchronized\\b");
+        java.util.List<java.nio.file.Path> sources;
+        try (java.util.stream.Stream<java.nio.file.Path> files = java.nio.file.Files.walk(java.nio.file.Path.of("src/main/java"))) {
+            sources = files.filter(p -> p.toString().endsWith(".java")).toList();
+        }
+
+        org.assertj.core.api.Assertions.assertThat(sources).isNotEmpty();
+        for (java.nio.file.Path source : sources) {
+            org.assertj.core.api.Assertions.assertThat(word.matcher(java.nio.file.Files.readString(source)).find())
+                    .as(source.toString()).isFalse();
+        }
+    }
 }
