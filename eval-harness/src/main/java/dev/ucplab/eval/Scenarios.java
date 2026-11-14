@@ -52,10 +52,10 @@ public final class Scenarios {
             Scenario.Driver.PROPOSE_ONCE, SHOP, TWO_SHIRTS, PAY_OK);
 
     /** The create endpoint and the complete endpoint, as the proxy matches them. */
-    static final String CREATE = "/ucp/v1/checkout-sessions";
-    static final String COMPLETE = "/ucp/v1/checkout-sessions/*/complete";
+    static final String CREATE = EndpointPaths.LAB.create();
+    static final String COMPLETE = EndpointPaths.LAB.complete();
     /** Every UCP endpoint the agent calls after discovery. */
-    static final String UCP_ALL = "/ucp/v1/**";
+    static final String UCP_ALL = EndpointPaths.LAB.all();
     /** S8's rule set, as {@code POST /_proxy/rules} takes it: 503 for every method under {@link #UCP_ALL}. */
     static final String S8_OUTAGE_RULES = "{\"seed\":8,\"rules\":[{\"id\":\"outage-503\",\"match\":{\"pathPattern\":\""
             + UCP_ALL + "\"},\"action\":{\"type\":\"fail_before_forward\",\"status\":503}}]}";

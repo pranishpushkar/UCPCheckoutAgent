@@ -115,7 +115,7 @@ final class AgentStack implements AutoCloseable {
         intents = new SqlIntentRepository(db, clock);
         approvals = new SqlApprovalRepository(db);
         SqlRecoveryScan scan = new SqlRecoveryScan(db);
-        ucp = scale.ucp(UCP_AGENT);
+        ucp = scale.ucp(wiring.ucpAgent());
         breakers = new CircuitBreakers(ucp, clock);
         shop = new MerchantEntry(Scenarios.SHOP, merchantUrl, "Lane shop", MerchantStatus.ACTIVE);
         policy = new RuleBasedPolicyEngine(policyConfig,

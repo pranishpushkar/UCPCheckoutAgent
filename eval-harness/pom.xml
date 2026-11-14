@@ -160,5 +160,38 @@
                 </plugins>
             </build>
         </profile>
+        <!-- H1 C7/C8, DESIGN 26.5: the interop rows against the official sample merchant. Third-party code: it runs only here,
+             never in verify, from the clone scripts/interop-fetch.sh makes in target/interop, bound to 127.0.0.1.
+             ./mvnw -B -ntp verify -Pinterop -DskipTests -pl eval-harness -am (after scripts/interop-fetch.sh). -->
+        <profile>
+            <id>interop</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>interop</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
+                                <configuration>
+                                    <executable>${java.home}/bin/java</executable>
+                                    <arguments>
+                                        <argument>-classpath</argument>
+                                        <classpath/>
+                                        <argument>-Dinterop.repo=${project.basedir}/..</argument>
+                                        <argument>dev.ucplab.eval.interop.InteropMain</argument>
+                                    </arguments>
+                                    <classpathScope>runtime</classpathScope>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
     </profiles>
 </project>
