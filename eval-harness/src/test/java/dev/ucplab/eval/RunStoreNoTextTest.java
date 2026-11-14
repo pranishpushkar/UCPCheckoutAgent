@@ -17,6 +17,7 @@ import dev.ucplab.core.merchant.CatalogGateway;
 import dev.ucplab.core.merchant.CatalogPage;
 import dev.ucplab.core.merchant.CatalogProduct;
 import dev.ucplab.core.merchant.CatalogSearch;
+import dev.ucplab.core.merchant.InMemoryMerchantRegistry;
 import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantProfile;
@@ -79,22 +80,7 @@ class RunStoreNoTextTest {
         return all.toString();
     }
 
-    private static final MerchantRegistry REGISTRY = new MerchantRegistry() {
-        @Override
-        public List<MerchantEntry> active() {
-            return List.of(ENTRY);
-        }
-
-        @Override
-        public Optional<MerchantEntry> find(MerchantId id) {
-            return id.equals(SHOP) ? Optional.of(ENTRY) : Optional.empty();
-        }
-
-        @Override
-        public MerchantProfile profile(MerchantId id) {
-            throw new UnsupportedOperationException();
-        }
-    };
+    private static final MerchantRegistry REGISTRY = new InMemoryMerchantRegistry(List.of(ENTRY));
 
     /** A catalog that finds nothing, or throws with a canary in its message. */
     private static CatalogGateway catalog(boolean throwing) {

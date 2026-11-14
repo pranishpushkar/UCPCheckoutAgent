@@ -18,6 +18,7 @@ import dev.ucplab.core.merchant.CatalogPage;
 import dev.ucplab.core.merchant.CatalogProduct;
 import dev.ucplab.core.merchant.CatalogSearch;
 import dev.ucplab.core.merchant.CatalogVariant;
+import dev.ucplab.core.merchant.InMemoryMerchantRegistry;
 import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantProfile;
@@ -52,22 +53,7 @@ final class Stubs {
     }
 
     static MerchantRegistry registry(List<MerchantEntry> active) {
-        return new MerchantRegistry() {
-            @Override
-            public List<MerchantEntry> active() {
-                return active;
-            }
-
-            @Override
-            public Optional<MerchantEntry> find(MerchantId id) {
-                return active.stream().filter(m -> m.id().equals(id)).findFirst();
-            }
-
-            @Override
-            public MerchantProfile profile(MerchantId id) {
-                throw new UnsupportedOperationException();
-            }
-        };
+        return new InMemoryMerchantRegistry(active);
     }
 
     /** A catalog that answers every search with {@code products} and every product call through {@code product}. */

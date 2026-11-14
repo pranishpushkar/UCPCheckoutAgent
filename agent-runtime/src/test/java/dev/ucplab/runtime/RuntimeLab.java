@@ -16,6 +16,7 @@ import dev.ucplab.core.intent.InMemoryIntentRepository;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.PurchaseIntent;
 import dev.ucplab.core.merchant.CheckoutView;
+import dev.ucplab.core.merchant.InMemoryMerchantRegistry;
 import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantProfile;
@@ -132,22 +133,7 @@ final class RuntimeLab implements AutoCloseable {
     }
 
     MerchantRegistry registry() {
-        return new MerchantRegistry() {
-            @Override
-            public List<MerchantEntry> active() {
-                return List.of(shop);
-            }
-
-            @Override
-            public Optional<MerchantEntry> find(MerchantId id) {
-                return id.equals(SHOP) ? Optional.of(shop) : Optional.empty();
-            }
-
-            @Override
-            public MerchantProfile profile(MerchantId id) {
-                throw new UnsupportedOperationException("the tools do not read profiles");
-            }
-        };
+        return new InMemoryMerchantRegistry(List.of(shop));
     }
 
     ToolPorts ports() {

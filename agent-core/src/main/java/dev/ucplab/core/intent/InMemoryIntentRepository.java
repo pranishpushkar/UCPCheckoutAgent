@@ -312,8 +312,11 @@ public final class InMemoryIntentRepository implements IntentRepository {
         }
     }
 
-    /** The owner's intents, in no particular order: the view {@link InMemoryIntentQueries} pages over (T2). */
-    List<PurchaseIntent> ownedBy(UserId owner) {
+    /**
+     * The owner's intents, in no particular order: the view {@link InMemoryIntentQueries} pages over (T2) and
+     * {@link dev.ucplab.core.policy.InMemoryPolicyUsage} counts from.
+     */
+    public List<PurchaseIntent> ownedBy(UserId owner) {
         lock.lock();
         try {
             return intents.values().stream().filter(i -> i.owner().equals(owner)).toList();
