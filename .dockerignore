@@ -4,3 +4,4 @@
 !docker/
 !merchant/target/merchant-*.jar
 !fault-proxy/target/fault-proxy-*.jar
+!agent-service/target/agent-service-*.jar
