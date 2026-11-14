@@ -1,0 +1,46 @@
+{
+  "request": {
+    "body": {
+      "buyer": {
+        "email": "john.doe@example.com"
+      },
+      "line_items": [
+        {
+          "item": {
+            "id": "bouquet_roses"
+          },
+          "quantity": 1
+        }
+      ]
+    },
+    "headers": {
+      "Accept": "application/json",
+      "Content-Type": "application/json",
+      "Idempotency-Key": "<id-92>",
+      "Request-Id": "<id-91>",
+      "UCP-Agent": "profile=\"http://127.0.0.1:<port>/agent\"; version=\"2099-01-01\""
+    },
+    "method": "POST",
+    "path": "/checkout-sessions"
+  },
+  "response": {
+    "body": {
+      "messages": [
+        {
+          "code": "VERSION_UNSUPPORTED",
+          "content": "Version 2099-01-01 is not supported. This merchant implements version 2026-04-08.",
+          "severity": "unrecoverable",
+          "type": "error"
+        }
+      ],
+      "ucp": {
+        "status": "error",
+        "version": "2026-04-08"
+      }
+    },
+    "headers": {
+      "content-type": "application/json"
+    },
+    "status": 422
+  }
+}

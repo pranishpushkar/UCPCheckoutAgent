@@ -1,0 +1,102 @@
+[
+  {
+    "item": "discovery.version",
+    "observed": "ucp.version=2026-04-08, service version=2026-04-08"
+  },
+  {
+    "item": "discovery.endpoint",
+    "observed": "http://127.0.0.1:<port> (path prefix ''); transports=['rest']"
+  },
+  {
+    "item": "discovery.capabilities",
+    "observed": "dev.ucp.shopping.buyer_consent, dev.ucp.shopping.cart, dev.ucp.shopping.checkout, dev.ucp.shopping.discount, dev.ucp.shopping.fulfillment, dev.ucp.shopping.order"
+  },
+  {
+    "item": "discovery.payment_handlers",
+    "observed": "google_pay, mock_payment_handler, shop_pay"
+  },
+  {
+    "item": "create.buyer_email_only",
+    "observed": "status 201, checkout status 'incomplete', id present True"
+  },
+  {
+    "item": "create.no_buyer",
+    "observed": "status 201, checkout status 'incomplete'"
+  },
+  {
+    "item": "create.totals_and_links",
+    "observed": "totals={'subtotal': 3500, 'total': 3500}; continue_url=False; keys=['buyer', 'currency', 'discounts', 'id', 'line_items', 'links', 'status', 'totals', 'ucp']"
+  },
+  {
+    "item": "fulfillment.steps",
+    "observed": "three PUTs: methods, destination, option: ready_for_complete; totals={'subtotal': 3500, 'fulfillment': 0, 'total': 3500}"
+  },
+  {
+    "item": "ready.status_for_buyer_email_only",
+    "observed": "create (buyer email, no fulfillment) -> 'incomplete'"
+  },
+  {
+    "item": "complete.success",
+    "observed": "status 200, checkout status 'completed', order id present; orders table 0 -> 1 rows"
+  },
+  {
+    "item": "ground_truth.orders_table",
+    "observed": "orders(id, data JSON); data keys=['checkout_id', 'currency', 'fulfillment', 'id', 'line_items', 'permalink_url', 'totals', 'ucp']"
+  },
+  {
+    "item": "get.after_completion",
+    "observed": "status 200, checkout status 'completed', order id True"
+  },
+  {
+    "item": "price.update_seen_by_get",
+    "observed": "total before 3500, GET after UPDATE 3500: NOT seen"
+  },
+  {
+    "item": "price.update_seen_by_put",
+    "observed": "PUT after UPDATE total 3600: seen"
+  },
+  {
+    "item": "price.complete_after_update",
+    "observed": "status 200, checkout status 'completed', code []; order data total [{'type': 'subtotal', 'amount': 3600}, {'type': 'fulfillment', 'amount': 0}, {'type': 'total', 'amount': 3600}]"
+  },
+  {
+    "item": "price.complete_without_reread",
+    "observed": "quote total 3500, UPDATE +200, complete: status 200, checkout status 'completed', codes [], order totals [{'type': 'subtotal', 'amount': 3500}, {'type': 'fulfillment', 'amount': 0}, {'type': 'total', 'amount': 3500}]"
+  },
+  {
+    "item": "stock.complete_when_sold_out",
+    "observed": "status 409, body status None, codes ['OUT_OF_STOCK']"
+  },
+  {
+    "item": "payment.fail_token",
+    "observed": "status 402, body status None, codes ['INSUFFICIENT_FUNDS']"
+  },
+  {
+    "item": "payment.after_decline_get",
+    "observed": "status 200, checkout status 'ready_for_complete'"
+  },
+  {
+    "item": "get.unknown_id",
+    "observed": "status 404, body {\"ucp\": {\"version\": \"2026-04-08\", \"status\": \"error\"}, \"messages\": [{\"type\": \"error\", \"code\": \"RESOURCE_NOT_FOUND\", \"content\": \"Checkout session not found\", \"sev"
+  },
+  {
+    "item": "version.agent_2026-04-08",
+    "observed": "create status 201"
+  },
+  {
+    "item": "version.agent_2026-08-25",
+    "observed": "create status 422 (the server speaks 2026-04-08)"
+  },
+  {
+    "item": "version.agent_2099-01-01",
+    "observed": "create status 422, body {\"ucp\": {\"version\": \"2026-04-08\", \"status\": \"error\"}, \"messages\": [{\"type\": \"error\", \"code\": \"VERSION_UNSUPPORTED\", \"content\": \"Version 2099-01-01 is not supported. This merchant implements version 20"
+  },
+  {
+    "item": "agent_profile.fetched_by_server",
+    "observed": "24 GET(s) of our profile URL: ['/agent']"
+  },
+  {
+    "item": "ground_truth.request_logs_rows",
+    "observed": "23"
+  }
+]

@@ -1,0 +1,12 @@
+# What the interop scripts run, pinned (notes/h1/h1-plan.md section 7). scripts/interop-fetch.sh refuses to continue
+# unless the clone's HEAD equals SAMPLES_SHA; the Python dependencies come from the sample's own uv.lock (`uv sync --frozen`).
+# Third-party code runs only through scripts/interop-*.sh, from eval-harness/target/interop, never in ./mvnw verify.
+SAMPLES_REPO=https://github.com/Universal-Commerce-Protocol/samples
+SAMPLES_SHA=52319dffc1e4c521debc68fcc841e48c7a8bf80d
+CONFORMANCE_SHA=0642adfb7930a805bd56f785c6bc61704d6b28a4
+UV_VERSION=0.13.7
+# The sample's server directory has NO committed lock file (only its a2a sample does). docs/interop/uv.lock is ours: made with
+# `uv lock` (uv 0.13.7, 77 packages, every file hashed) in rest/python/server at SAMPLES_SHA on 2026-11-14, and copied in
+# by the fetch script. SERVER_PYPROJECT_SHA256 is the pyproject.toml it was made for: if the sample's dependencies change,
+# the fetch fails until the lock is made again on purpose.
+SERVER_PYPROJECT_SHA256=7e1a8f2ca80f2341288226f37288b14a161932412fa10273900be321cc7470ca
