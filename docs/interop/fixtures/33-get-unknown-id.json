@@ -1,0 +1,32 @@
+{
+  "request": {
+    "body": null,
+    "headers": {
+      "Accept": "application/json",
+      "Request-Id": "<id-84>",
+      "UCP-Agent": "profile=\"http://127.0.0.1:<port>/agent\""
+    },
+    "method": "GET",
+    "path": "/checkout-sessions/does-not-exist"
+  },
+  "response": {
+    "body": {
+      "messages": [
+        {
+          "code": "RESOURCE_NOT_FOUND",
+          "content": "Checkout session not found",
+          "severity": "unrecoverable",
+          "type": "error"
+        }
+      ],
+      "ucp": {
+        "status": "error",
+        "version": "2026-04-08"
+      }
+    },
+    "headers": {
+      "content-type": "application/json"
+    },
+    "status": 404
+  }
+}

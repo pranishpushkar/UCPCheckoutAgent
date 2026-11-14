@@ -9,6 +9,7 @@ import dev.ucplab.core.merchant.SessionId;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 class ApprovalSnapshotTest {
@@ -132,5 +133,43 @@ class ApprovalSnapshotTest {
                 " ", 6696, 6696, s.expiresAt())).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new SnapshotLine("item_123", 0, 2500)).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new SnapshotLine("item_123", 1, -1)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    private static ApprovalSnapshot withShipping(String optionId, String label, long price, String country, long total) {
+        ApprovalSnapshot s = sample();
+        return new ApprovalSnapshot(s.intentId(), s.merchantId(), s.sessionId(), s.lines(), s.currency(), total, total,
+                s.expiresAt(), Optional.of(new FulfillmentSnapshot(optionId, label, price, Optional.of(country))));
+    }
+
+    // Covers: 9.2, D4, I2, I3 (the snapshot's canonical form carries fulfillment{optionId, label, priceMinor,
+    // destinationCountry} when there is one, and nothing about shipping when there is not: the lab hash is unchanged)
+    @Test
+    void theShippingPart_isInTheCanonicalForm_andAbsentWhenThereIsNone() {
+        ApprovalSnapshot shipped = withShipping("std-ship", "Standard Shipping (Free)", 0, "US", 6696);
+
+        assertThat(shipped.canonicalJson()).contains("\"fulfillment\":{\"destinationCountry\":\"US\","
+                + "\"label\":\"Standard Shipping (Free)\",\"optionId\":\"std-ship\",\"priceMinor\":0}");
+        assertThat(sample().canonicalJson()).doesNotContain("fulfillment");
+        assertThat(sample().hash()).isEqualTo("37bd4b1e6bfbdb0fde5ee59cf333a620a3ab239b63d2f574c241a56cadb228fa");
+    }
+
+    // Covers: 9.2, D4, I2, I3, P7 (the hash changes when only the option, its label, its price or the country changes:
+    // an approval of the old snapshot cannot authorise the new one)
+    @Test
+    void theHash_changesWithTheOptionItsPriceOrTheCountry() {
+        ApprovalSnapshot base = withShipping("std-ship", "Standard Shipping (Free)", 0, "US", 6696);
+
+        assertThat(withShipping("exp-ship-us", "Standard Shipping (Free)", 0, "US", 6696).hash()).isNotEqualTo(base.hash());
+        assertThat(withShipping("std-ship", "Standard Shipping (Free)", 1500, "US", 6696).hash()).isNotEqualTo(base.hash());
+        assertThat(withShipping("std-ship", "Express", 0, "US", 6696).hash()).isNotEqualTo(base.hash());
+        assertThat(withShipping("std-ship", "Standard Shipping (Free)", 0, "CA", 6696).hash()).isNotEqualTo(base.hash());
+        assertThat(base.hash()).isNotEqualTo(sample().hash());
+    }
+
+    // Covers: 9.2, D4 (a street address is not a field of the snapshot: only the country is)
+    @Test
+    void theShippingPart_hasNoAddressField() {
+        assertThat(java.util.Arrays.stream(FulfillmentSnapshot.class.getRecordComponents()).map(c -> c.getName()))
+                .containsExactly("optionId", "label", "priceMinor", "destinationCountry");
     }
 }

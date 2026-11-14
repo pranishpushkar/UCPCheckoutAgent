@@ -98,4 +98,31 @@ class CheckoutWireTest {
         assertThat(CheckoutWire.quoteShape("not json")).isEmpty();
         assertThat(CheckoutWire.quoteShape("{\"lines\":[{\"quantity\":1}]}")).isEmpty();
     }
+
+    // Covers: 19, 8.4, H1 C3 (the sample merchant's card-token instrument has the shape the sample accepted in
+    // docs/interop/fixtures/08-happy-complete.json: handler mock_payment_handler, type card, credential type token)
+    @Test
+    void completeBody_ofTheSampleCard_hasTheShapeOfFixture08() {
+        FrozenBody body = CheckoutWire.completeBody(PaymentInstrument.sampleCard("instr_spike", "t0k"));
+
+        assertThat(body.json()).isEqualTo("{\"payment\":{\"instruments\":[{\"credential\":{\"token\":\"t0k\","
+                + "\"type\":\"token\"},\"handler_id\":\"mock_payment_handler\",\"id\":\"instr_spike\",\"type\":\"card\"}]}}");
+        assertThat(CheckoutWire.paymentToken(body)).contains("t0k");
+    }
+
+    // Covers: 8.4, H1 C6b (a stored summary written before fulfillmentOffered existed still parses and reads as not
+    // offered; a lab summary is byte-identical to before; an offered view records it and reads back)
+    @Test
+    void fulfillmentOffered_isRecordedOnlyWhenTrue_andAnOldSummaryReadsFalse() {
+        CheckoutView lab = new CheckoutView(new SessionId("s"), CheckoutStatus.READY_FOR_COMPLETE, "USD",
+                List.of(new LineView("item_123", 1, 2500, Optional.of("li_1"))), 2500, 200, 2700, Optional.empty(), List.of());
+        String plain = CheckoutWire.responseSummary(lab);
+
+        assertThat(plain).doesNotContain("fulfillment");
+        assertThat(CheckoutWire.fulfillmentOffered(plain)).isFalse();
+        assertThat(CheckoutWire.quoteShape(plain)).isPresent();
+        String offered = CheckoutWire.responseSummary(lab.withFulfillmentOffered(true));
+        assertThat(CheckoutWire.fulfillmentOffered(offered)).isTrue();
+        assertThat(CheckoutWire.quoteShape(offered)).isPresent();
+    }
 }

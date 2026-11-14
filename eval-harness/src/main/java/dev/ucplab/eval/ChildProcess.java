@@ -17,7 +17,7 @@ import java.util.concurrent.TimeUnit;
  * binary with this JVM's classpath (m4-plan risk 1, checked by {@code ChildJvmTest}); its stdout and stderr go to one
  * log file, which the run's evidence keeps. Every wait is a poll with a deadline.
  */
-final class ChildProcess implements AutoCloseable {
+public final class ChildProcess implements AutoCloseable {
 
     /**
      * At most this many child JVMs at once across all lanes (m4-plan section 8 said 8). 16, one per lane of eval-full:
@@ -26,7 +26,7 @@ final class ChildProcess implements AutoCloseable {
      */
     static final int MAX_CHILDREN = 16;
     /** SIGKILL is signal 9; a JVM killed by a signal exits with 128 plus the signal. */
-    static final int SIGKILL_EXIT = 137;
+    public static final int SIGKILL_EXIT = 137;
     /** The environment variable that carries the evaluation's canary to a child JVM. */
     static final String CANARY_ENV = "UCPLAB_CANARY";
 
@@ -56,12 +56,19 @@ final class ChildProcess implements AutoCloseable {
     /** As above; {@code probe} makes the child also print the canary's fingerprint ({@link AgentMain#FINGERPRINT}). */
     static ChildProcess startAgent(Path db, URI merchantUrl, TimeScale scale, long seed, Path log, String canary,
                                    boolean probe) throws IOException {
+        return startAgent(db, merchantUrl, scale, seed, log, canary, probe, List.of());
+    }
+
+    /** As above, with {@code extra} arguments for {@link AgentMain} (for example the sample's wiring). */
+    public static ChildProcess startAgent(Path db, URI merchantUrl, TimeScale scale, long seed, Path log, String canary,
+                                   boolean probe, List<String> extra) throws IOException {
         String java = ProcessHandle.current().info().command()
                 .orElseThrow(() -> new IOException("the path of this JVM's java binary is not known"));
         List<String> command = new ArrayList<>(List.of(java, "-XX:+UseSerialGC", "-XX:TieredStopAtLevel=1",
                 "-Xmx128m", "-cp", System.getProperty("java.class.path"), AgentMain.class.getName(),
                 "--db", db.toString(), "--merchant-url", merchantUrl.toString(),
                 "--time-scale", Integer.toString(scale.k()), "--seed", Long.toString(seed)));
+        command.addAll(extra);
         if (probe) {
             command.add("--print-canary-fingerprint");
             command.add("true");
@@ -77,7 +84,7 @@ final class ChildProcess implements AutoCloseable {
         return process.pid();
     }
 
-    boolean alive() {
+    public boolean alive() {
         return process.isAlive();
     }
 
@@ -86,7 +93,7 @@ final class ChildProcess implements AutoCloseable {
      *
      * @throws IOException if the child exits first, or prints nothing within {@code limit}
      */
-    String awaitReady(Duration limit) throws IOException, InterruptedException {
+    public String awaitReady(Duration limit) throws IOException, InterruptedException {
         Instant deadline = Instant.now().plus(limit);
         while (true) {
             Optional<String> ready = log().lines().filter(l -> l.startsWith(AgentMain.READY + " ")).findFirst();
@@ -112,13 +119,13 @@ final class ChildProcess implements AutoCloseable {
      * comes from native code that src.zip does not hold. The S9 and S28 tests assert 137, and it held on macOS and on
      * Linux (CI run https://github.com/pranishpushkar/UCPCheckoutAgent/actions/runs/43337144864, ubuntu-26.04, Temurin 21.0.13).
      */
-    int kill() throws IOException, InterruptedException {
+    public int kill() throws IOException, InterruptedException {
         process.destroyForcibly();
         return awaitExit();
     }
 
     /** Ends the child normally (SIGTERM, so its shutdown hook closes the database) and returns its exit value. */
-    int stop() throws IOException, InterruptedException {
+    public int stop() throws IOException, InterruptedException {
         process.destroy();
         return awaitExit();
     }

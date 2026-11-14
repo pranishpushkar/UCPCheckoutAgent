@@ -122,3 +122,23 @@ The script clones the suite and SDK into `.conformance/` (gitignored) at the pin
 files, sets `item_789` to stock 0 through `/_lab/stock`, and tees the output to `.conformance/results/`. Its exit
 status is the suite's; the summary block at the end has the counts. Beware relative paths: the suite runs from its own
 directory, so an input path must be absolute.
+
+## Re-run at the H1 pin (2026-11-14)
+
+The M2 record above is unchanged. H1 moved the suite to `0642adfb7930a805bd56f785c6bc61704d6b28a4` (the pin in
+`docs/interop/pin.txt`; the SDK tag is still `v2026-04-08-6`) and ran `scripts/run-conformance.sh` again against the lab
+merchant, which was not changed.
+
+| | Suite | Tests | Passed | Failed | Errors | Skipped |
+| --- | --- | --- | --- | --- | --- | --- |
+| M2 | `1201fb78` | 78 | 6 | 5 | 40 | 27 |
+| H1 | `0642adfb` | 83 | 10 | 2 | 25 | 46 |
+
+Passed (10): `test_protocol_envelope_headers`, `test_discovery`, `test_totals_calculation_on_create`,
+`test_create_does_not_adopt_caller_supplied_omit_members`, `test_create_does_not_persist_caller_supplied_omit_members`,
+`test_create_without_omit_members_is_unaffected`, `test_idempotency_create`, `test_shopping_service_advertisement`,
+`test_out_of_stock`, `test_structured_error_messages`. Failed (2): `test_version_negotiation` (O3) and
+`test_product_not_found` (O4), both ours and unchanged. Errors (25): 23 are `KeyError: 'fulfillment'` (S2) and 2 are
+`'NoneType' object has no attribute 'instruments'` (O5, the suite's). The newer suite gates the buyer-consent, discount
+and fulfillment tests on their capabilities, so the three suite-gating failures of M2 are now skips; five tests were
+added (field ownership, envelope headers, shopping service advertisement, AP2, token binding).

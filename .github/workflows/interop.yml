@@ -1,0 +1,53 @@
+# H1 C10 (notes/h1 plan section 7): the interop rows against the official UCP sample merchant, a merchant we did not
+# write. THIRD-PARTY CODE runs here: the pinned clone that scripts/interop-fetch.sh makes (the commit hash and the
+# hash-locked dependencies are in docs/interop/pin.txt and docs/interop/uv.lock), bound to 127.0.0.1, under -Pinterop.
+# No secrets, a read-only token that is not persisted after checkout, a hard timeout. ./mvnw verify never runs any of it (NoInteropInVerifyTest).
+# Every action is pinned by commit SHA (the tag is in the comment): looked up with
+#   gh api repos/<owner>/<repo>/git/matching-refs/tags/<tag>
+# on 2026-11-14. uv is pinned by version (UV_VERSION in docs/interop/pin.txt, 0.13.7), installed by setup-uv.
+name: Interop
+
+on:
+  pull_request:
+    paths:
+      - 'eval-harness/**'
+      - 'agent-core/**'
+      - 'agent-ucp/**'
+      - 'scripts/interop-*'
+      - 'scripts/interop_*'
+      - 'docs/interop/**'
+      - '.github/workflows/interop.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  interop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09        # v5
+        with:
+          persist-credentials: false   # the job's token must not sit in .git/config where the sample's code could read it
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961      # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          # No cache: code that runs in this job could write into ~/.m2, and a saved cache could be restored by ci.yml.
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7      # v10.2.0
+        with:
+          version: '0.13.7'
+          enable-cache: false
+      - name: Fetch the pinned sample (fails unless HEAD is the pinned commit and the dependency lock matches)
+        run: scripts/interop-fetch.sh
+      - name: Interop rows
+        run: ./mvnw -B -ntp -Pinterop -pl eval-harness -am verify
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        if: always()
+        with:
+          name: interop-report
+          path: |
+            eval-harness/target/interop-work/interop-report.txt
+            docs/results/h1-interop-report.*
+          if-no-files-found: ignore

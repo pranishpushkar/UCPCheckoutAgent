@@ -69,6 +69,8 @@ final class ScheduleExecutor {
 
     private final WorkerFactory factory;
     private final boolean spread;
+    /** H1 C6: the merchant runs in fulfillment mode, so every intent goes through the shipping selection. */
+    private boolean fulfillment;
     private final FaultyMerchantModel.Mode mode;
     private final java.util.function.Function<dev.ucplab.core.MutableClock, CrashHarness.Stores> storeFactory;
 
@@ -88,6 +90,12 @@ final class ScheduleExecutor {
      * orchestrator picks each intent's gateway by its merchant, and every fault, price, stock change and crash of a
      * schedule applies to both merchants, so each runs the whole schedule's faults for the slots it holds.
      */
+    static ScheduleExecutor withFulfillment(FaultyMerchantModel.Mode mode) {
+        ScheduleExecutor e = new ScheduleExecutor(DEFAULT_ORCHESTRATOR, mode);
+        e.fulfillment = true;
+        return e;
+    }
+
     static ScheduleExecutor spread(FaultyMerchantModel.Mode mode) {
         return new ScheduleExecutor(DEFAULT_ORCHESTRATOR, mode, Lab::inMemoryStores, true);
     }
@@ -125,6 +133,13 @@ final class ScheduleExecutor {
 
     private final class Execution {
         private final Lab lab = new Lab(OrchestratorConfig.defaults(), mode, storeFactory);
+        {
+            if (fulfillment) {
+                lab.merchant.enableFulfillment();
+                lab.merchantB.enableFulfillment();
+            }
+        }
+
         private final AtomicInteger seq = new AtomicInteger();
         private final ProbeGateway probe = new ProbeGateway(lab.merchant, lab.clock, seq);
         private final Map<Integer, IntentId> slots = new HashMap<>();

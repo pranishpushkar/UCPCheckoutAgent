@@ -4,6 +4,7 @@ import dev.ucplab.core.json.LenientJson;
 import dev.ucplab.core.merchant.Buyer;
 import dev.ucplab.core.merchant.CheckoutStatus;
 import dev.ucplab.core.merchant.CheckoutView;
+import dev.ucplab.core.merchant.FulfillmentView;
 import dev.ucplab.core.merchant.LineView;
 import dev.ucplab.core.merchant.MerchantMessage;
 import dev.ucplab.core.merchant.OrderRef;
@@ -93,11 +94,31 @@ public final class CheckoutParser {
         Objects.requireNonNull(body, "body");
         try {
             Map<String, Object> root = LenientJson.readObject(decode(body));
-            String code = root.get("code") instanceof String s && !s.isBlank() ? clean(s, 64) : "unknown";
-            String content = root.get("content") instanceof String s ? clean(s, MAX_ERROR_CONTENT) : "";
+            // The lab's error body has code and content at the top; a UCP error envelope (the sample merchant's) has them
+            // in its first message. Codes are lower-cased: the sample writes some in upper case (H1 C4).
+            Map<?, ?> first = root.get("messages") instanceof List<?> l && !l.isEmpty() && l.get(0) instanceof Map<?, ?> m
+                    ? m : Map.of();
+            Object rawCode = root.get("code") instanceof String ? root.get("code") : first.get("code");
+            Object rawContent = root.get("content") instanceof String ? root.get("content") : first.get("content");
+            String code = rawCode instanceof String s && !s.isBlank()
+                    ? clean(s, 64).toLowerCase(java.util.Locale.ROOT) : "unknown";
+            String content = rawContent instanceof String s ? clean(s, MAX_ERROR_CONTENT) : "";
             return new ErrorBody(code, content);
         } catch (IllegalArgumentException | CharacterCodingException e) {
             return new ErrorBody("unknown", "");
+        }
+    }
+
+    /** Whether {@code body} is a UCP error envelope: {@code ucp.status} is {@code error} and a message carries a code. */
+    public static boolean isErrorEnvelope(byte[] body) {
+        Objects.requireNonNull(body, "body");
+        try {
+            Map<String, Object> root = LenientJson.readObject(decode(body));
+            return root.get("ucp") instanceof Map<?, ?> ucp && "error".equals(ucp.get("status"))
+                    && root.get("messages") instanceof List<?> l && !l.isEmpty() && l.get(0) instanceof Map<?, ?> m
+                    && m.get("code") instanceof String c && !c.isBlank();
+        } catch (IllegalArgumentException | CharacterCodingException e) {
+            return false;
         }
     }
 
@@ -125,7 +146,8 @@ public final class CheckoutParser {
         Totals totals = totals(root.get("totals"));
         Optional<OrderRef> order = order(root.get("order"));
         return new CheckoutView(id, status, currency, lines, totals.subtotal, totals.tax, totals.total, order,
-                buyer(root.get("buyer")), messages(root.get("messages")));
+                buyer(root.get("buyer")), messages(root.get("messages")), fulfillment(root.get("fulfillment")),
+                totals.fulfillment);
     }
 
     private static List<LineView> lines(Object value) {
@@ -147,7 +169,7 @@ public final class CheckoutParser {
         return out;
     }
 
-    private record Totals(long subtotal, long tax, long total) {}
+    private record Totals(long subtotal, long tax, long total, long fulfillment) {}
 
     private static Totals totals(Object value) {
         if (!(value instanceof List<?> list)) {
@@ -156,6 +178,7 @@ public final class CheckoutParser {
         Long subtotal = null;
         Long tax = null;
         Long total = null;
+        Long fulfillment = null;
         for (Object o : list) {
             if (!(o instanceof Map<?, ?> entry)) {
                 throw new Bad("totals entry shape");
@@ -166,13 +189,100 @@ public final class CheckoutParser {
                 case "subtotal" -> subtotal = once(subtotal, amount, type);
                 case "tax" -> tax = once(tax, amount, type);
                 case "total" -> total = once(total, amount, type);
+                case "fulfillment" -> fulfillment = once(fulfillment, amount, type);
                 default -> { }
             }
         }
         if (total == null) {
             throw new Bad("total missing");
         }
-        return new Totals(subtotal == null ? 0 : subtotal, tax == null ? 0 : tax, total);
+        return new Totals(subtotal == null ? 0 : subtotal, tax == null ? 0 : tax, total, fulfillment == null ? 0 : fulfillment);
+    }
+
+    /**
+     * The fulfillment part, if the merchant offers one: methods, the destinations' ids and countries, groups, options and
+     * their prices, and what is selected. The street, locality, region and postal code of an address are never read, so
+     * they cannot reach a view, an event or a log line (D4). A part that is not an object, a method without an id and a
+     * type, an option without an id, a destination without an id, are left out.
+     */
+    private static Optional<FulfillmentView> fulfillment(Object value) {
+        if (!(value instanceof Map<?, ?> f) || !(f.get("methods") instanceof List<?> methods)) {
+            return Optional.empty();
+        }
+        List<FulfillmentView.Method> out = new ArrayList<>();
+        for (Object mo : methods) {
+            if (mo instanceof Map<?, ?> m && m.get("id") instanceof String id && !id.isBlank()
+                    && m.get("type") instanceof String type && !type.isBlank()) {
+                out.add(new FulfillmentView.Method(clean(id, 64), clean(type, 32), strings(m.get("line_item_ids")),
+                        destinations(m.get("destinations")), optionalId(m.get("selected_destination_id")),
+                        groups(m.get("groups"))));
+            }
+        }
+        return Optional.of(new FulfillmentView(out));
+    }
+
+    private static List<FulfillmentView.Destination> destinations(Object value) {
+        List<FulfillmentView.Destination> out = new ArrayList<>();
+        if (value instanceof List<?> list) {
+            for (Object o : list) {
+                if (o instanceof Map<?, ?> d && d.get("id") instanceof String id && !id.isBlank()) {
+                    out.add(new FulfillmentView.Destination(clean(id, 64), d.get("address_country") instanceof String c
+                            && !c.isBlank() ? Optional.of(clean(c, 2).toUpperCase(java.util.Locale.ROOT)) : Optional.empty()));
+                }
+            }
+        }
+        return out;
+    }
+
+    private static List<FulfillmentView.Group> groups(Object value) {
+        List<FulfillmentView.Group> out = new ArrayList<>();
+        if (value instanceof List<?> list) {
+            for (Object o : list) {
+                if (o instanceof Map<?, ?> g && g.get("id") instanceof String id && !id.isBlank()) {
+                    out.add(new FulfillmentView.Group(clean(id, 64), strings(g.get("line_item_ids")), options(g.get("options")),
+                            optionalId(g.get("selected_option_id"))));
+                }
+            }
+        }
+        return out;
+    }
+
+    private static List<FulfillmentView.Option> options(Object value) {
+        List<FulfillmentView.Option> out = new ArrayList<>();
+        if (value instanceof List<?> list) {
+            for (Object o : list) {
+                if (o instanceof Map<?, ?> opt && opt.get("id") instanceof String id && !id.isBlank()) {
+                    long price = 0;
+                    if (opt.get("totals") instanceof List<?> totals) {
+                        for (Object t : totals) {
+                            if (t instanceof Map<?, ?> e && "total".equals(e.get("type"))
+                                    && e.get("amount") instanceof Number n && n.longValue() >= 0) {
+                                price = n.longValue();
+                            }
+                        }
+                    }
+                    out.add(new FulfillmentView.Option(clean(id, 64),
+                            opt.get("title") instanceof String t ? clean(t, 100) : "", price));
+                }
+            }
+        }
+        return out;
+    }
+
+    private static List<String> strings(Object value) {
+        List<String> out = new ArrayList<>();
+        if (value instanceof List<?> list) {
+            for (Object o : list) {
+                if (o instanceof String s && !s.isBlank()) {
+                    out.add(clean(s, 64));
+                }
+            }
+        }
+        return out;
+    }
+
+    private static Optional<String> optionalId(Object value) {
+        return value instanceof String s && !s.isBlank() ? Optional.of(clean(s, 64)) : Optional.empty();
     }
 
     private static long once(Long current, long amount, String type) {

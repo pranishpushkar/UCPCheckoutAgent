@@ -10,6 +10,7 @@ import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantProfile;
 import dev.ucplab.core.merchant.MerchantRegistry;
 import dev.ucplab.core.merchant.MerchantStatus;
+import dev.ucplab.core.merchant.MerchantInstruments;
 import dev.ucplab.core.merchant.PaymentInstrument;
 import dev.ucplab.core.orchestrator.DefaultOrchestrator;
 import dev.ucplab.core.policy.PolicyConfig;
@@ -57,19 +58,19 @@ import java.util.concurrent.TimeUnit;
  * ({@link #racer}). An agent row (M5) also gets the ports the agent runtime's tools call ({@link #toolPorts}): a
  * one-entry registry, a catalog client on the lane's proxy, and this stack's orchestrator.
  */
-final class AgentStack implements AutoCloseable {
+public final class AgentStack implements AutoCloseable {
 
     static final String UCP_AGENT = "profile=\"https://eval.ucplab.dev/agent\"";
     private static final int POOL_SIZE = 4;
     /** A decision that holds the intent only for its own write (see the constructor). */
-    static final Duration DECISION_ONLY = Duration.ofMillis(1);
+    public static final Duration DECISION_ONLY = Duration.ofMillis(1);
 
-    final Clock clock = Clock.systemUTC();
+    public final Clock clock = Clock.systemUTC();
     final Database db;
-    final SqlIntentRepository intents;
+    public final SqlIntentRepository intents;
     final SqlApprovalRepository approvals;
-    final DefaultApprovalService approvalService;
-    final DefaultOrchestrator orchestrator;
+    public final DefaultApprovalService approvalService;
+    public final DefaultOrchestrator orchestrator;
     final RecoveryWorker worker;
     final RecoveryLoop loop;
     private final ScheduledExecutorService scheduler;
@@ -83,6 +84,7 @@ final class AgentStack implements AutoCloseable {
     private final ApprovalTokens tokens;
     private final String canaryFingerprint;
     private final PaymentInstrument instrument;
+    private final MerchantWiring wiring;
     private final CatalogClient catalog;
     /** One per stack, shared by the gateway and the catalog client (8.3, 19). */
     private final CircuitBreakers breakers;
@@ -99,6 +101,13 @@ final class AgentStack implements AutoCloseable {
      */
     AgentStack(URI merchantUrl, Path dbFile, TimeScale scale, long seed, IdGenerator ids, String paymentToken,
                Duration approvalLease, String canary) {
+        this(merchantUrl, dbFile, scale, seed, ids, paymentToken, approvalLease, canary, MerchantWiring.LAB);
+    }
+
+    /** @param wiring the merchant's handler, versions, shipping policy and instrument; the handler check of 8.5 runs here */
+    public AgentStack(URI merchantUrl, Path dbFile, TimeScale scale, long seed, IdGenerator ids, String paymentToken,
+               Duration approvalLease, String canary, MerchantWiring wiring) {
+        this.wiring = wiring;
         this.dbFile = dbFile;
         this.scale = scale;
         this.seed = seed;
@@ -106,7 +115,7 @@ final class AgentStack implements AutoCloseable {
         intents = new SqlIntentRepository(db, clock);
         approvals = new SqlApprovalRepository(db);
         SqlRecoveryScan scan = new SqlRecoveryScan(db);
-        ucp = scale.ucp(UCP_AGENT);
+        ucp = scale.ucp(wiring.ucpAgent());
         breakers = new CircuitBreakers(ucp, clock);
         shop = new MerchantEntry(Scenarios.SHOP, merchantUrl, "Lane shop", MerchantStatus.ACTIVE);
         policy = new RuleBasedPolicyEngine(policyConfig,
@@ -120,12 +129,12 @@ final class AgentStack implements AutoCloseable {
         tokens = new ApprovalTokens(ApprovalSecret.of(secret));
         canaryFingerprint = fingerprint(Arrays.copyOfRange(secret, random.length, secret.length));
         Arrays.fill(secret, (byte) 0);
-        instrument = PaymentInstrument.mockCard("pi_eval", paymentToken);
+        instrument = wiring.instrument().apply(paymentToken);
+        MerchantInstruments.requireMatchingHandler(Scenarios.SHOP, wiring.handlerId(), instrument);
         approvalService = new DefaultApprovalService(intents, approvals, tokens, clock, ids, workerId, approvalLease,
                 DefaultApprovalService.DEFAULT_TTL, DefaultApprovalService.DEFAULT_MAX_AUTH_AGE);
         orchestrator = orchestrator(intents, approvals, approvalService, ids, workerId, new SplittableRandom(~seed));
-        catalog = new CatalogClient(new UcpHttpGateway(shop, ucp, new JdkHttpTransport(ucp),
-                breakers, clock, Sleeper.THREAD, new SplittableRandom(seed ^ 0x5eed), ids), ucp,
+        catalog = new CatalogClient(gateway(new SplittableRandom(seed ^ 0x5eed), ids), ucp,
                 new JdkHttpTransport(ucp), breakers, clock, Sleeper.THREAD,
                 new SplittableRandom(seed * 7 + 1), ids);
         worker = new RecoveryWorker(intents, scan, orchestrator, clock, Thread::sleep, Runnable::run, scale.recovery(),
@@ -185,10 +194,14 @@ final class AgentStack implements AutoCloseable {
     private DefaultOrchestrator orchestrator(SqlIntentRepository repo, SqlApprovalRepository approvalRepo,
                                              DefaultApprovalService service, IdGenerator ids, String workerId,
                                              SplittableRandom jitter) {
-        UcpHttpGateway gateway = new UcpHttpGateway(shop, ucp, new JdkHttpTransport(ucp),
-                breakers, clock, Sleeper.THREAD, new SplittableRandom(seed), ids);
-        return new DefaultOrchestrator(repo, approvalRepo, service, gateway, policy, new RequotePolicy(policyConfig),
-                instrument, scale.orchestrator(), clock, ids, workerId, jitter);
+        UcpHttpGateway gateway = gateway(new SplittableRandom(seed), ids);
+        return new DefaultOrchestrator(repo, approvalRepo, service, id -> gateway, policy, new RequotePolicy(policyConfig),
+                id -> instrument, wiring.fulfillmentPolicy(), scale.orchestrator(), clock, ids, workerId, jitter);
+    }
+
+    private UcpHttpGateway gateway(SplittableRandom random, IdGenerator ids) {
+        return new UcpHttpGateway(shop, ucp, wiring.transport().apply(new JdkHttpTransport(ucp)), breakers, clock, Sleeper.THREAD, random, ids,
+                java.util.Set.of(), wiring.handlerId(), wiring.ucpVersions());
     }
 
     /**
@@ -198,7 +211,7 @@ final class AgentStack implements AutoCloseable {
      *
      * @param ids an id generator with a prefix of its own (Decision 4)
      */
-    Racer racer(IdGenerator ids, int index) {
+    public Racer racer(IdGenerator ids, int index) {
         Database racerDb = Database.open(dbFile, 1);
         try {
             SqlIntentRepository repo = new SqlIntentRepository(racerDb, clock);
@@ -216,7 +229,7 @@ final class AgentStack implements AutoCloseable {
     }
 
     /** One extra worker of S14. */
-    record Racer(Database db, String workerId, DefaultOrchestrator orchestrator) implements AutoCloseable {
+    public record Racer(Database db, String workerId, DefaultOrchestrator orchestrator) implements AutoCloseable {
         @Override
         public void close() {
             db.close();

@@ -17,3 +17,6 @@
   criteria pass under ./mvnw verify.
 - Never add Co-Authored-By, Claude-Session or "Generated with Claude Code" lines to commits or PRs.
 - Don't add jqwik or any other property-testing library. Property tests follow section 14.1 of docs/DESIGN.md.
+- Third-party merchants and their tooling (the UCP samples, `uv`, Python) run only through `scripts/interop-*` and `-Pinterop`, from a clone pinned to a commit hash recorded in `docs/interop/pin.txt` with a locked, hashed dependency set. They never run in `./mvnw verify`, and no job that runs them has a secret.
+- Nothing in verify needs Python, `uv`, Docker or the network.
+- A secret for a real service (a Shopify key) lives in the Keychain and the environment only: never in a file, an image, an argument or a log; scripts that use one have a `--dry-run` that shows every call with the secret replaced.

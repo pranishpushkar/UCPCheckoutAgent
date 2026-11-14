@@ -41,9 +41,14 @@ public enum KillPoint {
 
     /** The rules that hold a run at this point. */
     public RuleSet rules(TimeScale t, int run) {
+        return rules(t, run, EndpointPaths.LAB);
+    }
+
+    /** The rules for a merchant whose endpoint paths are {@code paths} (the lab's, or the sample's). */
+    public RuleSet rules(TimeScale t, int run, EndpointPaths paths) {
         Duration tc = t.completeTimeout();
         Duration pollMax = t.orchestrator().pollMax();
-        Match complete = Match.of("POST", Scenarios.COMPLETE).withNth(1);
+        Match complete = Match.of("POST", paths.complete()).withNth(1);
         List<Rule> rules = switch (this) {
             case K1 -> List.of(new Rule("hold-before-forward", complete,
                     new Action.Delay(tc.multipliedBy(6).dividedBy(5).toMillis())).withTimes(1));
@@ -51,13 +56,13 @@ public enum KillPoint {
                     new Action.ForwardThenDelayResponse(tc.multipliedBy(3).dividedBy(2).toMillis())).withTimes(1));
             case K3 -> List.of(
                     new Rule("drop-complete", complete, new Action.ForwardThenDropResponse()).withTimes(1),
-                    new Rule("hold-read", Match.of("GET", SESSION).withNth(1),
+                    new Rule("hold-read", Match.of("GET", paths.session()).withNth(1),
                             new Action.Delay(pollMax.multipliedBy(2).toMillis())).withTimes(1));
             case LATE -> List.of(
                     new Rule(run % 2 == 0 ? "close-complete" : "drop-complete", complete,
                             run % 2 == 0 ? Action.FailBeforeForward.closeConnection()
                                     : new Action.ForwardThenDropResponse()).withTimes(1),
-                    new Rule("reads-503", Match.of("GET", SESSION), Action.FailBeforeForward.status(503)));
+                    new Rule("reads-503", Match.of("GET", paths.session()), Action.FailBeforeForward.status(503)));
         };
         return new RuleSet(run, rules);
     }
@@ -68,8 +73,12 @@ public enum KillPoint {
      * @param now the harness's clock, the same system clock the agent writes {@code uncertain_since} with
      */
     public boolean due(List<LogEntry> log, Optional<PurchaseIntent> intent, TimeScale t, Instant now) {
-        PathPattern completePath = new PathPattern(Scenarios.COMPLETE);
-        PathPattern sessionPath = new PathPattern(SESSION);
+        return due(log, intent, t, now, EndpointPaths.LAB);
+    }
+
+    public boolean due(List<LogEntry> log, Optional<PurchaseIntent> intent, TimeScale t, Instant now, EndpointPaths paths) {
+        PathPattern completePath = new PathPattern(paths.complete());
+        PathPattern sessionPath = new PathPattern(paths.session());
         List<LogEntry> completes = log.stream()
                 .filter(l -> l.method().equals("POST") && completePath.matches(l.path())).toList();
         return switch (this) {

@@ -148,8 +148,23 @@ final class Lab {
         return worker(workerId, gateways, approvals, intents);
     }
 
+    /** {@link #routedWorker(String, java.util.function.Function)} with an instrument chosen by the intent's merchant. */
+    Worker routedWorker(
+            String workerId, java.util.function.Function<MerchantId, MerchantGateway> gateways,
+            java.util.function.Function<MerchantId, PaymentInstrument> instruments) {
+        return worker(workerId, gateways, instruments, approvals, intents);
+    }
+
     private Worker worker(
             String workerId, java.util.function.Function<MerchantId, MerchantGateway> gateways,
+            ApprovalRepository approvalRepository, IntentRepository intentRepository) {
+        PaymentInstrument fixed = payment;    // as before: the instrument at the time the worker is built
+        return worker(workerId, gateways, id -> fixed, approvalRepository, intentRepository);
+    }
+
+    private Worker worker(
+            String workerId, java.util.function.Function<MerchantId, MerchantGateway> gateways,
+            java.util.function.Function<MerchantId, PaymentInstrument> instruments,
             ApprovalRepository approvalRepository, IntentRepository intentRepository) {
         PolicyConfig policyConfig = PolicyConfig.defaults();
         RuleBasedPolicyEngine policy = new RuleBasedPolicyEngine(policyConfig,
@@ -161,7 +176,7 @@ final class Lab {
                 new ApprovalTokens(SECRET), clock, ids, workerId, config.lease(), DefaultApprovalService.DEFAULT_TTL,
                 DefaultApprovalService.DEFAULT_MAX_AUTH_AGE);
         DefaultOrchestrator orchestrator = new DefaultOrchestrator(intentRepository, approvalRepository, approvalService, gateways, policy,
-                new RequotePolicy(policyConfig), payment, config, clock, ids, workerId, new SplittableRandom(42));
+                new RequotePolicy(policyConfig), instruments, config, clock, ids, workerId, new SplittableRandom(42));
         return new Worker(workerId, orchestrator, approvalService);
     }
 

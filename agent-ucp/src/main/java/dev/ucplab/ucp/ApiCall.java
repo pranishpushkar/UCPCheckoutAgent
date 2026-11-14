@@ -10,13 +10,22 @@ import java.util.Optional;
 /**
  * One logical merchant call before it becomes HTTP attempts: the operation, the target, the idempotency key and the
  * frozen body (so every attempt carries the same key and the same bytes, 8.4, I7). {@code bypassGate} is true for
- * reconciliation reads, which skip the circuit breaker (8.3).
+ * reconciliation reads, which skip the circuit breaker (8.3). {@code ucpVersion} is the version negotiated for the merchant
+ * (26.2), sent as {@code version="..."} in {@code UCP-Agent}.
  */
 public record ApiCall(
         AttemptOp op, String method, URI uri, Optional<IdempotencyKey> key, Optional<FrozenBody> body,
-        boolean bypassGate) {
+        boolean bypassGate, Optional<String> ucpVersion) {
+
+    /** A call that names no UCP version in its {@code UCP-Agent}: discovery, where none is negotiated yet. */
+    public ApiCall(
+            AttemptOp op, String method, URI uri, Optional<IdempotencyKey> key, Optional<FrozenBody> body,
+            boolean bypassGate) {
+        this(op, method, uri, key, body, bypassGate, Optional.empty());
+    }
 
     public ApiCall {
+        Objects.requireNonNull(ucpVersion, "ucpVersion");
         Objects.requireNonNull(op, "op");
         Objects.requireNonNull(method, "method");
         Objects.requireNonNull(uri, "uri");

@@ -386,4 +386,106 @@ class MerchantGatesTest {
             pool.shutdownNow();
         }
     }
+
+    // Covers: 20, H1 C2 (a create answered 429 leaves the cached profile in place: the profile did not change, the
+    // merchant is busy; a 422 still drops it)
+    @Test
+    void aCreates429_keepsTheProfile_a422StillDropsIt() {
+        java.util.concurrent.atomic.AtomicInteger status = new java.util.concurrent.atomic.AtomicInteger(429);
+        Transport t = new Transport(call -> call.uri().getPath().equals("/a/.well-known/ucp")
+                ? reply(200, profile("a")) : reply(status.get(), "{}"));
+        UcpHttpGateway g = gateway(ENTRY_A, t);
+
+        g.create(request(), KEY);
+        g.create(request(), KEY);
+        assertThat(t.to("GET", "/a/.well-known/ucp")).as("discoveries after two 429s").hasSize(1);
+        status.set(422);
+        g.create(request(), KEY);
+        g.create(request(), KEY);
+
+        assertThat(t.to("GET", "/a/.well-known/ucp")).as("discoveries after a 422").hasSize(2);
+    }
+
+    // Covers: 8.3, H1 C2 (the gate that refuses says why: the limiter rate_limited, the breaker circuit_open, and
+    // Gates.all the reason of the gate that refused)
+    @Test
+    void gatesSayWhyTheyRefused() {
+        RateLimiter limiter = new RateLimiter(1, 1, clock);
+        CircuitBreaker breaker = new CircuitBreaker(NO_RETRY, clock);
+
+        assertThat(limiter.reason()).isEqualTo("rate_limited");
+        assertThat(breaker.reason()).isEqualTo("circuit_open");
+
+        Gate both = Gates.all(limiter, breaker);
+        assertThat(both.tryAcquire()).isTrue();
+        assertThat(both.tryAcquire()).isFalse();
+        assertThat(both.reason()).isEqualTo("rate_limited");
+        for (int i = 0; i < 5; i++) {
+            breaker.record(new CallOutcome.Uncertain<>("x"));
+        }
+        clock.advance(Duration.ofSeconds(1));
+        assertThat(both.tryAcquire()).isFalse();
+        assertThat(both.reason()).isEqualTo("circuit_open");
+    }
+
+    // Covers: 8.3, H1 C2 (an empty bucket is reported as rate limiting, not as an open circuit; nothing is sent)
+    @Test
+    void anEmptyBucket_isReportedAsRateLimited_notCircuitOpen() {
+        Transport t = new Transport(call -> reply(200, profile("a")));
+        UcpHttpGateway g = gateway(ENTRY_A, t);
+        g.discover(A);
+        while (gates.limiterFor(A).tryAcquire()) {
+            // empty the bucket
+        }
+
+        assertThat(g.create(request(), KEY)).isInstanceOfSatisfying(CallOutcome.NotSent.class,
+                n -> assertThat(n.cause()).contains("rate limited").doesNotContain("circuit"));
+        assertThat(t.calls).filteredOn(c -> c.method().equals("POST")).isEmpty();
+    }
+
+    // Covers: 8.5, 19, H1 C2 (an https endpoint host written without a port means 443; an http one without a port is
+    // still refused)
+    @Test
+    void aListedHttpsHostWithoutAPort_means443_httpWithoutAPortIsRefused() {
+        String elsewhere = fixture("discovery").replace("127.0.0.1:8081/ucp/v1", "api.shop.example/ucp/v1")
+                .replace("http://api.shop.example", "https://api.shop.example");
+        Transport t = new Transport(call -> call.uri().getPath().equals("/.well-known/ucp")
+                ? reply(200, elsewhere) : reply(201, fixture("create_incomplete_no_buyer")));
+        MerchantEntry https = new MerchantEntry(A, URI.create("https://shop.example"), "A", MerchantStatus.ACTIVE);
+        UcpHttpGateway g = new UcpHttpGateway(https, NO_RETRY, t, gates, clock, d -> { }, new SplittableRandom(1),
+                new SequentialIdGenerator("r"), Set.of("API.shop.example"));
+
+        assertThat(g.create(request(), KEY)).isInstanceOf(CallOutcome.Ok.class);
+
+        MerchantEntry http = new MerchantEntry(A, URI.create("http://shop.example"), "A", MerchantStatus.ACTIVE);
+        assertThatThrownBy(() -> new UcpHttpGateway(http, NO_RETRY, t, gates, clock, d -> { }, new SplittableRandom(1),
+                new SequentialIdGenerator("r"), Set.of("api.shop.example"))).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("host:port");
+    }
+
+    // Covers: 19, H1 C3 (the handler a merchant's profile must list is the one named for that merchant: a gateway for a
+    // merchant paid through mock_payment_handler accepts a profile that lists it, and fails handler_missing, with no
+    // create sent, on the lab profile that lists only mock_pay_1; the lab default still wants mock_pay_1)
+    @Test
+    void theRequiredPaymentHandler_isPerMerchant() {
+        String sample = fixture("discovery").replace("mock_pay_1", "mock_payment_handler");
+        Transport sampleProfile = new Transport(call -> call.uri().getPath().equals("/.well-known/ucp")
+                ? reply(200, sample) : reply(201, fixture("create_incomplete_no_buyer")));
+        Transport labProfile = new Transport(call -> reply(200, fixture("discovery")));
+        MerchantEntry shop = new MerchantEntry(A, URI.create("http://127.0.0.1:8081"), "A", MerchantStatus.ACTIVE);
+        UcpHttpGateway forSample = new UcpHttpGateway(shop, NO_RETRY, sampleProfile, gates, clock, d -> { },
+                new SplittableRandom(1), new SequentialIdGenerator("r"), Set.of(), "mock_payment_handler");
+        UcpHttpGateway forSampleAtLab = new UcpHttpGateway(shop, NO_RETRY, labProfile, gates, clock, d -> { },
+                new SplittableRandom(1), new SequentialIdGenerator("r"), Set.of(), "mock_payment_handler");
+        UcpHttpGateway labDefaultAtSample = new UcpHttpGateway(shop, NO_RETRY, sampleProfile, gates, clock, d -> { },
+                new SplittableRandom(1), new SequentialIdGenerator("r"));
+
+        assertThat(forSample.create(request(), KEY)).isInstanceOf(CallOutcome.Ok.class);
+        assertThatThrownBy(() -> forSampleAtLab.discover(A)).isInstanceOf(DiscoveryFailedException.class)
+                .hasMessageContaining(UcpHttpGateway.HANDLER_MISSING);
+        assertThat(forSampleAtLab.create(request(), KEY)).isInstanceOf(CallOutcome.NotSent.class);
+        assertThat(labProfile.calls).filteredOn(c -> c.method().equals("POST")).isEmpty();
+        assertThatThrownBy(() -> labDefaultAtSample.discover(A)).isInstanceOf(DiscoveryFailedException.class)
+                .hasMessageContaining(UcpHttpGateway.HANDLER_MISSING);
+    }
 }

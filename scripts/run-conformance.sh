@@ -11,7 +11,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="$PWD"
 WORK="$REPO/.conformance"
-CONFORMANCE_SHA=1201fb78e85217c5f2df060066ccbb0a1d1dce0b   # main on 2026-11-10 (RFC #520, 2/3)
+CONFORMANCE_SHA=0642adfb7930a805bd56f785c6bc61704d6b28a4   # same pin as docs/interop/pin.txt; the M2 record used 1201fb78 (see docs/conformance.md)
 SDK_TAG=v2026-04-08-6                                       # what the suite's CI checks out beside it
 SECRET="${SIMULATION_SECRET:-lab-simulation-secret}"        # the merchant has no simulation endpoint, see the docs
 

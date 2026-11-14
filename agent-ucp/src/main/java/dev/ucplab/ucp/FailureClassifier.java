@@ -54,6 +54,14 @@ public final class FailureClassifier {
         return new CallOutcome.NotSent<>("circuit breaker open for " + clean(hostPort, 80));
     }
 
+    /** A call a gate refused, by the gate's {@link Gate#reason()}: it never left, so NotSent. */
+    public static CallOutcome<CheckoutView> refused(String reason, String hostPort) {
+        Objects.requireNonNull(reason, "reason");
+        return "rate_limited".equals(reason)
+                ? new CallOutcome.NotSent<>("rate limited for " + clean(Objects.requireNonNull(hostPort, "hostPort"), 80))
+                : circuitOpen(hostPort);
+    }
+
     /** Classifies a failure to get a complete reply. {@code NotSent} only for the whitelist above. */
     public CallOutcome<CheckoutView> classify(AttemptOp op, Throwable failure) {
         Objects.requireNonNull(op, "op");
@@ -99,6 +107,11 @@ public final class FailureClassifier {
         Objects.requireNonNull(reply, "reply");
         int status = reply.status();
         if (status == 400 || status == 401 || status == 403 || status == 404 || status == 409 || status == 422) {
+            return protocolError(reply, Optional.empty());
+        }
+        if (status == 402 && CheckoutParser.isErrorEnvelope(reply.body())) {
+            // A payment refusal in a UCP error envelope (the sample merchant's decline): the merchant answered, so it is
+            // a ProtocolError that is not retried, never Uncertain. A 402 without an envelope stays Uncertain (below).
             return protocolError(reply, Optional.empty());
         }
         if (status == 429 || status == 503) {

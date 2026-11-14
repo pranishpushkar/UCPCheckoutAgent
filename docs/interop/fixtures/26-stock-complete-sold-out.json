@@ -1,0 +1,48 @@
+{
+  "request": {
+    "body": {
+      "payment": {
+        "instruments": [
+          {
+            "credential": {
+              "token": "<token>",
+              "type": "token"
+            },
+            "handler_id": "mock_payment_handler",
+            "id": "instr_spike",
+            "type": "card"
+          }
+        ]
+      }
+    },
+    "headers": {
+      "Accept": "application/json",
+      "Content-Type": "application/json",
+      "Idempotency-Key": "<id-69>",
+      "Request-Id": "<id-68>",
+      "UCP-Agent": "profile=\"http://127.0.0.1:<port>/agent\""
+    },
+    "method": "POST",
+    "path": "/checkout-sessions/<id-59>/complete"
+  },
+  "response": {
+    "body": {
+      "messages": [
+        {
+          "code": "OUT_OF_STOCK",
+          "content": "Item bouquet_roses is out of stock",
+          "severity": "unrecoverable",
+          "type": "error"
+        }
+      ],
+      "ucp": {
+        "status": "error",
+        "version": "2026-04-08"
+      }
+    },
+    "headers": {
+      "content-type": "application/json"
+    },
+    "status": 409
+  }
+}

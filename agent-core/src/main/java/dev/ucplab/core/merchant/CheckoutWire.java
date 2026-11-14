@@ -34,7 +34,26 @@ public final class CheckoutWire {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("line_items", request.lines().stream().map(CheckoutWire::updateLineObject).toList());
         request.buyer().map(CheckoutWire::buyerObject).filter(b -> !b.isEmpty()).ifPresent(b -> m.put("buyer", b));
+        request.fulfillment().ifPresent(sel -> m.put("fulfillment", fulfillmentObject(sel)));
         return CanonicalJson.write(m);
+    }
+
+    private static Map<String, Object> fulfillmentObject(FulfillmentSelection sel) {
+        Map<String, Object> method = new LinkedHashMap<>();
+        method.put("id", sel.methodId());
+        method.put("type", sel.type());
+        method.put("line_item_ids", sel.lineItemIds());
+        sel.destinationId().ifPresent(d -> method.put("selected_destination_id", d));
+        if (!sel.groups().isEmpty()) {
+            method.put("groups", sel.groups().stream().map(g -> {
+                Map<String, Object> group = new LinkedHashMap<>();
+                group.put("id", g.groupId());
+                group.put("line_item_ids", g.lineItemIds());
+                group.put("selected_option_id", g.optionId());
+                return group;
+            }).toList());
+        }
+        return Map.of("methods", List.of(method));
     }
 
     /** The {@code complete} body, built once per approval and frozen (7.4, I7). */
@@ -92,7 +111,107 @@ public final class CheckoutWire {
             return line;
         }).toList());
         view.buyer().map(CheckoutWire::buyerObject).filter(b -> !b.isEmpty()).ifPresent(b -> m.put("buyer", b));
+        if (view.fulfillmentOffered()) {
+            m.put("fulfillment_offered", true);    // only when true, so a summary of the lab path is unchanged
+        }
+        view.fulfillment().ifPresent(f -> {
+            m.put("fulfillment", fulfillmentSummary(f));
+            m.put("fulfillment_minor", view.fulfillmentMinor());
+        });
         return CanonicalJson.write(m);
+    }
+
+    /** Ids, a destination's country, the options with their prices and labels, and what is selected: no address. */
+    private static Map<String, Object> fulfillmentSummary(FulfillmentView f) {
+        return Map.of("methods", f.methods().stream().map(method -> {
+            Map<String, Object> o = new LinkedHashMap<>();
+            o.put("id", method.id());
+            o.put("type", method.type());
+            o.put("line_item_ids", method.lineItemIds());
+            o.put("destinations", method.destinations().stream().map(d -> {
+                Map<String, Object> dest = new LinkedHashMap<>();
+                dest.put("id", d.id());
+                d.country().ifPresent(c -> dest.put("country", c));
+                return dest;
+            }).toList());
+            method.selectedDestinationId().ifPresent(d -> o.put("selected_destination_id", d));
+            o.put("groups", method.groups().stream().map(g -> {
+                Map<String, Object> group = new LinkedHashMap<>();
+                group.put("id", g.id());
+                group.put("line_item_ids", g.lineItemIds());
+                group.put("options", g.options().stream().map(opt -> {
+                    Map<String, Object> option = new LinkedHashMap<>();
+                    option.put("id", opt.id());
+                    option.put("title", opt.title());
+                    option.put("price_minor", opt.priceMinor());
+                    return option;
+                }).toList());
+                g.selectedOptionId().ifPresent(s -> group.put("selected_option_id", s));
+                return group;
+            }).toList());
+            return o;
+        }).toList());
+    }
+
+    /** The fulfillment part of the view a {@link #responseSummary} was made from. Empty if there was none. Never throws. */
+    public static Optional<FulfillmentView> fulfillmentShape(String summaryJson) {
+        Objects.requireNonNull(summaryJson, "summaryJson");
+        try {
+            Map<String, Object> root = CanonicalJson.readObject(summaryJson);
+            if (!(root.get("fulfillment") instanceof Map<?, ?> f) || !(f.get("methods") instanceof List<?> methods)) {
+                return Optional.empty();
+            }
+            List<FulfillmentView.Method> out = new java.util.ArrayList<>();
+            for (Object mo : methods) {
+                if (!(mo instanceof Map<?, ?> m) || !(m.get("id") instanceof String id) || !(m.get("type") instanceof String type)) {
+                    return Optional.empty();
+                }
+                List<FulfillmentView.Destination> destinations = new java.util.ArrayList<>();
+                for (Object d : list(m.get("destinations"))) {
+                    if (d instanceof Map<?, ?> dm && dm.get("id") instanceof String did) {
+                        destinations.add(new FulfillmentView.Destination(did, text(dm, "country")));
+                    }
+                }
+                List<FulfillmentView.Group> groups = new java.util.ArrayList<>();
+                for (Object g : list(m.get("groups"))) {
+                    if (g instanceof Map<?, ?> gm && gm.get("id") instanceof String gid) {
+                        List<FulfillmentView.Option> options = new java.util.ArrayList<>();
+                        for (Object op : list(gm.get("options"))) {
+                            if (op instanceof Map<?, ?> om && om.get("id") instanceof String oid
+                                    && om.get("price_minor") instanceof Long price) {
+                                options.add(new FulfillmentView.Option(oid,
+                                        om.get("title") instanceof String t ? t : "", price));
+                            }
+                        }
+                        groups.add(new FulfillmentView.Group(gid, strings(gm.get("line_item_ids")), options,
+                                text(gm, "selected_option_id")));
+                    }
+                }
+                out.add(new FulfillmentView.Method(id, type, strings(m.get("line_item_ids")), destinations,
+                        text(m, "selected_destination_id"), groups));
+            }
+            return Optional.of(new FulfillmentView(out));
+        } catch (IllegalArgumentException e) {
+            return Optional.empty();
+        }
+    }
+
+    /** Whether the view a {@link #responseSummary} was made from said the merchant offers fulfillment. Absent: false. */
+    public static boolean fulfillmentOffered(String summaryJson) {
+        Objects.requireNonNull(summaryJson, "summaryJson");
+        try {
+            return Boolean.TRUE.equals(CanonicalJson.readObject(summaryJson).get("fulfillment_offered"));
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+    }
+
+    private static List<?> list(Object value) {
+        return value instanceof List<?> l ? l : List.of();
+    }
+
+    private static List<String> strings(Object value) {
+        return list(value).stream().filter(String.class::isInstance).map(String.class::cast).toList();
     }
 
     /**
@@ -117,7 +236,7 @@ public final class CheckoutWire {
             }
             Optional<Buyer> buyer = root.get("buyer") instanceof Map<?, ?> b ? Optional.of(new Buyer(text(b, "email"),
                     text(b, "first_name"), text(b, "last_name"), text(b, "phone_number"))) : Optional.empty();
-            return Optional.of(new QuoteShape(lines, buyer));
+            return Optional.of(new QuoteShape(lines, buyer, fulfillmentShape(summaryJson)));
         } catch (IllegalArgumentException | ArithmeticException e) {
             return Optional.empty();
         }

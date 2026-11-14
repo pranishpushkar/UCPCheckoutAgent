@@ -223,6 +223,26 @@ class RuleBasedPolicyEngineTest {
     private record Window(UserId user, Instant from, Instant to) {
     }
 
+    // Covers: P3, P2, 9.1, 9.2, H1 D4 (shipping counts: a quote whose lines fit under the daily cap but whose total with
+    // the chosen option's price takes the day over it is refused by P3; the same lines with free shipping are allowed.
+    // The total the engine compares is the merchant's total, which includes the fulfillment line; the daily spend is the
+    // sum of the approved snapshots' totals, which include it too)
+    @Test
+    void shippingCountsAgainstTheDailyCap() {
+        usage.spend.put(ALICE, 44_000L);
+        var line = new dev.ucplab.core.merchant.LineView("item_123", 2, 2500, Optional.of("li_1"));
+        var free = new dev.ucplab.core.merchant.CheckoutView(new dev.ucplab.core.merchant.SessionId("s"),
+                dev.ucplab.core.merchant.CheckoutStatus.READY_FOR_COMPLETE, "USD", List.of(line), 5000, 400, 5400,
+                Optional.empty(), Optional.empty(), List.of());
+        var shipped = new dev.ucplab.core.merchant.CheckoutView(new dev.ucplab.core.merchant.SessionId("s"),
+                dev.ucplab.core.merchant.CheckoutStatus.READY_FOR_COMPLETE, "USD", List.of(line), 5000, 400, 5400 + 1500,
+                Optional.empty(), Optional.empty(), List.of(), Optional.empty(), 1500);
+
+        assertThat(engine.evaluateQuote(ALICE, free).allowed()).isTrue();
+        assertThat(engine.evaluateQuote(ALICE, shipped).allowed()).isFalse();
+        assertThat(engine.evaluateQuote(ALICE, shipped).ruleId().orElseThrow().name()).isEqualTo("P3");
+    }
+
     private static final class FakeUsage implements PolicyUsage {
         final Map<UserId, Long> spend = new HashMap<>();
         final Map<UserId, Integer> proposals = new HashMap<>();

@@ -12,10 +12,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * What the user approves. Contract 9.2, invariants I2 and I3. Built from the merchant's
- * response, never from model output.
+ * response, never from model output. {@code fulfillment} is the chosen shipping option, when the merchant needed one
+ * (D4); the hash covers it, and the street address is never part of it.
  */
 public record ApprovalSnapshot(
         IntentId intentId,
@@ -25,7 +27,15 @@ public record ApprovalSnapshot(
         String currency,
         long totalMinor,
         long maxTotalMinor,
-        Instant expiresAt) {
+        Instant expiresAt,
+        Optional<FulfillmentSnapshot> fulfillment) {
+
+    /** A snapshot with no shipping part: the lab merchant, and any merchant that needs none. */
+    public ApprovalSnapshot(
+            IntentId intentId, MerchantId merchantId, SessionId sessionId, List<SnapshotLine> lines, String currency,
+            long totalMinor, long maxTotalMinor, Instant expiresAt) {
+        this(intentId, merchantId, sessionId, lines, currency, totalMinor, maxTotalMinor, expiresAt, Optional.empty());
+    }
 
     private static final Comparator<SnapshotLine> LINE_ORDER =
             Comparator.comparing(SnapshotLine::itemId)
@@ -39,6 +49,7 @@ public record ApprovalSnapshot(
         Objects.requireNonNull(lines, "lines");
         Objects.requireNonNull(currency, "currency");
         Objects.requireNonNull(expiresAt, "expiresAt");
+        Objects.requireNonNull(fulfillment, "fulfillment");
         lines = List.copyOf(lines);
         if (lines.isEmpty()) {
             throw new IllegalArgumentException("a snapshot needs at least one line");
@@ -69,12 +80,23 @@ public record ApprovalSnapshot(
         m.put("totalMinor", totalMinor);
         m.put("maxTotalMinor", maxTotalMinor);
         m.put("expiresAt", DateTimeFormatter.ISO_INSTANT.format(expiresAt));
+        // Only when there is a shipping part, so a snapshot without one hashes exactly as before (9.2, D4).
+        fulfillment.ifPresent(f -> m.put("fulfillment", fulfillmentJson(f)));
         return CanonicalJson.write(m);
     }
 
     /** {@code snapshotHash = sha256_hex(canonicalJson(snapshot))} (9.2). */
     public String hash() {
         return Sha256.hex(canonicalJson());
+    }
+
+    private static Map<String, Object> fulfillmentJson(FulfillmentSnapshot f) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("optionId", f.optionId());
+        m.put("label", f.label());
+        m.put("priceMinor", f.priceMinor());
+        f.destinationCountry().ifPresent(c -> m.put("destinationCountry", c));
+        return m;
     }
 
     private static Map<String, Object> lineJson(SnapshotLine line) {

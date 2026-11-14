@@ -26,6 +26,8 @@ public final class EventCatalogue {
             Map.entry("complete_resent", Set.of("attempt_id", "resend")),
             Map.entry("reconcile_read", Set.of("outcome", "status")),
             Map.entry("reconcile_wait", Set.of("reason")),
+            Map.entry("fulfillment_selection_needed", Set.of("status")),
+            Map.entry("fulfillment_unsupported", Set.of("reason")),
             Map.entry("escalated", Set.of("attempts")),
             Map.entry("cancel_sent", Set.of("outcome", "attempt")),
             Map.entry("cancel_gave_up", Set.of("attempts")),
