@@ -994,7 +994,7 @@ Only `sub`, `email` and `auth_time` are kept. The ID token itself is not stored.
 1. The console calls `POST /api/intents/{id}/approval`.
 2. `ApprovalService.decide` checks `auth.isRecent(clock, maxApprovalAuthAge)` (T4). If stale, the API returns 401 `reauth_required`; nothing changes.
 3. The console sends the user to `/auth/login?reauth=true&return_to=/intents/{id}`.
-4. After the provider signs the user in again, the new session carries a fresh `auth_time`, and the console retries the approval. The approval token is still valid, because it expires on its own 10-minute clock (9.2).
+4. After the provider signs the user in again, the new session carries a fresh `auth_time`. The console shows the approval card again, and the user presses Approve to send it (24.3); a click made before the sign-in is not carried over. The approval token is still valid if its own 10-minute clock (9.2) has not run out; otherwise the card says it expired.
 
 ### 18.7 Logout, expiry and deletion
 
@@ -1189,7 +1189,7 @@ The console exists to demonstrate the system and record the demo video, not to b
 
 - On load, call `/api/me`. On 401, go to `/auth/login`. Show the signed-in email and a sign-out button.
 - Every line on the approval card comes from the approval `snapshot`, never from the model's chat text (I2). The snapshot has no titles, so a line shows the item id, quantity and unit price; "Other charges (tax)" is the total minus the lines' sum, computed from the snapshot. The card always says that price and stock are not held, and counts down to `expires_at`.
-- On `reauth_required`, go to `/auth/login?reauth=true&return_to=/intents/{id}`, then retry the approval on return.
+- On `reauth_required`, go to `/auth/login?reauth=true&return_to=/intents/{id}`. On return, show the intent and its approval card again and wait: the approval is sent only when the person presses Approve or Reject on the returned page, never by the page on its own.
 - The timeline polls `GET /api/intents/{id}` once a second while the intent is not terminal, and stops when it is.
 - The fault lab toggles map to preset rule sets for `PUT /api/lab/faults`: drop next complete response, merchant returns 503 for 20 s (the service removes the rule after 20 s), and merchant A down. "Change price before complete" is not a proxy rule: it is a one-shot action that raises, through the merchant's `/_lab/price`, the price of the item of the caller's newest intent awaiting approval.
 - The order counter reads `GET /api/lab/orders`, so it shows the merchants' ground truth, not the agent's report. Invariant breaks are shown only when the eval harness has computed them.

@@ -286,7 +286,18 @@ async function pollIntent() {
   }
   const id = currentIntent.id;
   const result = await api("GET", "/api/intents/" + id);
-  if (!result.ok || !currentIntent || currentIntent.id !== id) {
+  if (!currentIntent || currentIntent.id !== id) {
+    return;
+  }
+  if (result.status === 404) {
+    // Not the caller's intent, or no such intent: the API does not say which (T6), and neither does the page.
+    clear($("timeline"));
+    $("timeline-state").textContent = "Intent not found.";
+    setStatus("Intent not found.", true);
+    currentIntent = null;
+    return;
+  }
+  if (!result.ok) {
     return;
   }
   const state = result.data.state;
@@ -321,10 +332,14 @@ const LABELS = {
 function describe(event) {
   const p = event.payload || {};
   if (event.type === "transition") {
+    if (p.event === "PRICE_CHANGED") {
+      return "Price changed: re-quoting";
+    }
     return "Now " + String(p.to || "").replace(/_/g, " ").toLowerCase();
   }
   if (event.type === "approval_decided") {
-    return "Approval " + (p.decision || "decided");
+    // Only the owner can decide an approval (T3), so the decider is always the signed-in person.
+    return p.decision === "approve" ? "Approved by you" : p.decision === "reject" ? "Rejected by you" : "Approval decided";
   }
   if (event.type === "reconcile_read") {
     return "Reconciling: GET " + (p.outcome || "");

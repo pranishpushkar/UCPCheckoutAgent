@@ -182,3 +182,11 @@ searches every layer, config and history for planted canaries, after a positive 
 - **The hourly run limit (P5) counts turns in `agent_run_turn`**, so a person who rehearses a demo more than ten times in
   an hour on one volume is refused with 429 until the hour passes or the volume is recreated.
 
+
+## After acceptance (M6 follow-up, 2026-11-14)
+
+- **Re-authentication waits for a click.** 24.3 [CONTRACT] said the console retries the approval on return from
+  `/auth/login?reauth=true`. It now says the console shows the intent and its approval card again and sends the
+  approval only when the person presses Approve or Reject on the returned page (18.6 changed to match). A click made
+  before the sign-in is not carried over: an approval sent by the page on its own would be weaker consent. Approved by
+  the project owner; `ConsoleStaticTest.decide_isCalledOnlyFromTheApproveAndRejectButtons` holds it.
