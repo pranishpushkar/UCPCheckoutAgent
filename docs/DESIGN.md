@@ -48,7 +48,7 @@ Source: https://ucp.dev/latest/specification/shopping/checkout/rest/ (version 20
 | Endpoints | `POST /checkout-sessions`; `GET` and `PUT /checkout-sessions/{id}`; `POST /checkout-sessions/{id}/complete`; `POST /checkout-sessions/{id}/cancel` |
 | Required headers | `UCP-Agent: profile="<url>/.well-known/ucp"`, `Request-Id`, and `Idempotency-Key` on mutating calls |
 | Idempotency | The server stores the key for at least 24 h. Same key and same body returns the stored result. Same key and a different body returns 409 |
-| Status values | `incomplete`, `ready_for_complete`, `complete_in_progress`, `completed`, `canceled` |
+| Status values | `incomplete`, `requires_escalation` (parsed only, 8.1), `ready_for_complete`, `complete_in_progress`, `completed`, `canceled` |
 | PUT | Full replacement of the checkout. Must not be sent during `complete_in_progress` |
 | Business outcomes | HTTP 200 with `messages[]` of `{type, code, path, content, severity}` |
 | Protocol errors | 400, 401, 403, 409, 429, 503 |
@@ -296,12 +296,15 @@ Any event that is not in this table for the current state is a programming error
 | COMPLETING or RECONCILING | price\_changed, checkout incomplete or observed incomplete | requote\_count has reached the P8 cap | REJECTED | failure\_reason price\_unstable, cancel session. Not ESCALATED: no money has moved and the outcome is known |
 | RECONCILING | observed ready\_for\_complete | quiet period (7.5) not yet elapsed | RECONCILING | poll again; do not resend |
 | QUOTING | an update or GET shows the session completed or complete_in_progress | none | RECONCILING | send nothing new; reconciliation records the order. Defensive: a correct orchestrator should never reach this, but it must never throw here |
+| QUOTING | shipping selection needed | a create or update answer is `incomplete` and offers fulfillment | QUOTING | PUT update (a revision of its own, its own key) that selects the next of method, destination and option, chosen by `FulfillmentPolicy`. Not a re-quote: `requote_count` does not change. Repeated, each built from the previous response, until `ready_for_complete` |
 | QUOTING | create_rejected | none | FAILED\_NOT\_CHARGED | no side effect: the merchant answered a create with every item unavailable (200, `ucp.status` error, no session id), so no session exists and nothing is cancelled. The gateway reports it as `CallOutcome.Rejected` (Appendix B, 8.1) |
 | COMPLETING | protocol\_error | none | RECONCILING | a `ProtocolError` on `complete` never settles the outcome, so it is never FAILED\_NOT\_CHARGED. Reconciliation reads the session and decides |
 
 **A definitive failure answer to `complete` \[CONTRACT\].** When `complete` is answered with `Ok`, the status is neither `completed` nor `complete_in_progress`, and at least one message has type `error`, the merchant has said it did not charge: the intent goes to FAILED\_NOT\_CHARGED through the existing COMPLETING `payment_declined` row (cancel the session), with the first error code as `failure_reason`. The earlier branches still come first: `completed` with an order is COMPLETED, and `incomplete` (a price change or an incomplete checkout) is a re-quote. An `Ok` with no error message and no terminal status still goes to RECONCILING. A response with status `complete_in_progress` always reconciles, whatever its messages.
 
 **Retries live in one layer \[CONTRACT\].** All retries of a create or update happen inside the gateway (8.2: up to 3, so 4 attempts, same key). The orchestrator does not retry QUOTING calls: it makes one call per step, and a final `NotSent`, `Uncertain` or retryable `ProtocolError` from the gateway goes straight to the exhausted row above (QUOTING, retries exhausted, FAILED\_NOT\_CHARGED, reason `quote_retries_exhausted`). The `RETRIES_LEFT` rows for `not_sent` and `uncertain` stay in the table, but the orchestrator's retry budget for QUOTING is 0, so their guard never holds. `propose` makes one create call and does not loop. The I5 bound for QUOTING (7.6, about 26 s: 4 attempts of 5 s plus backoff) stays, because it is the gateway's worst case. `advance` never sleeps.
+
+**The shipping selection \[CONTRACT\].** A merchant that answers a create with `incomplete` and offers fulfillment (`fulfillment.methods`) is driven inside QUOTING by selection updates, one per step, each under its own idempotency key (7.4: the revision counts every update). A `FulfillmentPolicy` chosen by configuration, never by the model (I6), picks the destination and the option (default: the first destination the merchant offers and the cheapest option). Each update is built from the previous response: the line item ids, the method id, the destination id and the group id (8.4). The selection updates are **not re-quotes**: they do not increase `requote_count`, and they can never lead to `price_unstable` (P7, P8). Only a price change seen after the selection is a re-quote, and a re-quote repeats the selection. The existing QUOTING retry rule ends a merchant that never reaches `ready_for_complete` as before. No new state is needed.
 
 ### 7.3 Step function and write-ahead protocol \[CONTRACT\]
 
@@ -424,7 +427,7 @@ The port is in Appendix B. The key idea is that every call returns one of four o
 
 A mutating call can have created or changed state before an invalid answer arrives, so a body the client cannot read never settles an outcome. When in doubt, classify as `Uncertain`. Wrongly calling something `NotSent` is the dangerous mistake. In particular, anything ambiguous on `complete` is `Uncertain`.
 
-The raw 2026-08-25 schema has a sixth checkout status, `requires_escalation`, which `CheckoutStatus` does not model. Under the last row it is `Uncertain` on a mutating call and `ProtocolError` on `get` until the contract adds it.
+The 2026-04-08 and 2026-08-25 schemas have a sixth checkout status, `requires_escalation` (buyer handoff). `CheckoutStatus.REQUIRES_ESCALATION` is parsed only: a view with it is not completable by the agent, a mutating call that returns it is not `Uncertain` but ends as "not completable" with a fixed reason, and there is no new state or behaviour for it until M6c.
 
 ### 8.2 Retry matrix \[CONTRACT\]
 
@@ -464,6 +467,7 @@ One circuit breaker and one rate limiter per merchant (by `MerchantId`, shared b
 - Mutating bodies use canonical JSON (keys sorted by UTF-16 code units, as String.compareTo does and as RFC 8785 specifies; no extra whitespace) so a replay is byte-identical.
 - `complete` carries its payment in `payment.instruments[]` (`id`, `handler_id`, `type`, `credential`), as the 2026-08-25 schema requires. It sends no line items or buyer.
 - An update (full replacement) sends the line item ids from the last `CheckoutView` the intent saw (taken from its last stored response, never fetched) and resends every buyer field of that view (`email`, `first_name`, `last_name`, `phone_number`), because an update replaces the whole session.
+- A shipping-selection update (7.2) is a full replacement like any other: it resends the line items with their ids, the buyer fields, and the fulfillment selection built from the previous response (method id and line item ids; the `selected_destination_id`; the group id with its `selected_option_id`). It never sends an address the agent holds: only ids the merchant offered.
 - Ignore unknown JSON fields. Amounts are integers in minor units.
 - Responses are parsed with a lenient reader in core (`LenientJson`): `null`, decimals and unknown fields are allowed and ignored wherever we do not use them. A field we do use (an amount, a quantity) must still be an integer of the right type, or the body is invalid (8.1). The canonical writer and the hashes (7.4, 9.2) stay strict: `CanonicalJson` refuses `null` and floating point.
 - HTTP uses `java.net.http`, HTTP/1.1 only (no h2c upgrade). The transport refuses to start if the system property `jdk.httpclient.enableAllMethodRetry` is set to true, because the JDK would then re-send a POST on its own, outside the retry matrix of 8.2 and the one-call rule for `complete`. (Without it the JDK may still re-send an idempotent GET by itself, which is harmless for a read.) No Jackson in `agent-ucp`; it arrives with `agent-service`.
@@ -471,9 +475,9 @@ One circuit breaker and one rate limiter per merchant (by `MerchantId`, shared b
 ### 8.5 Gateway binding and discovery \[CONTRACT\]
 
 - One `UcpHttpGateway` per merchant, bound at construction to its base URL. `discover(MerchantId)` throws `IllegalArgumentException` if the id is not the bound merchant.
-- `discover` retries like `get` (8.2) and is cached per gateway. The profile must show version 2026-08-25 and the capability `dev.ucp.shopping.checkout`. If discovery fails or the check fails, no create is sent to that merchant.
+- `discover` retries like `get` (8.2) and is cached per gateway. The profile must show a version the merchant is pinned to and the agent supports (26.2), the capability `dev.ucp.shopping.checkout`, and the payment handler the registry entry names for that merchant (`handler_missing` otherwise). If discovery fails or the check fails, no create is sent to that merchant.
 - The checkout endpoint a profile declares must be on the merchant's base host and port or on a host and port the registry lists for that merchant (`endpoint_hosts`, section 19), with the base URL's scheme. The operator, not the profile, decides which hosts may carry checkout traffic, so a profile cannot point the client at another server. A profile that names any other host fails discovery with `endpoint_not_allowed`.
-- Discovery also confirms the payment handler the agent's instrument uses (`mock_pay_1`; a profile without it fails with `handler_missing`) and refreshes the cached profile on a 4xx of a create (section 20).
+- Discovery also confirms the payment handler the agent's instrument uses for this merchant (`mock_pay_1` for the lab merchants; a profile without it fails with `handler_missing`). The gateway's required handler id and the `handlerId` of the merchant's instrument must be equal, and a mismatch refuses to build the stack. Discovery also refreshes the cached profile on a 4xx of a create (section 20).
 
 ## 9. Policy and approval
 
@@ -494,7 +498,7 @@ Configuration file `policy.yaml`. `PolicyEngine.evaluateProposal(...)` and `eval
 
 ### 9.2 Approval snapshot and token \[CONTRACT\]
 
-`ApprovalSnapshot` fields: `intentId`, `merchantId`, `sessionId`, `lines[{itemId, quantity, unitPriceMinor}]`, `currency`, `totalMinor`, `maxTotalMinor`, `expiresAt`. The snapshot is built from the **merchant's response**, never from model output.
+`ApprovalSnapshot` fields: `intentId`, `merchantId`, `sessionId`, `lines[{itemId, quantity, unitPriceMinor}]`, `fulfillment?{optionId, label, priceMinor, destinationCountry}`, `currency`, `totalMinor`, `maxTotalMinor`, `expiresAt`. The snapshot is built from the **merchant's response**, never from model output. The hash covers every field, so changing the option or its price is a new snapshot and needs a new approval (P7). The destination's street address is never in the snapshot, the approval card or any log. `totalMinor` includes the chosen option's price, and so do the totals that P2, P3 and `maxTotalMinor` compare: shipping counts against the caps.
 
 - `snapshotHash = sha256_hex(canonicalJson(snapshot))`.
 - `approvalToken = base64url(HMAC_SHA256(approvalSecret, approvalId + ':' + intentId + ':' + snapshotHash))`.
@@ -747,6 +751,8 @@ Two modes. **Scripted** uses `ScriptedModel`: deterministic, free, used in CI, 2
 **M4, before the agent runtime.** A scripted run calls `Orchestrator.propose` with the scenario's fixed basket instead of starting an agent run; an automatic approver acts through `ApprovalService`; `RecoveryWorker` drives the intent. The harness runs on real time throughout (an injected virtual clock cannot be compared with time spent on a real socket). Durations may be divided by one time scale k, at most 5, chosen so that every ordering in 7.5 and 7.6 still holds (quiet period ≥ complete timeout, lease ≥ 2 × complete timeout + 5 s, deadline > resends × quiet period, a held response longer than the client timeout, a takeover inside the deadline); the report records k. S5 is reported as two rows, S5a (the approver approves the re-quote) and S5b (the approver declines it). Model calls, tokens, cost and traces read n/a until M5. Evidence is `/_lab/orders`; the merchant's own GET of each order's session, because the orders list carries no line items or currency, so I2 joins the two; the proxy log; the approver's own log; and the persisted intent, attempt and event rows, used only for attribution, the expected terminal state and I4.
 
 **M5.** Agent rows (A-S0, A-S2, A-S4, A-S10, A-S11, A-S12, A-B) start an agent run with a scripted user request; the M4 rows stay orchestrator-direct, because their faults happen after the agent has proposed. Every row is labelled with its mode (`orchestrator-direct`, `agent-scripted`, `agent-live`). Tokens and cost are reported for live rows only; model and tool calls for every agent row.
+
+**Rows against a merchant we did not write (H1).** A second profile runs a subset of the rows below against the official Python sample merchant (pinned commit, docs/interop/pin.txt), behind the same fault proxy, orchestrator-direct (the sample has no catalog capability). The ground truth is the merchant's own record: its `orders` table, read through the harness's `SampleMerchant`; I1 is claimed only where such a record exists, and a row without honest ground truth cannot claim I1. Each row's merchant-specific differences (a price change is seen only by an update, and complete charges the held quote; error codes in upper case) are listed in a differential report, every difference classified `ours`, `theirs`, `choice` or `ambiguity`; an unclassified difference fails the profile. Against the sample, S5 expects COMPLETED at the approved total, because a complete without an update charges the held quote, and a re-quote there comes only from an update. The report records this as `ambiguity`: neither the 2026-04-08 nor the 2026-08-25 text of Complete Checkout says whether a business must re-price at complete (checked at the ucp tags `v2026-04-08`, `9c9d6fce`, and `v2026-08-25`, `87dd4b1f`, 2026-11-14).
 
 ### 13.2 Scenario catalogue \[CONTRACT\]
 
@@ -1023,9 +1029,9 @@ Only `sub`, `email` and `auth_time` are kept. The ID token itself is not stored.
 
 In production the agent talks to many independent merchants, each with its own inventory, prices and rules. The lab models this with several merchant instances.
 
-**Registry.** Merchants are listed in `merchants.yaml` (id, name, URL, status, and optionally `endpoint_hosts`, `lab_url`, `transport: rest` and `completion: agent`) and held in memory; there is no `merchant` table before M7. A merchant is ACTIVE when its file status is `active` and its last discovery check passed; otherwise the registry reports it SUSPENDED with a fixed reason. Only ACTIVE merchants are used for new intents. This replaces the plain allowlist in P1. A SUSPENDED merchant is re-checked on demand, at most every 30 s, by a single caller (one wins a compare-and-set and no lock is held across the network call); every other caller gets the last known status without waiting. A merchant removed from the file while any intent is in flight refuses startup.
+**Registry.** Merchants are listed in `merchants.yaml` (id, name, URL, status, and optionally `endpoint_hosts`, `ucp_versions`, `payment_handler` with the instrument shape (`type`, `credential_type`, `token_ref`: the token itself never in the file), `lab_url`, `transport: rest` and `completion: agent`) and held in memory; there is no `merchant` table before M7. A merchant is ACTIVE when its file status is `active` and its last discovery check passed; otherwise the registry reports it SUSPENDED with a fixed reason. Only ACTIVE merchants are used for new intents. This replaces the plain allowlist in P1. A SUSPENDED merchant is re-checked on demand, at most every 30 s, by a single caller (one wins a compare-and-set and no lock is held across the network call); every other caller gets the last known status without waiting. A merchant removed from the file while any intent is in flight refuses startup.
 
-**Discovery check.** Before a merchant is used for a new intent, fetch `/.well-known/ucp` and confirm: a compatible spec version (2026-08-25), the checkout capability, and the payment handler the agent supports. If any check fails, the merchant is skipped for new intents. In-flight intents keep reconciling against the stored profile.
+**Discovery check.** Before a merchant is used for a new intent, fetch `/.well-known/ucp` and confirm: a compatible spec version (the highest in the merchant's pin that the agent supports and the profile declares, 26.2), the checkout capability, and the payment handler the registry entry names for the merchant. If any check fails, the merchant is skipped for new intents. In-flight intents keep reconciling against the stored profile.
 
 **One intent per merchant \[CONTRACT\].** Every intent belongs to exactly one merchant (I11). A basket that spans merchants becomes one intent per merchant, each with its own quote and approval. There is no cross-merchant atomicity: no distributed transaction exists across independent shops, so a partial outcome (one store completes, another fails) is possible and is reported to the user as such.
 
@@ -1290,8 +1296,9 @@ The recommended real integration for this project is a store you own: for exampl
 
 ### 26.2 Version negotiation \[CONTRACT\]
 
-- The agent declares a set of supported UCP versions (initially only 2026-08-25).
-- The discovery check picks the highest version both sides support and stores it in `merchant.ucp_version`. If there is none, the merchant is skipped.
+- The agent declares a set of supported UCP versions: 2026-08-25 and, after H1, 2026-04-08.
+- The registry pins the versions each merchant may use (`ucp_versions`, default `[2026-08-25]`). The discovery check picks the highest version that is in the pin, in the agent's set, and declared by the merchant's profile, and keeps it with the cached profile (and in `merchant.ucp_version` where that column exists). If there is none, the merchant is skipped (`incompatible_version`). A pin that names a version outside the agent's set refuses to build.
+- Every request carries `UCP-Agent: profile="<url>"; version="<that version>"`. The version sent is the negotiated one and is never newer than the version the merchant's profile declares. A reconciliation read on a cached profile uses the version that profile was negotiated at.
 - Each supported version has its own contract tests. A version is added to the set only when its tests pass.
 - **VERIFY** how UCP itself expresses version negotiation in the profile and headers before implementing this.
 
@@ -1374,7 +1381,7 @@ public record CheckoutView(SessionId id, CheckoutStatus status, String currency,
     Optional<OrderRef> order, List<MerchantMessage> messages) {}
 
 public enum CheckoutStatus {
-  INCOMPLETE, READY_FOR_COMPLETE, COMPLETE_IN_PROGRESS, COMPLETED, CANCELED;
+  INCOMPLETE, REQUIRES_ESCALATION, READY_FOR_COMPLETE, COMPLETE_IN_PROGRESS, COMPLETED, CANCELED;
   public static CheckoutStatus parse(String wire) { /* unknown value -> throws, caller maps to ProtocolError */ }
 }
 
