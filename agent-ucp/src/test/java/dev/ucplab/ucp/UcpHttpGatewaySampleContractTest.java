@@ -75,7 +75,8 @@ class UcpHttpGatewaySampleContractTest extends MerchantGatewayContract {
             case COMPLETE_OUT_OF_STOCK:
                 return prepared(t.on(Route.COMPLETE, reply("26-stock-complete-sold-out")), "<id-59>", "tok");
             case COMPLETE_PRICE_CHANGED:
-                throw unavailable("the sample re-prices without a price_changed answer: fixtures 16 and 21 complete at the new price");
+                throw unavailable("the sample never answers price_changed: after an update it completes at the new price "
+                        + "(fixture 16, 3600); without one it completes at the held price (fixture 21, 3500)");
             case COMPLETE_IN_PROGRESS:
                 throw unavailable("no recording of a complete_in_progress session");
             case GET_UNKNOWN_SESSION:

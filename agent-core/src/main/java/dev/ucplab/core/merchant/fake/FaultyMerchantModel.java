@@ -115,6 +115,7 @@ public final class FaultyMerchantModel implements MerchantGateway {
     private int groupCount = 1;
     private boolean forgetOption;
     private boolean preselect;
+    private boolean escalate;
     private final Map<String, Long> optionPrices = new LinkedHashMap<>(Map.of("std-ship", 0L, "exp-ship-us", 1500L));
     private int seq;
     private long heldSeq;
@@ -177,6 +178,11 @@ public final class FaultyMerchantModel implements MerchantGateway {
     /** Lab control: a create is answered with a method, destination and options already selected (fulfillment mode). */
     public void preselectShipping() {
         withLock(() -> preselect = true);
+    }
+
+    /** Lab control: every create from now on is answered with the status {@code requires_escalation} (8.1, H1 C5). */
+    public void requireEscalation() {
+        withLock(() -> escalate = true);
     }
 
     /** Lab control: the next update that selects an option has the option dropped, once (fulfillment mode). */
@@ -440,7 +446,7 @@ public final class FaultyMerchantModel implements MerchantGateway {
             }
             s.selection = Optional.of(new FulfillmentSelection("method_1", "shipping", lineIds, Optional.of("addr_1"), groups));
         }
-        s.status = readiness(s);
+        s.status = escalate ? CheckoutStatus.REQUIRES_ESCALATION : readiness(s);
         s.quotedShipping = shipping(s);
         sessions.put(s.id, s);
         return ok(201, s, priced.messages);

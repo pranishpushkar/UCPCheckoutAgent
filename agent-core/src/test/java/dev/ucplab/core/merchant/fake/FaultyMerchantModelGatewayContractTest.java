@@ -59,7 +59,8 @@ class FaultyMerchantModelGatewayContractTest extends MerchantGatewayContract {
                 m.enableFulfillment();
                 return Prepared.of(m, TWO_SHIRTS, NO_SESSION, PAY_OK);
             case CREATE_REQUIRES_ESCALATION:
-                throw unavailable("the model has no control that answers a create with requires_escalation");
+                m.requireEscalation();
+                return Prepared.of(m, TWO_SHIRTS, NO_SESSION, PAY_OK);
             case CREATE_ALL_UNAVAILABLE:
                 return Prepared.of(m, new CreateCheckout(List.of(new ProposedLine("no_such_item", 1)),
                         Optional.of("alice@example.com")), NO_SESSION, PAY_OK);
