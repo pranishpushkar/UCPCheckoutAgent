@@ -22,7 +22,7 @@ fails. A mutant that no test notices is a place where the same kind of bug could
   by different operators (keyserver.ubuntu.com and keys.openpgp.org) and agreed; a third party (a Gradle verification keyring in
   sava-software/sava) lists the same key id. **The project does not publish the fingerprint on its own site or GitHub** (pitest.org has none;
   the maintainer's GitHub account has no GPG key uploaded; its release workflow signs with a secret key). So the trust anchor is the keyservers,
-  not the project's own channel. The check was made on 2026-11-14 and is repeated on any upgrade.
+  not the project's own channel. The owner accepted this on the keyservers' word on 2026-11-14, for a test tool that never ships in the product. The check was made on 2026-11-14 and is repeated on any upgrade: **any PIT or plugin upgrade must be signed by key `18CD85CBC5C1DB1684C5E59FA8E3B39F19E1CCE7`, or the owner decides again.**
 - **JUnit 6, stated plainly.** Neither PIT nor the junit5 plugin declares support for JUnit 6. The plugin is built against JUnit Platform 1.9.2
   and its README says it "will automatically work with JUnit platform 1.5.0 to 1.10.0-M1 (and probably above)". The pair works with our
   Jupiter 6.1.3 (the Maven plugin adds `junit-platform-launcher` 6.1.3 itself), shown by every run recorded below. It is a tested combination,
