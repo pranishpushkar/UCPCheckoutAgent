@@ -7,7 +7,7 @@
   for outcomes, no Lombok, no null returns, inject Clock and IdGenerator.
 - agent-core depends on the JDK only. Only agent-adk may import ADK or Gemini SDK types.
 - Never block inside synchronized. Never hold a lock across network I/O.
-- Don't modify merchant/src except the M2 catalog addition; never change the original 46 SelfTest checks.
+- Don't modify merchant/src except the M2 catalog addition and the M6a `--catalog` option; never change the original 46 SelfTest checks.
 - Never log credentials, tokens, Authorization headers or approval tokens.
 - Every test cites the IDs it covers (FR, I, S) in a comment.
 - User identity comes only from AuthContext. Every repository call on intents, approvals
