@@ -38,7 +38,6 @@ public class RunConfiguration {
     static final String MODEL_UNAVAILABLE = "AGENT_MODEL=gemini needs the gemini provider, which is not on the classpath";
     /** One model call may take this long; the run's own wall clock stays 30 s (6.3, m6-plan section 3.2). */
     static final Duration CALL_TIMEOUT = Duration.ofSeconds(10);
-    private static final String UCP_AGENT = StackConfiguration.UCP_AGENT;
 
     /** The model for {@code AGENT_MODEL}; a test may register its own. */
     @Bean
@@ -60,11 +59,10 @@ public class RunConfiguration {
     }
 
     @Bean
-    CatalogClient catalogClient(ServiceProperties properties, UcpHttpGateway merchantGateway, Clock clock,
-                                RandomGenerator random, IdGenerator ids) {
-        UcpConfig ucp = UcpConfig.defaults(UCP_AGENT);
-        return new CatalogClient(merchantGateway, ucp, new JdkHttpTransport(ucp), new CircuitBreakers(ucp, clock),
-                clock, Sleeper.THREAD, random, ids);
+    CatalogClient catalogClient(ServiceProperties properties, UcpHttpGateway merchantGateway, UcpConfig ucp,
+                                CircuitBreakers breakers, Clock clock, RandomGenerator random, IdGenerator ids) {
+        return new CatalogClient(merchantGateway, ucp, new JdkHttpTransport(ucp), breakers, clock, Sleeper.THREAD,
+                random, ids);
     }
 
     @Bean

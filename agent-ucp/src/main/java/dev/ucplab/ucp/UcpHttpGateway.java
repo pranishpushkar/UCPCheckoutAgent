@@ -21,7 +21,9 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
+import java.util.LinkedHashSet;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.random.RandomGenerator;
 
@@ -51,6 +53,11 @@ public final class UcpHttpGateway implements MerchantGateway {
     public static final String SUPPORTED_VERSION = "2026-08-25";
     /** The capability a merchant must offer (19). */
     public static final String CHECKOUT_CAPABILITY = "dev.ucp.shopping.checkout";
+    /** The payment handler the agent's mock instrument uses (Appendix A): a merchant that lacks it cannot be paid (19). */
+    public static final String PAYMENT_HANDLER = "mock_pay_1";
+    /** Discovery failure reasons, fixed texts (8.5). */
+    public static final String ENDPOINT_NOT_ALLOWED = "endpoint_not_allowed";
+    public static final String HANDLER_MISSING = "handler_missing";
     private static final Duration PROFILE_TTL = Duration.ofMinutes(5);
 
     private record Cached(MerchantProfile profile, Instant fetchedAt) {}
@@ -58,6 +65,7 @@ public final class UcpHttpGateway implements MerchantGateway {
     private final MerchantEntry merchant;
     private final URI base;
     private final String hostPort;
+    private final Set<String> allowedHostPorts;
     private final Clock clock;
     private final RetryExecutor executor;
     private final AtomicReference<Cached> cache = new AtomicReference<>();
@@ -65,13 +73,30 @@ public final class UcpHttpGateway implements MerchantGateway {
     public UcpHttpGateway(
             MerchantEntry merchant, UcpConfig config, HttpTransport transport, CircuitBreakers breakers, Clock clock,
             Sleeper sleeper, RandomGenerator random, IdGenerator ids) {
+        this(merchant, config, transport, breakers, clock, sleeper, random, ids, Set.of());
+    }
+
+    /**
+     * @param endpointHosts {@code host:port} strings besides the base URL's that the profile's checkout endpoint may use
+     *     (8.5, {@code endpoint_hosts} of the registry): the operator, not the profile, decides which hosts carry
+     *     checkout traffic
+     */
+    public UcpHttpGateway(
+            MerchantEntry merchant, UcpConfig config, HttpTransport transport, CircuitBreakers breakers, Clock clock,
+            Sleeper sleeper, RandomGenerator random, IdGenerator ids, Set<String> endpointHosts) {
         this.merchant = Objects.requireNonNull(merchant, "merchant");
         Objects.requireNonNull(config, "config");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.base = stripTrailingSlash(merchant.baseUrl());
         this.hostPort = hostPort(base);
+        Set<String> allowed = new LinkedHashSet<>();
+        allowed.add(hostPort);
+        for (String h : Objects.requireNonNull(endpointHosts, "endpointHosts")) {
+            allowed.add(normalizeHostPort(h));
+        }
+        this.allowedHostPorts = Set.copyOf(allowed);
         this.executor = new RetryExecutor(config, Objects.requireNonNull(transport, "transport"),
-                new FailureClassifier(clock), Objects.requireNonNull(breakers, "breakers").forHostPort(hostPort),
+                new FailureClassifier(clock), Objects.requireNonNull(breakers, "breakers").gateFor(merchant.id()),
                 sleeper, random, ids);
     }
 
@@ -128,8 +153,12 @@ public final class UcpHttpGateway implements MerchantGateway {
         if (!p.capabilities().contains(CHECKOUT_CAPABILITY)) {
             return Optional.of("checkout capability missing");
         }
-        if (!hostPort(p.checkoutEndpoint()).equals(hostPort)) {
-            return Optional.of("checkout endpoint is on another host or port");
+        if (!allowedHostPorts.contains(hostPort(p.checkoutEndpoint()))
+                || !base.getScheme().equalsIgnoreCase(p.checkoutEndpoint().getScheme())) {
+            return Optional.of(ENDPOINT_NOT_ALLOWED);
+        }
+        if (!p.paymentHandlers().contains(PAYMENT_HANDLER)) {
+            return Optional.of(HANDLER_MISSING);
         }
         return Optional.empty();
     }
@@ -207,6 +236,11 @@ public final class UcpHttpGateway implements MerchantGateway {
                 + session.map(s -> segment(s.value())).orElse("") + suffix);
         CallOutcome<CheckoutView> outcome = redactor.scrub(executor.execute(
                 new ApiCall(op, method, uri, key, body, bypassGate)));
+        if (newIntent && outcome instanceof CallOutcome.ProtocolError<CheckoutView> e && e.httpStatus() >= 400
+                && e.httpStatus() < 500) {
+            // Section 20: a 4xx of a create may mean the profile changed; the next create fetches a fresh one.
+            cache.set(null);
+        }
         return session.isPresent() ? checkSession(op, session.get(), outcome) : outcome;
     }
 
@@ -238,8 +272,23 @@ public final class UcpHttpGateway implements MerchantGateway {
         return s.endsWith("/") ? URI.create(s.substring(0, s.length() - 1)) : uri;
     }
 
+    /** {@code host:port} in the form {@link #hostPort(URI)} gives, so {@code Host:443} and {@code host:443} compare equal. */
+    private static String normalizeHostPort(String text) {
+        int colon = text.lastIndexOf(':');
+        if (colon <= 0 || colon == text.length() - 1) {
+            throw new IllegalArgumentException("an endpoint host is host:port, not " + text);
+        }
+        try {
+            return text.substring(0, colon).toLowerCase(java.util.Locale.ROOT) + ":"
+                    + Integer.parseInt(text.substring(colon + 1));
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("an endpoint host is host:port, not " + text);
+        }
+    }
+
     private static String hostPort(URI uri) {
-        return uri.getHost() + ":" + (uri.getPort() == -1 ? ("https".equals(uri.getScheme()) ? 443 : 80) : uri.getPort());
+        return uri.getHost().toLowerCase(java.util.Locale.ROOT) + ":"
+                + (uri.getPort() == -1 ? ("https".equals(uri.getScheme()) ? 443 : 80) : uri.getPort());
     }
 
     /** Percent-encodes a path segment: everything except the RFC 3986 unreserved characters. */

@@ -40,11 +40,13 @@ class ProxyCatalogFaultTest extends ContractTestBase {
     @BeforeEach
     void startProxy() throws Exception {
         proxy = new ProxyFixture(merchant.baseUrl());
+        // The sleeper moves the clock too, so a 429's Retry-After that the rate limiter holds has passed when it retries.
+        SleepClock clock = new SleepClock();
         UcpHttpGateway gateway = new UcpHttpGateway(new MerchantEntry(SHOP, proxy.baseUrl(), "Shop",
-                MerchantStatus.ACTIVE), SHORT, new JdkHttpTransport(SHORT), new CircuitBreakers(SHORT, Clock.systemUTC()),
-                Clock.systemUTC(), sleeps::add, new SplittableRandom(5), new SequentialIdGenerator("s"));
+                MerchantStatus.ACTIVE), SHORT, new JdkHttpTransport(SHORT), new CircuitBreakers(SHORT, clock),
+                clock, clock.recordingInto(sleeps), new SplittableRandom(5), new SequentialIdGenerator("s"));
         client = new CatalogClient(gateway, SHORT, new JdkHttpTransport(SHORT),
-                new CircuitBreakers(SHORT, Clock.systemUTC()), Clock.systemUTC(), sleeps::add, new SplittableRandom(5),
+                new CircuitBreakers(SHORT, clock), clock, clock.recordingInto(sleeps), new SplittableRandom(5),
                 new SequentialIdGenerator("c"));
         sleeps.clear();
     }

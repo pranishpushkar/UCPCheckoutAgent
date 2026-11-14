@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import dev.ucplab.core.id.SequentialIdGenerator;
 import dev.ucplab.core.intent.AttemptOp;
 import dev.ucplab.core.merchant.CallOutcome;
+import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.CheckoutView;
 import java.net.ConnectException;
 import java.net.URI;
@@ -160,20 +161,20 @@ class CircuitBreakerTest {
         assertThat(breaker.tryAcquire()).isFalse();
     }
 
-    // Covers: 8.3, decision I (one breaker per host:port: two merchants on localhost with different ports are
-    // independent, and the same host:port always gives the same breaker)
+    // Covers: 8.3, 19 (one breaker per merchant: two merchants are independent, and the same merchant always gets the
+    // same breaker)
     @Test
-    void registry_keepsOneBreakerPerHostAndPort() {
+    void registry_keepsOneBreakerPerMerchant() {
         CircuitBreakers registry = new CircuitBreakers(CONFIG, clock);
 
-        CircuitBreaker a = registry.forHostPort("127.0.0.1:8081");
-        CircuitBreaker b = registry.forHostPort("127.0.0.1:8082");
+        CircuitBreaker a = registry.forMerchant(new MerchantId("shop-1"));
+        CircuitBreaker b = registry.forMerchant(new MerchantId("shop-2"));
         for (int i = 0; i < 5; i++) {
             a.tryAcquire();
             a.record(NOT_SENT);
         }
 
-        assertThat(registry.forHostPort("127.0.0.1:8081")).isSameAs(a);
+        assertThat(registry.forMerchant(new MerchantId("shop-1"))).isSameAs(a);
         assertThat(a.state()).isEqualTo(CircuitBreaker.State.OPEN);
         assertThat(b.state()).isEqualTo(CircuitBreaker.State.CLOSED);
         assertThat(b.tryAcquire()).isTrue();

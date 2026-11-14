@@ -65,9 +65,11 @@ class ProxyFaultContractTest extends ContractTestBase {
     /** A gateway to the proxy, with its own breakers, that records the sleeps it asks for instead of sleeping. */
     @Override
     UcpHttpGateway gateway() {
+        // The sleeper moves the clock too, so a 429's Retry-After that the rate limiter holds has passed when it retries.
+        SleepClock clock = new SleepClock();
         return new UcpHttpGateway(new MerchantEntry(SHOP, proxy.baseUrl(), "Shop", MerchantStatus.ACTIVE), SHORT,
-                new JdkHttpTransport(SHORT), new CircuitBreakers(SHORT, Clock.systemUTC()), Clock.systemUTC(),
-                sleeps::add, new SplittableRandom(5), new SequentialIdGenerator("p"));
+                new JdkHttpTransport(SHORT), new CircuitBreakers(SHORT, clock), clock,
+                clock.recordingInto(sleeps), new SplittableRandom(5), new SequentialIdGenerator("p"));
     }
 
     private static CreateCheckout createRequest() {

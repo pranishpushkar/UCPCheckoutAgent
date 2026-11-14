@@ -84,6 +84,8 @@ final class AgentStack implements AutoCloseable {
     private final String canaryFingerprint;
     private final PaymentInstrument instrument;
     private final CatalogClient catalog;
+    /** One per stack, shared by the gateway and the catalog client (8.3, 19). */
+    private final CircuitBreakers breakers;
 
     /**
      * @param merchantUrl where the agent is pointed: the lane's proxy
@@ -105,6 +107,7 @@ final class AgentStack implements AutoCloseable {
         approvals = new SqlApprovalRepository(db);
         SqlRecoveryScan scan = new SqlRecoveryScan(db);
         ucp = scale.ucp(UCP_AGENT);
+        breakers = new CircuitBreakers(ucp, clock);
         shop = new MerchantEntry(Scenarios.SHOP, merchantUrl, "Lane shop", MerchantStatus.ACTIVE);
         policy = new RuleBasedPolicyEngine(policyConfig,
                 m -> m.equals(Scenarios.SHOP) ? Optional.of(shop) : Optional.empty(), new FreshUserUsage(), clock);
@@ -122,8 +125,8 @@ final class AgentStack implements AutoCloseable {
                 DefaultApprovalService.DEFAULT_TTL, DefaultApprovalService.DEFAULT_MAX_AUTH_AGE);
         orchestrator = orchestrator(intents, approvals, approvalService, ids, workerId, new SplittableRandom(~seed));
         catalog = new CatalogClient(new UcpHttpGateway(shop, ucp, new JdkHttpTransport(ucp),
-                new CircuitBreakers(ucp, clock), clock, Sleeper.THREAD, new SplittableRandom(seed ^ 0x5eed), ids), ucp,
-                new JdkHttpTransport(ucp), new CircuitBreakers(ucp, clock), clock, Sleeper.THREAD,
+                breakers, clock, Sleeper.THREAD, new SplittableRandom(seed ^ 0x5eed), ids), ucp,
+                new JdkHttpTransport(ucp), breakers, clock, Sleeper.THREAD,
                 new SplittableRandom(seed * 7 + 1), ids);
         worker = new RecoveryWorker(intents, scan, orchestrator, clock, Thread::sleep, Runnable::run, scale.recovery(),
                 workerId);
@@ -142,6 +145,11 @@ final class AgentStack implements AutoCloseable {
 
     AgentStack(URI merchantUrl, Path dbFile, TimeScale scale, long seed, IdGenerator ids, String paymentToken) {
         this(merchantUrl, dbFile, scale, seed, ids, paymentToken, scale.orchestrator().lease());
+    }
+
+    /** The stack's admission state of each merchant: a failing catalog opens the breaker checkout uses (8.3). */
+    CircuitBreakers breakers() {
+        return breakers;
     }
 
     String workerId() {
@@ -178,7 +186,7 @@ final class AgentStack implements AutoCloseable {
                                              DefaultApprovalService service, IdGenerator ids, String workerId,
                                              SplittableRandom jitter) {
         UcpHttpGateway gateway = new UcpHttpGateway(shop, ucp, new JdkHttpTransport(ucp),
-                new CircuitBreakers(ucp, clock), clock, Sleeper.THREAD, new SplittableRandom(seed), ids);
+                breakers, clock, Sleeper.THREAD, new SplittableRandom(seed), ids);
         return new DefaultOrchestrator(repo, approvalRepo, service, gateway, policy, new RequotePolicy(policyConfig),
                 instrument, scale.orchestrator(), clock, ids, workerId, jitter);
     }

@@ -164,11 +164,24 @@ public class StackConfiguration {
     }
 
     @Bean
-    UcpHttpGateway merchantGateway(ServiceProperties properties, Clock clock, RandomGenerator random,
-                                   IdGenerator ids) {
-        UcpConfig ucp = UcpConfig.defaults(UCP_AGENT);
-        return new UcpHttpGateway(properties.merchant(), ucp, new JdkHttpTransport(ucp), new CircuitBreakers(ucp, clock),
-                clock, Sleeper.THREAD, random, ids);
+    UcpConfig ucpConfig() {
+        return UcpConfig.defaults(UCP_AGENT);
+    }
+
+    /**
+     * The one admission state of every merchant (8.3, 19): the checkout gateway and the catalog client of a merchant
+     * share its breaker and rate limiter, because they share this instance.
+     */
+    @Bean
+    CircuitBreakers circuitBreakers(UcpConfig ucp, Clock clock) {
+        return new CircuitBreakers(ucp, clock);
+    }
+
+    @Bean
+    UcpHttpGateway merchantGateway(ServiceProperties properties, UcpConfig ucp, CircuitBreakers breakers, Clock clock,
+                                   RandomGenerator random, IdGenerator ids) {
+        return new UcpHttpGateway(properties.merchant(), ucp, new JdkHttpTransport(ucp), breakers, clock,
+                Sleeper.THREAD, random, ids);
     }
 
     @Bean
