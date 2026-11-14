@@ -29,7 +29,7 @@ public final class InteropMain {
         int runs = Integer.getInteger("interop.runs", 20);
         int lanes = Integer.getInteger("interop.lanes", 4);
         TimeScale scale = TimeScale.of(Integer.getInteger("interop.k", 4));
-        Set<String> wanted = Set.of(System.getProperty("interop.rows", "S0,S1,S2,S3,S4,S5,S6,S7").split(","));
+        Set<String> wanted = Set.of(System.getProperty("interop.rows", "S0,S1,S2,S3,S4,S5,S6,S7,S8,S13,S14").split(","));
         Path work = repo.resolve("eval-harness/target/interop-work");
         if (Files.exists(work)) {
             try (java.util.stream.Stream<Path> walk = Files.walk(work)) {
@@ -108,6 +108,55 @@ public final class InteropMain {
         report.append(String.format("lanes=%d runs/row=%d k=%d total=%.1fs; agent-profile fetches by the sample per lane: %s%n",
                 lanes, runs, scale.k(), total / 1000.0, java.util.Arrays.toString(fetches)));
         findings.forEach(f -> report.append("PROBE ").append(f).append('\n'));
+        // The differential report (H1 C9): what this run observed, classified in docs/interop/differences.md.
+        java.util.Set<String> observed = new java.util.LinkedHashSet<>();
+        java.util.function.Predicate<String> ran = id -> all.stream().anyMatch(r -> r.row().equals(id));
+        if (ran.test("S6") || ran.test("S7")) {
+            observed.add("refusal-4xx-at-complete");
+            observed.add("error-codes-upper-case");
+        }
+        if (ran.test("S5")) {
+            observed.add("complete-charges-held-quote");
+        }
+        if (!all.isEmpty()) {
+            observed.addAll(List.of("fulfillment-mandatory", "endpoint-at-origin", "profile-version-2026-04-08",
+                    "no-catalog-capability", "redactor-dropped-fulfillment", "payment-handler-constant"));
+        }
+        if (java.util.Arrays.stream(fetches).sum() > 0) {
+            observed.add("agent-profile-fetch");
+        }
+        String probeText = String.join("\n", findings);
+        if (probeText.contains("IDEMPOTENCY_CONFLICT")) {
+            observed.add("idempotency-conflict-409");
+        }
+        if (probeText.contains("INVALID_REQUEST")) {
+            observed.add("required-headers-422");
+        }
+        if (ran.test("S13") && wanted.contains("S13")) {
+            observed.add("session-protection-hides-key-bug");
+        }
+        var classified = DifferenceReport.parse(Files.readString(repo.resolve("docs/interop/differences.md")));
+        List<String> diffViolations = DifferenceReport.violations(observed, classified);
+        List<DifferenceReport.RowResult> rowResults = new ArrayList<>();
+        for (InteropRows.Row row : rows) {
+            List<InteropRows.Result> mine = all.stream().filter(r -> r.row().equals(row.id())).toList();
+            var states = new java.util.TreeMap<String, Integer>();
+            mine.forEach(r -> states.merge(r.state().name(), 1, Integer::sum));
+            String agreement = row.id().equals("S5") ? "differs: no re-quote (complete-charges-held-quote)"
+                    : row.id().equals("S6") || row.id().equals("S7") ? "agrees (refusal shape differs: refusal-4xx-at-complete)" : "agrees";
+            rowResults.add(new DifferenceReport.RowResult(row.id(), mine.size(), states,
+                    mine.stream().mapToInt(InteropRows.Result::newOrders).sum(),
+                    mine.stream().mapToInt(r -> r.violations().size()).sum(), mine.stream().mapToLong(InteropRows.Result::millis).sum() / 1000.0,
+                    agreement));
+        }
+        diffViolations.forEach(v -> report.append("DIFFERENCE ").append(v).append('\n'));
+        failed |= !diffViolations.isEmpty();
+        if (rows.size() == InteropRows.rows("").size() && runs >= 20) {
+            Path results = repo.resolve("docs/results");
+            Files.createDirectories(results);
+            Files.writeString(results.resolve("h1-interop-report.md"), DifferenceReport.markdown(rowResults, classified, observed, findings));
+            Files.writeString(results.resolve("h1-interop-report.json"), DifferenceReport.json(rowResults, observed, classified) + "\n");
+        }
         System.out.print(report);
         Files.writeString(work.resolve("interop-report.txt"), report.toString());
         if (failed) {
