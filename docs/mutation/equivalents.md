@@ -272,3 +272,134 @@ Format, one block per mutant. **An entry without an `approved:` line is only a p
 - the test that shows it: `OrchestratorOwedCancelMutationTest.probes_areNumbered_andEachAttemptKeepsItsOwnStatus` passes with and without the mutation
 - approved: owner 2026-11-15
 
+## Proposed in H3 P8 (agent-ucp), not yet approved
+
+### 46. dev.ucplab.ucp.UcpHttpGateway.discover RemoveConditionalMutator_EQUAL_ELSE (the `now == null` operand of `failure.isPresent() || now == null`)
+- description: removed conditional - replaced equality check with false
+- why it is equivalent: a refresh that gives no failure has just stored the profile, so `now` is not null; a refresh that fails has `failure` present. The operand is only a guard against another thread clearing the cache (section 20, a 4xx of a create) between the refresh and the read. Justified: an untestable race, not an equivalent in the strict sense: no deterministic test can place that write between two adjacent statements without a hook in production code
+- the test that shows it: `UcpHttpGatewayMutationTest.aStaleProfile_isNeverServedAfterAFailedRefresh_exceptToACallInFlight` passes with and without the mutation (the `failure.isPresent()` operand is killed by it)
+
+### 47. dev.ucplab.ucp.UcpHttpGateway.profileFor RemoveConditionalMutator_EQUAL_ELSE (the same `now == null` operand)
+- description: removed conditional - replaced equality check with false
+- why it is equivalent: as 46: the same guard against the same race, on the path of a call that needs a profile
+- the test that shows it: the same test
+
+### 48. dev.ucplab.ucp.UcpHttpGateway.lambda$negotiate$0 RemoveConditionalMutator_EQUAL_IF (the `SUPPORTED_VERSIONS.contains(v)` operand)
+- description: removed conditional - replaced equality check with true
+- why it is equivalent: the constructor refuses a pinned version the agent does not support, so every element of `ucpVersions` is in `SUPPORTED_VERSIONS`; `ucpVersions.contains(v)` already implies it
+- the test that shows it: `UcpHttpGatewayMutationTest.aProfileVersion_thatIsNotPinned_isIncompatible` (its first operand is killed) and the constructor refusal test pass with and without the mutation
+
+### 49. dev.ucplab.ucp.UcpHttpGateway.normalizeHostPort MathMutator (`text.length() - 1` becomes `+ 1`)
+- description: Replaced integer subtraction with addition
+- why it is equivalent: `host:` (a colon last) is refused by this test with "an endpoint host is host:port"; without the test `Integer.parseInt("")` throws a NumberFormatException, which the catch turns into the very same IllegalArgumentException with the very same message
+- the test that shows it: `UcpHttpGatewayMutationTest.aListedEndpointHost_mustBeHostAndPort_orABareHostForHttps` (the case `host:`) passes with and without the mutation
+
+### 50. dev.ucplab.ucp.UcpHttpGateway.normalizeHostPort RemoveConditionalMutator_EQUAL_ELSE (the `colon == text.length() - 1` operand)
+- description: removed conditional - replaced equality check with false
+- why it is equivalent: as 49: the same input reaches the same exception through `parseInt`
+- the test that shows it: the same test
+
+### 51. dev.ucplab.ucp.UcpHttpGateway.refusalAsAnswer RemoveConditionalMutator_EQUAL_IF (the `session.isEmpty()` operand)
+- description: removed conditional - replaced equality check with true/false (checked by hand: forcing it to false is green, to true is red)
+- why it is equivalent: a `complete` always names its session: `complete(SessionId, ...)` is the only caller with `AttemptOp.COMPLETE` and takes a non-null id, so the guard is defensive. The other operands of the condition are killed
+- the test that shows it: none possible through the public API (`UcpHttpGatewayMutationTest.aDeclineOrAStockRefusalOfComplete_isTheLabsAnswer_withTheLabsCode` passes with and without it)
+
+### 52. dev.ucplab.ucp.UcpHttpGateway.send ConditionalsBoundaryMutator (`e.httpStatus() < 500` becomes `<= 500`)
+- description: changed conditional boundary
+- why it is equivalent: a ProtocolError with status 500 does not exist: the classifier answers every 5xx other than 501, 503 and 429 as Uncertain, and 501 is "unexpected", Uncertain for a create
+- the test that shows it: `UcpHttpGatewayMutationTest.onlyA4xxOtherThan429_makesTheNextCreateReadTheProfileAgain` passes with and without the mutation
+
+### 53. dev.ucplab.ucp.UcpHttpGateway.send RemoveConditionalMutator_ORDER_IF (the `e.httpStatus() >= 400` operand)
+- description: removed conditional - replaced comparison check with true
+- why it is equivalent: a ProtocolError of a create with a status below 400 does not exist: only a get answers an unexpected status as a ProtocolError, and a create is not a get (`newIntent` is true for creates only)
+- the test that shows it: the same test
+
+### 54. dev.ucplab.ucp.FailureClassifier.min ConditionalsBoundaryMutator (`d.compareTo(MAX_RETRY_AFTER) > 0` becomes `>= 0`)
+- description: changed conditional boundary
+- why it is equivalent: at exactly one day the two branches return equal durations (`MAX_RETRY_AFTER` and `d`)
+- the test that shows it: `FailureClassifierMutationTest.aRetryAfterOfExactlyOneDay_isOneDay` passes with and without the mutation
+
+### 55. dev.ucplab.ucp.RetryExecutor.backoff ConditionalsBoundaryMutator (`ceiling < cap` becomes `<=`)
+- description: changed conditional boundary
+- why it is equivalent: at `ceiling == cap` one more doubling gives twice the cap, which the following `Math.min(ceiling, cap)` brings back to the cap; the loop then ends. The result is the same for every retry
+- the test that shows it: `RetryExecutorMutationTest.theBackoffBeforeRetryK_isInitialTimesTwoToTheKMinusOne_upToTheCap` passes with and without the mutation
+
+### 56. dev.ucplab.ucp.RetryExecutor.retryDelay RemoveConditionalMutator_EQUAL_IF (the `op != COMPLETE` operand of the 429/503 case)
+- description: removed conditional - replaced equality check with true
+- why it is equivalent: `FailureClassifier` (final) answers a 429 or a 503 to a `complete` as Uncertain ("http 503 on complete", decision D), so a ProtocolError with that status never reaches this case for a complete; the operand is a second line of defence for the rule "complete is never retried" (I1, I7)
+- the test that shows it: `RetryExecutorMutationTest.aLoneUncertainComplete_isReturnedAsClassified` and `RetryExecutorTest` (complete: one call on 429, 503 and Uncertain) pass with and without it; none possible for the ProtocolError itself, because the classifier cannot be made to produce it
+
+### 57. dev.ucplab.ucp.RetryExecutor.tainted RemoveConditionalMutator_EQUAL_IF (the `!(result instanceof Attempt.Result r)` operand)
+- description: removed conditional - replaced equality check with true/false
+- why it is equivalent: every caller passes an `Attempt.Result`: a `Replied` returns before `tainted` is called (`loop` line 108), so the operand is always false
+- the test that shows it: none possible (the `firstUncertain == null` operand of the same condition is killed by `aTaintedCall_namesTheFirstUncertainAttempt`)
+
+### 58. dev.ucplab.ucp.RetryExecutor.tainted RemoveConditionalMutator_EQUAL_IF (the `last instanceof Uncertain` operand of `attempt == 1 && ...`)
+- description: removed conditional - replaced equality check with true
+- why it is equivalent: with `attempt == 1` and `firstUncertain != null` the one attempt was Uncertain, so the operand is true whenever the first one is
+- the test that shows it: `RetryExecutorMutationTest.aLoneUncertainComplete_isReturnedAsClassified` passes with and without the mutation
+
+### 59. dev.ucplab.ucp.RateLimiter.record ConditionalsBoundaryMutator (`wait.compareTo(MAX_BLOCK) > 0` becomes `>= 0`)
+- description: changed conditional boundary
+- why it is equivalent: at exactly `MAX_BLOCK` the two branches give equal durations
+- the test that shows it: `LimitersMutationTest.theBlock_isCappedAtThirtySeconds_andOnlyA429WithARetryAfterBlocks` passes with and without the mutation
+
+### 60. dev.ucplab.ucp.RateLimiter.tryAcquire BooleanFalseReturnValsMutator (the `return false;` for a blocked bucket)
+- description: replaced boolean return with false
+- why it is equivalent: the line already returns the constant false: the mutated return is the same value
+- the test that shows it: none possible: the bytecode result is identical
+
+### 61. dev.ucplab.ucp.RateLimiter.tryAcquire BooleanFalseReturnValsMutator (the `return false;` for an empty bucket)
+- description: replaced boolean return with false
+- why it is equivalent: as 60
+- the test that shows it: none possible: the bytecode result is identical
+
+### 62. dev.ucplab.ucp.RateLimiter.tryAcquire BooleanTrueReturnValsMutator (the `return true;` after a token was taken)
+- description: replaced boolean return with true
+- why it is equivalent: the line already returns the constant true
+- the test that shows it: none possible: the bytecode result is identical
+
+### 63. dev.ucplab.ucp.CircuitBreaker.tryAcquire BooleanTrueReturnValsMutator (the `return true;` of CLOSED)
+- description: replaced boolean return with true
+- why it is equivalent: the line already returns the constant true
+- the test that shows it: none possible: the bytecode result is identical
+
+### 64. dev.ucplab.ucp.CircuitBreaker.tryAcquire BooleanTrueReturnValsMutator (the `return true;` of a due probe)
+- description: replaced boolean return with true
+- why it is equivalent: the line already returns the constant true
+- the test that shows it: none possible: the bytecode result is identical
+
+### 65. dev.ucplab.ucp.CircuitBreaker.tryAcquire BooleanFalseReturnValsMutator (the `return false;` of an open breaker)
+- description: replaced boolean return with false
+- why it is equivalent: the line already returns the constant false
+- the test that shows it: none possible: the bytecode result is identical
+
+### 66. dev.ucplab.ucp.CircuitBreaker.tryAcquire BooleanFalseReturnValsMutator (the `return false;` of the `default` branch, NO_COVERAGE)
+- description: replaced boolean return with false
+- why it is equivalent: the line already returns the constant false. Also: the `default` branch of a switch over the three-valued `State` enum cannot be reached (all of CLOSED, OPEN and HALF_OPEN have a case). Justified as unreachable defensive code, proposed for the owner to approve or to have the branch removed in a later change
+- the test that shows it: none possible
+
+### 67. dev.ucplab.ucp.CircuitBreaker.tryAcquire BooleanTrueReturnValsMutator (the `return false;` of the `default` branch, NO_COVERAGE)
+- description: replaced boolean return with true
+- why it is equivalent: the `default` branch cannot be reached: `state` is one of the three enum values, each with its own case. Unreachable defensive code (the rule says unreachable code is a finding: it is listed here as one, for the owner to approve or to have the branch removed in a later change)
+- the test that shows it: none possible
+
+### 68. dev.ucplab.ucp.Redactor.changed RemoveConditionalMutator_EQUAL_IF
+- description: removed conditional - replaced equality check with true
+- why it is equivalent: `changed` only decides whether `scrub` returns the same NotSent or Uncertain object or an equal copy of it; outcomes are records with value equality, and nothing in the system compares them by identity
+- the test that shows it: `RedactorMutationTest.aCleanCause_comesBackEqual` passes with and without the mutation
+
+### 69. dev.ucplab.ucp.Redactor.changed BooleanTrueReturnValsMutator
+- description: replaced boolean return with true
+- why it is equivalent: as 68
+- the test that shows it: the same test
+
+### 70. dev.ucplab.ucp.Redactor.scrub RemoveConditionalMutator_EQUAL_IF (the NotSent `changed(...)` test, "always rebuild")
+- description: removed conditional - replaced equality check with true
+- why it is equivalent: as 68: a rebuilt NotSent with the same cause is equal to the original
+- the test that shows it: the same test (the "never rebuild" mutation of the same line is killed by `aNotSentCause_isScrubbed`)
+
+### 71. dev.ucplab.ucp.Redactor.scrub RemoveConditionalMutator_EQUAL_IF (the Uncertain `changed(...)` test, "always rebuild")
+- description: removed conditional - replaced equality check with true
+- why it is equivalent: as 68
+- the test that shows it: the same test (the "never rebuild" mutation is killed by `anUncertainCause_isScrubbed`)
