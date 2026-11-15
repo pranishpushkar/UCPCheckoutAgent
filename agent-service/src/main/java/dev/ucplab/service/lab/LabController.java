@@ -2,11 +2,11 @@ package dev.ucplab.service.lab;
 
 import dev.ucplab.core.identity.AuthContext;
 import dev.ucplab.core.merchant.MerchantId;
-import dev.ucplab.service.config.ConfiguredMerchantRegistry;
-import dev.ucplab.service.config.MerchantSettings;
 import dev.ucplab.service.config.ServiceProperties;
 import dev.ucplab.service.web.ApiException;
 import dev.ucplab.service.web.ErrorCode;
+import dev.ucplab.ucp.registry.ConfiguredMerchantRegistry;
+import dev.ucplab.ucp.registry.MerchantSettings;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;

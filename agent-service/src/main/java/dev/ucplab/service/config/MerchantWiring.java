@@ -4,6 +4,7 @@ import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantInstruments;
 import dev.ucplab.core.merchant.PaymentInstrument;
 import dev.ucplab.ucp.UcpHttpGateway;
+import dev.ucplab.ucp.registry.MerchantSettings;
 import java.util.List;
 import java.util.Set;
 

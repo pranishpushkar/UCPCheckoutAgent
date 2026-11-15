@@ -1,8 +1,8 @@
 package dev.ucplab.service.lab;
 
 import dev.ucplab.core.merchant.MerchantId;
-import dev.ucplab.service.config.MerchantSettings;
 import dev.ucplab.service.config.ServiceProperties;
+import dev.ucplab.ucp.registry.MerchantSettings;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;

@@ -1,5 +1,6 @@
 package dev.ucplab.service.config;
 
+import dev.ucplab.ucp.registry.MerchantSettings;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 

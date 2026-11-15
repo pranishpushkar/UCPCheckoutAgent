@@ -1,4 +1,4 @@
-package dev.ucplab.service.config;
+package dev.ucplab.ucp.registry;
 
 import dev.ucplab.core.merchant.DiscoveryFailedException;
 import dev.ucplab.core.merchant.MerchantEntry;

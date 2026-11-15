@@ -21,6 +21,7 @@ import dev.ucplab.ucp.CircuitBreakers;
 import dev.ucplab.ucp.JdkHttpTransport;
 import dev.ucplab.ucp.Sleeper;
 import dev.ucplab.ucp.UcpConfig;
+import dev.ucplab.ucp.registry.ConfiguredMerchantRegistry;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.LinkedHashMap;

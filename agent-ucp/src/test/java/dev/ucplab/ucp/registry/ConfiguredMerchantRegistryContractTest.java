@@ -1,11 +1,10 @@
-package dev.ucplab.service.config;
+package dev.ucplab.ucp.registry;
 
 import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantProfile;
 import dev.ucplab.core.merchant.MerchantRegistry;
 import dev.ucplab.core.merchant.MerchantRegistryContract;
 import dev.ucplab.core.merchant.MerchantStatus;
-import dev.ucplab.service.FakeClock;
 import dev.ucplab.ucp.UcpHttpGateway;
 import java.lang.reflect.Proxy;
 import java.net.URI;

@@ -34,6 +34,8 @@ import dev.ucplab.ucp.JdkHttpTransport;
 import dev.ucplab.ucp.Sleeper;
 import dev.ucplab.ucp.UcpConfig;
 import dev.ucplab.ucp.UcpHttpGateway;
+import dev.ucplab.ucp.registry.ConfiguredMerchantRegistry;
+import dev.ucplab.ucp.registry.MerchantSettings;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;

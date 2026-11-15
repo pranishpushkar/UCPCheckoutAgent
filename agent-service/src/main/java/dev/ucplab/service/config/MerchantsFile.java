@@ -4,6 +4,7 @@ import dev.ucplab.core.config.AgentProfile;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantStatus;
 import dev.ucplab.ucp.UcpHttpGateway;
+import dev.ucplab.ucp.registry.MerchantSettings;
 import java.io.IOException;
 import java.io.Reader;
 import java.net.URI;

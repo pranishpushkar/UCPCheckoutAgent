@@ -1,12 +1,13 @@
 package dev.ucplab.service.config;
 
-import dev.ucplab.core.approval.ApprovalSecret;
 import dev.ucplab.core.agent.ModelKey;
+import dev.ucplab.core.approval.ApprovalSecret;
 import dev.ucplab.core.config.AgentProfile;
 import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantStatus;
 import dev.ucplab.core.policy.PolicyConfig;
+import dev.ucplab.ucp.registry.MerchantSettings;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
