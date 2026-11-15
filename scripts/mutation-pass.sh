@@ -27,8 +27,10 @@ case "$pass" in
 esac
 mvn=(./mvnw -B -ntp)
 if [ "$module" != agent-core ]; then
-  # ucp and persistence run against core's test-jar: install the current one first
-  "${mvn[@]}" -q -pl agent-core install -DskipTests
+  # ucp and persistence run against core's test-jar: install the current one first, with everything else the module
+  # resolves from the local repository (the root POM, fault-proxy). -am, not -pl agent-core alone: on an empty repository,
+  # as on a fresh runner, the root POM is missing and the pass fails before PIT starts.
+  "${mvn[@]}" -q -pl "$module" -am install -DskipTests
 fi
 start=$(date +%s)
 "${mvn[@]}" -Pmutation -pl "$module" test-compile org.pitest:pitest-maven:mutationCoverage \
