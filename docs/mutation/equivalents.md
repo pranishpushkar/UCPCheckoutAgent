@@ -4,7 +4,7 @@ An entry counts only with the owner's `approved:` line, which a session adds onl
 A mutant is matched by class, method, mutator and description, never by line, so a refactor does not silently invalidate an entry.
 A mutant on a star path that is listed here is the only kind of survivor allowed there; "unreachable code" is a finding, not an equivalent.
 
-Format, one block per mutant. **An entry without an `approved:` line is only a proposal and still counts as a survivor.** The owner's decisions of 2026-11-15 on entries 1 to 22 are recorded below (entry 2 was refused and killed by a test, so it is gone; the numbers of the others are kept). Entry 21 is "justified", not equivalent. Entries 8, 9, 11 and 12 are about the text of an IllegalArgumentException, which is deliberately not asserted.
+Format, one block per mutant. **An entry without an `approved:` line is only a proposal and still counts as a survivor.** The owner's decisions of 2026-11-15 on entries 1 to 22 are recorded below (entry 2 was refused and killed by a test, so it is gone; the numbers of the others are kept). Entry 21 is "justified", not equivalent. Entries 24 and 30 (P7) were refused and killed by tests, so they are gone too. Entries 8, 9, 11 and 12 are about the text of an IllegalArgumentException, which is deliberately not asserted.
 
 ```
 ### <fully qualified class>.<method> <mutator name>
@@ -144,119 +144,131 @@ Format, one block per mutant. **An entry without an `approved:` line is only a p
 - the test that shows it: `RecoveryLoopCloseTest` (a running pass is interrupted, an idle loop closes clean) passes with and without the mutation
 - approved: owner 2026-11-15
 
-## Proposed in H3 P7 (agent-core: `DefaultOrchestrator`), not yet approved
+## From H3 P7 (agent-core: `DefaultOrchestrator`)
 
 ### 23. dev.ucplab.core.orchestrator.DefaultOrchestrator.propose RemoveConditionalMutator_EQUAL_ELSE (the `lines.isEmpty()` refusal)
 - description: removed conditional - replaced equality check with false (a proposal with no line is no longer refused here)
 - why it is equivalent: `RuleBasedPolicyEngine.evaluateProposal`, called next, refuses an empty line list with the same exception type and the very same message ("a proposal needs at least one line"); nothing has been written by then. Checked by hand: with the guard turned off the new test, which asserts that message, stays green
 - the test that shows it: `OrchestratorSecondRoundMutationTest.aProposalWithNoLine_isRefusedWithTheProposalsOwnMessage` passes with and without the mutation
-
-### 24. dev.ucplab.core.orchestrator.DefaultOrchestrator.propose RemoveConditionalMutator_EQUAL_ELSE (the `existing.isPresent()` fast path)
-- description: removed conditional - replaced equality check with false (a repeated proposal does not return the existing intent at once)
-- why it is equivalent: the path that follows evaluates policy (reads only), builds an intent and inserts it; the insert refuses a second active intent with the same dedupe key, and the `DuplicateIntentException` handler returns the existing proposal, which is the same result. The fast path only saves work
-- the test that shows it: `OrchestratorQuoteMutationTest.theSameProposalTwice_returnsTheFirstIntent` and `aProposalThatLosesTheInsertRace_returnsTheWinner_orRefuses` pass with and without the mutation
+- approved: owner 2026-11-15
 
 ### 25. dev.ucplab.core.orchestrator.DefaultOrchestrator.propose ConditionalsBoundaryMutator (the rationale cut, `length > 300`)
 - description: changed conditional boundary (`>` becomes `>=`)
 - why it is equivalent: at exactly 300 characters the cut `substring(0, 300)` returns the same 300 characters
 - the test that shows it: `OrchestratorQuoteMutationTest.aProposal_isRecorded_withItsLinesItsRationaleAndItsDecision` (a rationale of 300 and one of 301) passes with and without the mutation
+- approved: owner 2026-11-15
 
 ### 26. dev.ucplab.core.orchestrator.DefaultOrchestrator.propose RemoveConditionalMutator_EQUAL_ELSE (the `!decision.allowed()` early return)
 - description: removed conditional - replaced equality check with false (a denied proposal goes on to a step)
 - why it is equivalent: the intent is already REJECTED with no owed cancel; the step that follows only claims it again (this worker holds the lease) and reports idle, and the result is the same REJECTED proposal with no quote. No merchant call is made either way
 - the test that shows it: `OrchestratorQuoteMutationTest.aDeniedProposal_isRejectedWithNoQuoteAndNoCall_andAnAllowedOneCarriesItsQuote` passes with and without the mutation
+- approved: owner 2026-11-15
 
 ### 27. dev.ucplab.core.orchestrator.DefaultOrchestrator.propose RemoveConditionalMutator_EQUAL_IF (the `last.after() == AWAITING_APPROVAL` choice of quote)
 - description: removed conditional - replaced equality check with true (the step's quote is always returned)
 - why it is equivalent: a `Step` carries a quote only from `quoteReady`, which is the step that ends in AWAITING_APPROVAL; every other step's quote is already empty
 - the test that shows it: the same test
+- approved: owner 2026-11-15
 
 ### 28. dev.ucplab.core.orchestrator.DefaultOrchestrator.nextAttemptAt ConditionalsBoundaryMutator (`elapsed < pollInitial`)
 - description: changed conditional boundary
 - why it is equivalent: at equality the two branches give the same value: the initial delay and the elapsed time are equal
 - the test that shows it: `OrchestratorQuoteMutationTest.thePollDelay_growsWithTheTimeSinceTheFirstUncertainty_isCapped_andStopsAtTheDeadline` passes with and without the mutation
+- approved: owner 2026-11-15
 
 ### 29. dev.ucplab.core.orchestrator.DefaultOrchestrator.nextAttemptAt ConditionalsBoundaryMutator (`elapsed > pollMax`)
 - description: changed conditional boundary
 - why it is equivalent: at equality the cap and the elapsed time are equal
 - the test that shows it: the same test
-
-### 30. dev.ucplab.core.orchestrator.DefaultOrchestrator.nextAttemptAt RemoveConditionalMutator_EQUAL_IF (the `!now.isAfter(deadline)` operand)
-- description: removed conditional - replaced equality check with true
-- why it is equivalent: it differs only when the clock is already past the deadline while the step reports RECONCILING; every RECONCILING outcome of `reconcile` is decided with `pastDeadline` first and escalates instead, and the injected clock does not move between the step and this read. A clock that ticks between two reads could reach it, which a deterministic test cannot arrange
-- the test that shows it: none possible with a fixed clock
+- approved: owner 2026-11-15
 
 ### 31. dev.ucplab.core.orchestrator.DefaultOrchestrator.quote RemoveConditionalMutator_EQUAL_ELSE (`create ? 0 : updates`)
 - description: removed conditional - replaced equality check with false (the revision of a create is the number of updates)
 - why it is equivalent: a create is sent only when the intent has no re-quote and no attempt in its cycle, so the number of updates it has issued is 0
 - the test that shows it: `OrchestratorQuoteMutationTest.eachRequote_isAnUpdateUnderItsOwnNumberedKey` passes with and without the mutation
+- approved: owner 2026-11-15
 
 ### 32. dev.ucplab.core.orchestrator.DefaultOrchestrator.quote RemoveConditionalMutator_EQUAL_IF (`create &&` in `orphanPossible`)
 - description: removed conditional - replaced equality check with true
 - why it is equivalent: a re-quote (not a create) implies a session and a complete attempt, so no create attempt can be unresolved and still unknown to the intent; `orphanPossible` is false either way
 - the test that shows it: `OrchestratorQuoteMutationTest.aQuoteCycleThatAlreadyCalled_isExhausted_andOwesACancelOnlyForAPossibleOrphan` passes with and without the mutation
+- approved: owner 2026-11-15
 
 ### 33. dev.ucplab.core.orchestrator.DefaultOrchestrator.quote RemoveConditionalMutator_EQUAL_IF (`intent.sessionId().isEmpty()` in the owed cancel)
 - description: removed conditional - replaced equality check with true
 - why it is equivalent: when the session is known the move itself already sets cancel_pending in the same write (table 7.2, retries exhausted), so forcing the flag changes nothing
 - the test that shows it: the same test
+- approved: owner 2026-11-15
 
 ### 34. dev.ucplab.core.orchestrator.DefaultOrchestrator.lambda$quoteCycle$13 BooleanTrueReturnValsMutator (the `op == CREATE || op == UPDATE` filter)
 - description: replaced boolean return with true
-- why it is equivalent: after the last complete the attempts of an intent are creates, updates and, only once it is terminal, cancels; reconciliation reads are events, not attempts. The filter has nothing to exclude
+- why it is equivalent: justified: no reachable state (a defensive filter). After the last complete, a quote cycle holds only creates and updates; any other attempt kind appears only once the intent is terminal
 - the test that shows it: none possible: no attempt of another kind exists in a quote cycle
+- approved: owner 2026-11-15
 
 ### 35. dev.ucplab.core.orchestrator.DefaultOrchestrator.lambda$quoteCycle$13 RemoveConditionalMutator_EQUAL_ELSE (the same filter)
 - description: removed conditional - replaced equality check with false
-- why it is equivalent: as the entry above
+- why it is equivalent: justified: no reachable state (a defensive filter). After the last complete, a quote cycle holds only creates and updates; any other attempt kind appears only once the intent is terminal
 - the test that shows it: none possible
+- approved: owner 2026-11-15
 
 ### 36. dev.ucplab.core.orchestrator.DefaultOrchestrator.lambda$quoteCycle$13 RemoveConditionalMutator_EQUAL_IF (the same filter)
 - description: removed conditional - replaced equality check with true
-- why it is equivalent: as the entry above
+- why it is equivalent: justified: no reachable state (a defensive filter). After the last complete, a quote cycle holds only creates and updates; any other attempt kind appears only once the intent is terminal
 - the test that shows it: none possible
+- approved: owner 2026-11-15
 
 ### 37. dev.ucplab.core.orchestrator.DefaultOrchestrator.pendingSelection RemoveConditionalMutator_EQUAL_ELSE (`last.status() != RESPONDED || responseJson().isEmpty()`)
 - description: removed conditional - replaced equality check with false
 - why it is equivalent: the two operands cover each other: an attempt that is not RESPONDED has no stored answer of the form that follows (a SENT one has none, an UNCERTAIN one stores a description with no `status`), so the next check returns empty either way
 - the test that shows it: `OrchestratorQuoteMutationTest.aSelectionUpdateLeftSent_isNotRepeated` and `OrchestratorSecondRoundMutationTest.aStoredAnswerThatIsNotASelectionRequest_isNeverAnsweredWithAnUpdate` pass with and without the mutation
+- approved: owner 2026-11-15
 
 ### 38. dev.ucplab.core.orchestrator.DefaultOrchestrator.pendingSelection RemoveConditionalMutator_EQUAL_IF (the same test, the other operand)
 - description: removed conditional - replaced equality check with true
 - why it is equivalent: as the entry above
 - the test that shows it: the same tests
+- approved: owner 2026-11-15
 
 ### 39. dev.ucplab.core.orchestrator.DefaultOrchestrator.lambda$selectionPending$17 EmptyObjectReturnValsMutator (the line ids)
 - description: replaced return value with Stream.empty
 - why it is equivalent: `selectionPending` only asks whether a selection is left; the line ids it gathers are used to build a selection that this method discards. Only `isPresent()` of the result is read
 - the test that shows it: none possible
+- approved: owner 2026-11-15
 
 ### 40. dev.ucplab.core.orchestrator.DefaultOrchestrator.onQuoteOutcome RemoveConditionalMutator_EQUAL_IF (`create ? written.withSessionId(view.id()) : written`)
 - description: removed conditional - replaced equality check with true
 - why it is equivalent: for an update the answer's session id has just been checked equal to the intent's own (I4), so setting it again changes nothing
 - the test that shows it: `OrchestratorQuoteMutationTest.anUpdateAnsweredForAnotherSession_isRefused` passes with and without the mutation
+- approved: owner 2026-11-15
 
 ### 41. dev.ucplab.core.orchestrator.DefaultOrchestrator.onQuoteOutcome RemoveConditionalMutator_EQUAL_IF (`create &&` of the Uncertain case)
 - description: removed conditional - replaced equality check with true
 - why it is equivalent: for an update the session is known, so `written.sessionId().isEmpty()` is false and the second operand decides the same way
 - the test that shows it: `OrchestratorQuoteMutationTest.aNotSentOrLostCreate_endsExhausted_andOnlyTheLostOneOwesACancel` passes with and without the mutation
+- approved: owner 2026-11-15
 
 ### 42. dev.ucplab.core.orchestrator.DefaultOrchestrator.onQuoteOutcome RemoveConditionalMutator_EQUAL_IF (`written.sessionId().isEmpty()` of the Uncertain case)
 - description: removed conditional - replaced equality check with true
 - why it is equivalent: for a create the intent written ahead has no session yet, so the operand is always true
 - the test that shows it: the same test
+- approved: owner 2026-11-15
 
 ### 43. dev.ucplab.core.orchestrator.DefaultOrchestrator.sendComplete RemoveConditionalMutator_EQUAL_IF (`approval.status() != CONSUMED`)
 - description: removed conditional - replaced equality check with true (the approval is moved to CONSUMED even when it already is)
 - why it is equivalent: `approvals.transition(APPROVED, CONSUMED)` is a compare-and-set on the expected status: for an approval that is already CONSUMED it changes nothing
 - the test that shows it: `OrchestratorCompleteMutationTest.aPendingApprovalUnderAnApprovedIntent_isRepairedBeforeTheComplete_andARegularOneIsNot` passes with and without the mutation
+- approved: owner 2026-11-15
 
 ### 44. dev.ucplab.core.orchestrator.DefaultOrchestrator.settle RemoveConditionalMutator_EQUAL_ELSE (the `unresolved.isEmpty()` return)
 - description: removed conditional - replaced equality check with false
 - why it is equivalent: `resolveAttempts` with no attempt writes nothing and only repeats the fencing check that the caller's following write makes anyway
 - the test that shows it: `OrchestratorReconcileMutationTest.settling_leavesAnAnsweredAttemptAlone` passes with and without the mutation
+- approved: owner 2026-11-15
 
 ### 45. dev.ucplab.core.orchestrator.DefaultOrchestrator.probeOrphanSession RemoveConditionalMutator_EQUAL_IF (`!unresolved.isEmpty()`)
 - description: removed conditional - replaced equality check with true
 - why it is equivalent: as the settle entry: `resolveAttempts` of an empty list writes nothing and repeats the fencing of the write-ahead that follows
 - the test that shows it: `OrchestratorOwedCancelMutationTest.probes_areNumbered_andEachAttemptKeepsItsOwnStatus` passes with and without the mutation
+- approved: owner 2026-11-15
+
