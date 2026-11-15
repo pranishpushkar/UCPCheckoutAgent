@@ -76,6 +76,11 @@ plant in the SQL (a trigger that lets the update through) is what that test is f
 The fixed cost of a run is PIT's coverage pass over the module's tests: about 100 to 190 s in agent-core, about 25 s in agent-ucp. Mutants are
 cheap after that. The `verify` build is unchanged in time.
 
+The whole set, measured at the commit named in `docs/results/h3-mutation-report.md` (STRONGER, seed 1, one pass after another with `scripts/mutation-pass.sh`):
+3354 mutants in 9 passes, about 31 minutes of wall time. Eight passes at 500 schedules took 80 to 246 s each (agent-ucp 80 s, agent-persistence 110 s,
+agent-core by package 99 to 246 s); `core.orchestrator.*` at 10,000 schedules took 820 s for 662 mutants. The whole set is a manual workflow
+(`mutation.yml`), not a CI gate.
+
 ## PIT is not a property-testing library
 
 It mutates code and generates no inputs, so CLAUDE.md's rule against jqwik and other property-testing libraries is untouched.
