@@ -1,6 +1,8 @@
 # ADR 0009: Mutation testing with PIT (H3)
 
-Status: accepted (H3 P1). The H3 plan (notes/h3/h3-plan.md, with the owner's answers of 2026-11-14) is the working note.
+Status: accepted (H3 P10; proposed in P1). The H3 plan (notes/h3/h3-plan.md, with the owner's answers of 2026-11-14 and 2026-11-15) is the working note.
+
+Where it runs: `scripts/mutation-pass.sh <pass>` locally under `-Pmutation`, and `.github/workflows/mutation.yml` by hand (`workflow_dispatch` only, read-only token, no secrets, no cache, actions pinned by SHA, one job per pass). `docs/results/h3-mutation-report.md` is generated from PIT's XML and `docs/mutation/equivalents.md` by `dev.ucplab.eval.report.MutationReport`, which fails on a star survivor with no approved entry, an entry without approval, or a stale entry; the star classes are in `docs/mutation/star-classes.txt`.
 
 ## Context
 

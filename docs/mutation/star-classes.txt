@@ -1,0 +1,45 @@
+# The star (★) classes of ADR 0009: the paths to `complete` and to an approval. One class per line; a name also covers its nested
+# classes. On these, every survivor and every no-coverage mutant must be an approved entry of equivalents.md (MutationReport checks).
+# agent-core
+dev.ucplab.core.policy.RuleBasedPolicyEngine
+dev.ucplab.core.policy.RequotePolicy
+dev.ucplab.core.policy.RequoteOutcome
+dev.ucplab.core.approval.DefaultApprovalService
+dev.ucplab.core.approval.ApprovalSnapshot
+dev.ucplab.core.approval.SnapshotLine
+dev.ucplab.core.approval.FulfillmentSnapshot
+dev.ucplab.core.approval.ApprovalTokens
+dev.ucplab.core.approval.ApprovalSecret
+dev.ucplab.core.approval.ApprovalRecord
+dev.ucplab.core.approval.PendingApproval
+dev.ucplab.core.approval.InMemoryApprovalRepository
+dev.ucplab.core.merchant.CheckoutWire
+dev.ucplab.core.merchant.FulfillmentSteps
+dev.ucplab.core.merchant.FulfillmentPolicy
+dev.ucplab.core.merchant.IdempotencyKey
+dev.ucplab.core.merchant.FrozenBody
+dev.ucplab.core.merchant.MerchantInstruments
+dev.ucplab.core.json.CanonicalJson
+dev.ucplab.core.json.LenientJson
+dev.ucplab.core.intent.TransitionTable
+dev.ucplab.core.intent.IntentState
+dev.ucplab.core.intent.Transition
+dev.ucplab.core.intent.InMemoryIntentRepository
+dev.ucplab.core.recovery.RecoveryWorker
+dev.ucplab.core.recovery.RecoveryLoop
+dev.ucplab.core.recovery.RecoveryConfig
+dev.ucplab.core.orchestrator.DefaultOrchestrator
+dev.ucplab.core.orchestrator.OrchestratorConfig
+# agent-ucp
+dev.ucplab.ucp.FailureClassifier
+dev.ucplab.ucp.UcpHttpGateway
+dev.ucplab.ucp.Redactor
+dev.ucplab.ucp.RetryExecutor
+dev.ucplab.ucp.CheckoutParser
+dev.ucplab.ucp.ProfileParser
+dev.ucplab.ucp.CircuitBreaker
+dev.ucplab.ucp.RateLimiter
+# agent-persistence
+dev.ucplab.persistence.SqlIntentRepository
+dev.ucplab.persistence.SqlApprovalRepository
+dev.ucplab.persistence.SqlPolicyUsage
