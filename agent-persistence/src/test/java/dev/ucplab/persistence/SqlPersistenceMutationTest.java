@@ -134,6 +134,20 @@ class SqlPersistenceMutationTest {
                 .isInstanceOf(DatabaseException.class).isNotInstanceOf(IllegalArgumentException.class);
     }
 
+    // Covers: 7.6, 7.8. Kills SqlIntentRepository.lambda$claimRecoverable$14:395 RemoveConditional_EQUAL_IF: an intent whose claiming
+    // UPDATE changed no row (another worker took it between the SELECT and the UPDATE) is not returned as claimed. A trigger
+    // that skips the row stands for that other worker
+    @Test
+    void anIntentWhoseClaimChangedNoRow_isNotReportedAsClaimed() {
+        intents.insert(proposed("i1", "d1").withState(IntentState.QUOTING, clock.instant()));
+        exec("CREATE TRIGGER skip_claim BEFORE UPDATE OF lease_owner ON purchase_intent WHEN NEW.lease_owner = 'w-race' "
+                + "BEGIN SELECT RAISE(IGNORE); END");
+
+        assertThat(intents.claimRecoverable("w-race", java.time.Duration.ofSeconds(30), 10)).isEmpty();
+        assertThat(intents.findForSystem(new IntentId("i1")).orElseThrow().leaseOwner()).isEmpty();
+        assertThat(intents.claimRecoverable("w-other", java.time.Duration.ofSeconds(30), 10)).hasSize(1);
+    }
+
     // ---------------------------------------------------------------- the migration history
 
     // Covers: 23.4 /readyz. Kills Migrations.isCurrent:27, :28 and lambda$isCurrent$0:28 (every migration applied, and none of them

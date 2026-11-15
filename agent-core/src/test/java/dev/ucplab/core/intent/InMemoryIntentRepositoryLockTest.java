@@ -60,7 +60,7 @@ class InMemoryIntentRepositoryLockTest {
 
     // Covers: 7.8. Kills InMemoryIntentRepository unlock removed in find:51, findForSystem:62, findActiveByDedupeKey:75,
     // insert:94, update:107, appendEvent:120, recordAttempt:144, resolveAttempt:163 and :192, resolveAttempts:223,
-    // claim:248, claimRecoverable:281, renewLease:299, inState:311, ownedBy:324, events:334 and attempts:345 (VoidMethodCall)
+    // claim:248, claimRecoverable:281, renewLease:299, releaseLease:316 (H3 P10), inState:311, ownedBy:324, events:334 and attempts:345 (VoidMethodCall)
     @Test
     void everyPublicMethod_releasesTheLock() throws Exception {
         UserId alice = new UserId("alice");
@@ -81,6 +81,10 @@ class InMemoryIntentRepositoryLockTest {
         assertThat(repo.claimRecoverable(W1, LEASE, 5)).hasSize(1);
         unlocked(id);
         assertThat(repo.renewLease(id, W1, LEASE)).isTrue();
+        unlocked(id);
+        assertThat(repo.releaseLease(id, W1)).isTrue();
+        unlocked(id);
+        assertThat(repo.claim(id, W1, LEASE)).isPresent();
         unlocked(id);
 
         repo.update(claimed, 0, W1);

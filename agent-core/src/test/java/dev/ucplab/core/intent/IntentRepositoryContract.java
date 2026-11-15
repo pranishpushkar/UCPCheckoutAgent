@@ -815,6 +815,64 @@ public abstract class IntentRepositoryContract {
         assertThat(repo.findForSystem(claimed.id()).orElseThrow().sessionId()).contains(new SessionId("cs_1"));
     }
 
+    // Covers: 7.3 step 5, I4 (the fenced resolve is also under I4: it cannot change the session once a complete attempt exists,
+    // and then changes nothing). Kills SqlIntentRepository.lambda$resolveAttempt$11:284 VoidMethodCall (requireSessionUnchanged)
+    @Test
+    void resolveAttemptWithIntent_refusesSessionChange_afterCompleteAttempt() {
+        PurchaseIntent claimed = insertAndClaim("i1", ALICE, "d1", W1);
+        PurchaseIntent withSession = claimed.withSessionId(new SessionId("cs_1"));
+        repo.update(withSession, 0, W1);
+        repo.recordAttempt(completeAttempt("a1", withSession), withSession, 1, W1);
+        PurchaseIntent otherSession = repo.findForSystem(claimed.id()).orElseThrow().withSessionId(new SessionId("cs_2"));
+
+        assertThatThrownBy(() -> repo.resolveAttempt(new AttemptId("a1"), AttemptStatus.RESPONDED, Optional.of(200),
+                Optional.of("{}"), otherSession, 2, W1)).isInstanceOf(IllegalStateException.class).hasMessageContaining("I4");
+
+        assertThat(repo.attempts(claimed.id())).singleElement()
+                .satisfies(a -> assertThat(a.status()).isEqualTo(AttemptStatus.SENT));
+        PurchaseIntent stored = repo.findForSystem(claimed.id()).orElseThrow();
+        assertThat(stored.version()).isEqualTo(2);
+        assertThat(stored.sessionId()).contains(new SessionId("cs_1"));
+    }
+
+    // Covers: 7.3 step 5 (a fenced resolve for an intent that is not stored is "not found", whatever the attempt). Kills
+    // SqlIntentRepository.storedSession:495 RemoveConditional_EQUAL_IF (the read of a session of an intent with no row)
+    @Test
+    void resolveAttemptWithIntent_forAnUnknownIntent_isNotFound() {
+        PurchaseIntent ghost = proposed("ghost", ALICE, "dg").withState(IntentState.QUOTING, clock.instant());
+
+        assertThatThrownBy(() -> repo.resolveAttempt(new AttemptId("a1"), AttemptStatus.RESPONDED, Optional.empty(),
+                Optional.empty(), ghost, 0, W1)).isInstanceOf(IntentNotFoundException.class);
+    }
+
+    // Covers: 7.3, 7.6 (an update stores every mutable field of the intent it is given, each with a value of its own, and nothing
+    // else of the stored intent changes). Kills SqlIntentRepository.fencedUpdate:452 VoidMethodCall (the failure reason) and
+    // the binds around it
+    @Test
+    void update_storesEveryMutableField() {
+        PurchaseIntent claimed = insertAndClaim("i1", ALICE, "d1", W1);
+        PurchaseIntent next = claimed.withState(IntentState.RECONCILING, clock.instant().plusSeconds(1))
+                .withSessionId(new SessionId("cs_9")).withApprovedSnapshotHash(Optional.of("hash-9")).withRequoteCount(2)
+                .withOrderId("order-9").withFailureReason("why-9").withUncertainSince(clock.instant().plusSeconds(2))
+                .withCancelPending(true);
+
+        repo.update(next, 0, W1);
+
+        PurchaseIntent stored = repo.findForSystem(claimed.id()).orElseThrow();
+        assertThat(stored.state()).isEqualTo(IntentState.RECONCILING);
+        assertThat(stored.sessionId()).contains(new SessionId("cs_9"));
+        assertThat(stored.approvedSnapshotHash()).contains("hash-9");
+        assertThat(stored.requoteCount()).isEqualTo(2);
+        assertThat(stored.orderId()).contains("order-9");
+        assertThat(stored.failureReason()).contains("why-9");
+        assertThat(stored.uncertainSince()).contains(clock.instant().plusSeconds(2));
+        assertThat(stored.cancelPending()).isTrue();
+        assertThat(stored.updatedAt()).isEqualTo(clock.instant().plusSeconds(1));
+        assertThat(stored.version()).isEqualTo(1);
+        assertThat(stored.owner()).isEqualTo(ALICE);
+        assertThat(stored.leaseOwner()).contains(W1);
+    }
+
     // Covers: I4, 7.3 step 3 (a recordAttempt that I4 refuses records nothing: the attempt is not listed and the intent
     // keeps its version and its session, because every check comes before the first write)
     @Test
