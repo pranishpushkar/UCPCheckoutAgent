@@ -7,6 +7,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
 
@@ -23,7 +24,7 @@ import java.util.function.Consumer;
  *   run-status RUN
  *   intents [--state STATE]   intent ID | events ID | approval ID | approve ID | reject ID
  *   wait INTENT [--timeout 60s]
- *   lab faults PRESET|clear | lab orders | lab reset
+ *   lab faults PRESET|clear [--merchant ID] | lab orders [--merchant ID] | lab reset
  * </pre>
  *
  * Exit codes: 0 done, 1 the service refused or the thing was not found, 2 a usage error, 3 a wait timed out.
@@ -39,7 +40,7 @@ public final class Cli {
             "  run MESSAGE | answer RUN MESSAGE | run-status RUN",
             "  intents [--state STATE] | intent ID | events ID | approval ID | approve ID | reject ID",
             "  wait INTENT [--timeout 60s]",
-            "  lab faults PRESET|clear | lab orders | lab reset");
+            "  lab faults PRESET|clear [--merchant ID] | lab orders [--merchant ID] | lab reset");
 
     private final PrintStream out;
     private final PrintStream err;
@@ -238,6 +239,7 @@ public final class Cli {
     private void printCard(Reply reply) {
         Map<?, ?> snapshot = reply.body().get("snapshot") instanceof Map<?, ?> s ? s : Map.of();
         String currency = String.valueOf(snapshot.get("currency"));
+        out.println("  merchant " + snapshot.get("merchant_id"));
         long lines = 0;
         for (Object o : list(snapshot.get("lines"))) {
             if (o instanceof Map<?, ?> line) {
@@ -300,13 +302,25 @@ public final class Cli {
 
     // ---- the lab -------------------------------------------------------------------------------------------------
 
-    private int lab(ApiSession api, List<String> a) throws IOException, InterruptedException {
+    private int lab(ApiSession api, List<String> args) throws IOException, InterruptedException {
+        List<String> a = new ArrayList<>(args);
+        Optional<String> merchant = Optional.empty();
+        int option = a.indexOf("--merchant");
+        if (option >= 0) {
+            if (option + 1 >= a.size()) {
+                throw new UsageError("--merchant takes a merchant id");
+            }
+            merchant = Optional.of(id(a.get(option + 1)));
+            a.subList(option, option + 2).clear();
+        }
         String what = arg(a, 0, "faults, orders or reset");
         switch (what) {
             case "faults" -> {
                 String preset = arg(a, 1, "a preset or clear");
-                Reply reply = preset.equals("clear") ? api.delete("/api/lab/faults")
-                        : api.put("/api/lab/faults", "{\"preset\":" + ApiSession.quote(preset) + "}");
+                Reply reply = preset.equals("clear")
+                        ? api.delete("/api/lab/faults" + merchant.map(m -> "?merchant_id=" + m).orElse(""))
+                        : api.put("/api/lab/faults", "{\"preset\":" + ApiSession.quote(preset)
+                                + merchant.map(m -> ",\"merchant_id\":" + ApiSession.quote(m)).orElse("") + "}");
                 if (!reply.ok()) {
                     return refused(reply);
                 }
@@ -314,7 +328,7 @@ public final class Cli {
                 return 0;
             }
             case "orders" -> {
-                Reply reply = api.get("/api/lab/orders?merchant_id=merchant-a");
+                Reply reply = api.get("/api/lab/orders?merchant_id=" + merchant.orElse("merchant-a"));
                 if (!reply.ok()) {
                     return refused(reply);
                 }

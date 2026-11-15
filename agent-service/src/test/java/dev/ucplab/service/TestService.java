@@ -131,12 +131,18 @@ final class TestService implements AutoCloseable {
      */
     static TestService startMerchants(Path dir, Map<String, String> extra, Optional<Clock> clock, String bStatus,
                                       boolean withB) throws IOException {
+        return startMerchants(dir, extra, clock, bStatus, withB, Map.of(), 0);
+    }
+
+    /** With extra singletons by bean name (a {@code ModelClient}) and a given port (0 for any). */
+    static TestService startMerchants(Path dir, Map<String, String> extra, Optional<Clock> clock, String bStatus,
+                                      boolean withB, Map<String, Object> singletons, int port) throws IOException {
         LabMerchant a = LabMerchant.start();
         LabMerchant b = LabMerchant.start(Path.of("..", "dev", "catalogs", "b.json"));
         byte[] hmac = new byte[32];
         new SecureRandom().nextBytes(hmac);
         return startOn(dir, extra, clock, bStatus, withB, a, b, FaultProxy.start(a.baseUrl(), 0, hmac),
-                FaultProxy.start(b.baseUrl(), 0, hmac));
+                FaultProxy.start(b.baseUrl(), 0, hmac), singletons, port);
     }
 
     /**
@@ -147,12 +153,12 @@ final class TestService implements AutoCloseable {
                                         String bStatus, boolean withB) throws IOException {
         previous.context.close();
         return startOn(dir, extra, clock, bStatus, withB, previous.merchant, previous.merchantB, previous.proxy,
-                previous.proxyB);
+                previous.proxyB, Map.of(), 0);
     }
 
     private static TestService startOn(Path dir, Map<String, String> extra, Optional<Clock> clock, String bStatus,
-                                       boolean withB, LabMerchant a, LabMerchant b, FaultProxy proxyA, FaultProxy proxyB)
-            throws IOException {
+                                       boolean withB, LabMerchant a, LabMerchant b, FaultProxy proxyA, FaultProxy proxyB,
+                                       Map<String, Object> singletons, int port) throws IOException {
         try {
             StringBuilder yaml = new StringBuilder("merchants:\n")
                     .append("  - id: merchant-a\n    name: Merchant A\n    url: ").append(proxyA.baseUrl())
@@ -169,9 +175,10 @@ final class TestService implements AutoCloseable {
             ApplicationContextInitializer<ConfigurableApplicationContext> overrides = context -> {
                 context.getBeanFactory().registerSingleton("testRecoveryConfig", NO_PASSES);
                 clock.ifPresent(c -> context.getBeanFactory().registerSingleton("testClock", c));
+                singletons.forEach((name, bean) -> context.getBeanFactory().registerSingleton(name, bean));
             };
             ConfigurableApplicationContext context = ServiceApplication.start(Environment.of(env), List.of(overrides),
-                    "--server.port=0", "--server.address=127.0.0.1");
+                    "--server.port=" + port, "--server.address=127.0.0.1");
             return new TestService(a, proxyA, b, proxyB, context, env);
         } catch (RuntimeException e) {
             proxyA.close();

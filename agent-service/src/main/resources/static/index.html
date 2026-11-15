@@ -23,21 +23,7 @@
       <ol id="chat" class="chat" aria-label="Conversation"></ol>
       <ul id="tools" class="tools" aria-label="Tool calls"></ul>
 
-      <section id="approval-card" class="card" aria-labelledby="card-h" hidden>
-        <h3 id="card-h">Approval</h3>
-        <table id="card-lines">
-          <caption class="sr-only">Items in the quote</caption>
-          <thead><tr><th scope="col">Item</th><th scope="col">Qty</th><th scope="col">Unit</th><th scope="col">Line</th></tr></thead>
-          <tbody id="card-body"></tbody>
-          <tfoot id="card-foot"></tfoot>
-        </table>
-        <p class="fixed" id="card-note"></p>
-        <p id="card-expiry"></p>
-        <div class="actions">
-          <button type="button" id="approve">Approve</button>
-          <button type="button" id="reject">Reject</button>
-        </div>
-      </section>
+      <div id="approval-cards" aria-label="Approvals"></div>
 
       <form id="send" autocomplete="off">
         <label for="message">Message</label>
@@ -51,14 +37,16 @@
         <h2 id="timeline-h">Purchase intent</h2>
         <p id="timeline-state" class="fixed"></p>
         <ol id="timeline" class="timeline"></ol>
+        <ul id="other-intents" class="timeline" aria-label="The run's other intents"></ul>
       </section>
 
       <section id="fault-lab" aria-labelledby="lab-h" hidden>
         <h2 id="lab-h">Fault lab</h2>
+        <p><label for="lab-merchant">Merchant</label> <select id="lab-merchant"></select></p>
         <div class="actions">
           <button type="button" data-preset="drop_next_complete">Drop next complete response</button>
           <button type="button" data-preset="merchant_503_20s">Merchant returns 503 for 20 s</button>
-          <button type="button" data-preset="merchant_down">Merchant A down</button>
+          <button type="button" data-preset="merchant_down">Merchant down</button>
           <button type="button" data-preset="change_price">Change price before complete</button>
           <button type="button" id="clear-faults">Clear faults</button>
           <button type="button" id="reset-lab">Reset lab</button>
@@ -68,9 +56,9 @@
       <section id="counters" aria-labelledby="orders-h" hidden>
         <h2 id="orders-h">Merchant orders and breaks</h2>
         <dl class="counters">
-          <div><dt>Merchant orders</dt><dd id="orders">0</dd></div>
           <div><dt>Breaks</dt><dd id="breaks">n/a: computed by the evaluation</dd></div>
         </dl>
+        <dl id="order-counters" class="counters" aria-label="Orders at each merchant"></dl>
       </section>
     </div>
   </main>

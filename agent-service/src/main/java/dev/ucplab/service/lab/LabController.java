@@ -2,6 +2,9 @@ package dev.ucplab.service.lab;
 
 import dev.ucplab.core.identity.AuthContext;
 import dev.ucplab.core.merchant.MerchantId;
+import dev.ucplab.service.config.ConfiguredMerchantRegistry;
+import dev.ucplab.service.config.MerchantSettings;
+import dev.ucplab.service.config.ServiceProperties;
 import dev.ucplab.service.web.ApiException;
 import dev.ucplab.service.web.ErrorCode;
 import java.util.LinkedHashMap;
@@ -32,9 +35,33 @@ public class LabController {
     static final String UNKNOWN_MERCHANT = "unknown merchant_id";
 
     private final LabControls controls;
+    private final ServiceProperties properties;
+    private final ConfiguredMerchantRegistry registry;
 
-    public LabController(LabControls controls) {
+    public LabController(LabControls controls, ServiceProperties properties, ConfiguredMerchantRegistry registry) {
         this.controls = Objects.requireNonNull(controls, "controls");
+        this.properties = Objects.requireNonNull(properties, "properties");
+        this.registry = Objects.requireNonNull(registry, "registry");
+    }
+
+    /**
+     * The configured merchants, for the console's selector and counters (DESIGN 24.3): each one's id, name and status, and
+     * the fixed reason while it is SUSPENDED. Never a URL, a lab address or a token reference.
+     */
+    @GetMapping("/api/lab/merchants")
+    Map<String, Object> merchants(AuthContext auth) {
+        java.util.List<Map<String, Object>> list = new java.util.ArrayList<>();
+        for (MerchantSettings m : properties.merchants()) {
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("merchant_id", m.id().value());
+            entry.put("name", m.name());
+            entry.put("status", registry.find(m.id()).map(e -> e.status().name()).orElse("SUSPENDED"));
+            registry.reason(m.id()).ifPresent(reason -> entry.put("reason", reason));
+            list.add(entry);
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("merchants", list);
+        return out;
     }
 
     @PutMapping("/api/lab/faults")

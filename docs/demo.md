@@ -29,7 +29,8 @@ a clean volume. Stop with `docker compose down -v` (README step 9).
   screen reader) says the run is waiting for you.
 - [ ] Answer `a blue mug`. The agent proposes a purchase; the status says the run is waiting for approval.
 - [ ] The **tool line** list shows `search_catalog: ok (n ms)` and `propose_purchase: ok (n ms)`. No raw tool output.
-- [ ] The **approval card** appears. Check each part against 24.3:
+- [ ] The **approval card** appears, headed **Approval from merchant-a** (the merchant of the stored quote, never the
+  agent's words; the scripted model's first search hit is merchant-a's). Check each part against 24.3:
   - [ ] every line shows an item id, a quantity, a unit price and a line total, from the snapshot (there are no titles:
     the snapshot has none);
   - [ ] a line **Other charges (tax)** and a **Total** that equals the lines plus the charges;
@@ -44,7 +45,8 @@ a clean volume. Stop with `docker compose down -v` (README step 9).
 - [ ] The right column shows "Intent …: awaiting approval" and a list that starts with Proposed.
 - [ ] Press **Approve**. The state moves through approved, completing and completed, one line per event, and stops
   updating at completed (watch the network tab: `GET /api/intents/{id}` once a second, none after the terminal state).
-- [ ] The **Merchant orders** counter goes from 0 to 1 within about 2 seconds. **Breaks** reads "n/a: computed by the
+- [ ] The order counter of **Merchant A** goes from 0 to 1 within about 2 seconds, and B's and C's stay 0 (the counters
+  show one number per merchant). **Breaks** reads "n/a: computed by the
   evaluation".
 
 ## 4. Re-authentication (`reauth_required`)
@@ -63,10 +65,28 @@ The approval needs a sign-in no older than 15 minutes (T4).
   and `/api/lab/*` is 404.)
 - [ ] **Drop next complete response**, then approve a purchase: it still ends with exactly one merchant order.
 - [ ] **Merchant returns 503 for 20 s**: a purchase started in the window waits; after 20 seconds it recovers.
-- [ ] **Merchant A down**, then **Clear faults**: the merchant answers again.
+- [ ] The **Merchant** selector lists Merchant A, B and C (a SUSPENDED one says so). **Merchant down** with B selected,
+  then a purchase at A: it completes (a fault at one merchant leaves the others alone). **Clear faults** with B selected
+  clears B only.
+- [ ] **Merchant down** with A selected, then **Clear faults**: the merchant answers again.
 - [ ] **Change price before complete**: propose, press this, press **Approve**. The card shows a new total and a new
   approval; the old token is refused (409).
-- [ ] **Reset lab**: orders go back to 0.
+- [ ] **Reset lab**: orders go back to 0 at every merchant, and every merchant's faults are cleared.
+
+## 5b. A basket across merchants (S22)
+
+With three merchants (`merchants.yaml`: A on the built-in catalog, B and C on `dev/catalogs/`), a request that needs two
+shops becomes two intents, one per merchant, each with its own quote and approval (19). The scripted model proposes one
+purchase; to see two cards, use the CLI (`scripts/ucplab`) or a live model.
+
+- [ ] With two intents awaiting approval (for example after a run that proposed at A and at B), the console shows **one
+  card per intent**, each headed **Approval from merchant-a** / **Approval from merchant-b**, each with its own
+  Approve and Reject and its own countdown.
+- [ ] **Approve** the B card: the A card stays, unchanged and still pending. The order counter of B goes to 1, A's stays 0.
+- [ ] **Reject** the A card: it ends rejected, with no order at A.
+- [ ] The timeline follows the newest intent; the run's **other intents** are listed under it, one line each, with their
+  merchant and state.
+- [ ] Press **Approve** on a card whose approval has expired: the status line says so and the card is refreshed.
 
 ## 6. Markup safety (`textContent` only)
 
