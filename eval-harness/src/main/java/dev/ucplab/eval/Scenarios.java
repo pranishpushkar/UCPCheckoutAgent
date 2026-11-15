@@ -23,8 +23,11 @@ import java.util.stream.Collectors;
  */
 public final class Scenarios {
 
-    /** The one merchant in every lane's registry. */
+    /** The one merchant in every lane's registry (merchant 0 of a lane of several). */
     public static final MerchantId SHOP = new MerchantId("shop-lane");
+    /** The second and third merchants of a lane of three (m6a-plan C11): the catalogs {@code b.json} and {@code c.json}. */
+    public static final MerchantId SHOP_B = new MerchantId("shop-lane-b");
+    public static final MerchantId SHOP_C = new MerchantId("shop-lane-c");
     /** A merchant no lane's registry holds (S11). */
     public static final MerchantId UNLISTED = new MerchantId("shop-unlisted");
     /** Every M4 run holds exactly this one basket, so every order in a run belongs to that run (m4-plan section 5). */

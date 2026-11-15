@@ -7,6 +7,7 @@ import dev.ucplab.faultproxy.RuleSet;
 import dev.ucplab.merchant.LabMerchant;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -16,6 +17,8 @@ import java.util.Set;
  * scale), what the auto-approver does, how the proposal is driven, and what must come out. An agent row (M5,
  * {@link Driver#AGENT}) carries its {@link AgentSpec}; the agent proposes, and the rest of the run is as in M4.
  *
+ * @param multi how many merchants the row's lane holds, how many users it has, and the proxy rules at the merchants
+ *     after the first ({@link Multi#ONE}: every row before M6a)
  * @param target the merchant the proposal names; only {@link Scenarios#SHOP} is in a lane's registry
  * @param paymentToken the mock card token the agent pays with ({@code tok_decline} makes the merchant decline)
  * @param beforeFirstDecision a change to the merchant made once the first quote is pending, just before the approver
@@ -41,7 +44,33 @@ public record Scenario(
         String paymentToken,
         MerchantEvent beforeFirstDecision,
         FaultWindow faultWindow,
-        Optional<AgentSpec> agent) {
+        Optional<AgentSpec> agent,
+        Multi multi) {
+
+    /**
+     * The shape of a row over several merchants (m6a-plan C11): {@code merchants} in the lane (1 to
+     * {@value Lane#MAX_MERCHANTS}), {@code users} signed in for the run, and the proxy rules of each merchant after the
+     * first, by lane index ({@link Scenario#rules} is merchant 0's).
+     */
+    public record Multi(int merchants, int users, Map<Integer, Rules> rulesAt) {
+        /** A lane of one merchant and one user, with no rules elsewhere. */
+        public static final Multi ONE = new Multi(1, 1, Map.of());
+
+        public Multi {
+            if (merchants < 1 || merchants > Lane.MAX_MERCHANTS) {
+                throw new IllegalArgumentException("a row has 1 to " + Lane.MAX_MERCHANTS + " merchants: " + merchants);
+            }
+            if (users < 1) {
+                throw new IllegalArgumentException("a row has at least one user: " + users);
+            }
+            rulesAt = Map.copyOf(rulesAt);
+            for (int at : rulesAt.keySet()) {
+                if (at < 1 || at >= merchants) {
+                    throw new IllegalArgumentException("rules at merchant " + at + " of " + merchants);
+                }
+            }
+        }
+    }
 
     /** The proxy rules of one run, built for the run's time scale; some rows vary by run (S13). */
     @FunctionalInterface
@@ -115,6 +144,7 @@ public record Scenario(
         Objects.requireNonNull(beforeFirstDecision, "beforeFirstDecision");
         Objects.requireNonNull(faultWindow, "faultWindow");
         Objects.requireNonNull(agent, "agent");
+        Objects.requireNonNull(multi, "multi");
         if ((driver == Driver.AGENT) != agent.isPresent()) {
             throw new IllegalArgumentException(id + ": an agent spec goes with Driver.AGENT and only with it");
         }
@@ -130,7 +160,7 @@ public record Scenario(
                     Rules rules, AutoApprover.Policy approver, MerchantId target, String paymentToken,
                     AgentSpec agent) {
         this(id, title, fault, expected, requiredInvariants, rules, approver, Driver.AGENT, target, List.of(),
-                paymentToken, MerchantEvent.NONE, FaultWindow.NONE, Optional.of(agent));
+                paymentToken, MerchantEvent.NONE, FaultWindow.NONE, Optional.of(agent), Multi.ONE);
     }
 
     /** A row with a fault window and no agent. */
@@ -139,7 +169,7 @@ public record Scenario(
                     List<ProposedLine> basket, String paymentToken, MerchantEvent beforeFirstDecision,
                     FaultWindow faultWindow) {
         this(id, title, fault, expected, requiredInvariants, rules, approver, driver, target, basket, paymentToken,
-                beforeFirstDecision, faultWindow, Optional.empty());
+                beforeFirstDecision, faultWindow, Optional.empty(), Multi.ONE);
     }
 
     /** The expected outcome as the report writes it: the terminal states, or that the row leaves no intent. */

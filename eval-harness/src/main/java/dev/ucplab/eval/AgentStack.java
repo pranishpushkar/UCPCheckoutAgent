@@ -5,8 +5,11 @@ import dev.ucplab.core.approval.ApprovalTokens;
 import dev.ucplab.core.approval.DefaultApprovalService;
 import dev.ucplab.core.id.IdGenerator;
 import dev.ucplab.core.identity.UserId;
+import dev.ucplab.core.merchant.CatalogGateway;
 import dev.ucplab.core.merchant.InMemoryMerchantRegistry;
 import dev.ucplab.core.merchant.MerchantEntry;
+import dev.ucplab.core.merchant.MerchantGateway;
+import dev.ucplab.core.merchant.MerchantGateways;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantProfile;
 import dev.ucplab.core.merchant.MerchantRegistry;
@@ -31,6 +34,8 @@ import dev.ucplab.ucp.JdkHttpTransport;
 import dev.ucplab.ucp.Sleeper;
 import dev.ucplab.ucp.UcpConfig;
 import dev.ucplab.ucp.UcpHttpGateway;
+import dev.ucplab.ucp.registry.ConfiguredMerchantRegistry;
+import dev.ucplab.ucp.registry.MerchantSettings;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -41,8 +46,10 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.SplittableRandom;
 import java.util.concurrent.Executors;
@@ -57,7 +64,13 @@ import java.util.concurrent.TimeUnit;
  *
  * <p>The same wiring serves the agent child process of S9 and S28 ({@link AgentMain}) and the extra workers of S14
  * ({@link #racer}). An agent row (M5) also gets the ports the agent runtime's tools call ({@link #toolPorts}): a
- * one-entry registry, a catalog client on the lane's proxy, and this stack's orchestrator.
+ * registry, a catalog client on each merchant's proxy, and this stack's orchestrator.
+ *
+ * <p>A stack over several merchants (m6a-plan C11) builds one gateway and one catalog client per merchant over one
+ * {@link CircuitBreakers}, so a merchant has one breaker and one limiter (8.3), the orchestrator picks the gateway and the
+ * instrument of the intent's merchant, and the registry is the real {@link ConfiguredMerchantRegistry}, started once the
+ * merchants are up: P1 and the tools see what the service sees. A stack over one merchant keeps the one-entry registry of
+ * M4 and M5, so its wire is exactly what it was (the registry's discovery would add a request to the proxy log).
  */
 public final class AgentStack implements AutoCloseable {
 
@@ -78,17 +91,30 @@ public final class AgentStack implements AutoCloseable {
     private final Path dbFile;
     private final TimeScale scale;
     private final long seed;
-    private final MerchantEntry shop;
+    private final List<Merchant> merchants;
+    private final Map<MerchantId, MerchantEntry> entries = new LinkedHashMap<>();
+    private final MerchantRegistry registry;
     private final UcpConfig ucp;
     private final PolicyConfig policyConfig = PolicyConfig.defaults();
     private final RuleBasedPolicyEngine policy;
     private final ApprovalTokens tokens;
     private final String canaryFingerprint;
-    private final PaymentInstrument instrument;
-    private final MerchantWiring wiring;
-    private final CatalogClient catalog;
+    private final Map<MerchantId, CatalogGateway> catalogs = new LinkedHashMap<>();
+    private final Map<MerchantId, PaymentInstrument> instruments = new LinkedHashMap<>();
     /** One per stack, shared by the gateway and the catalog client (8.3, 19). */
     private final CircuitBreakers breakers;
+
+    /**
+     * One merchant of the stack: the id it has in the registry, where the agent is pointed (its proxy), and what differs
+     * between merchants (8.5, 19).
+     */
+    public record Merchant(MerchantId id, URI url, MerchantWiring wiring) {
+        public Merchant {
+            Objects.requireNonNull(id, "id");
+            Objects.requireNonNull(url, "url");
+            Objects.requireNonNull(wiring, "wiring");
+        }
+    }
 
     /**
      * @param merchantUrl where the agent is pointed: the lane's proxy
@@ -108,7 +134,34 @@ public final class AgentStack implements AutoCloseable {
     /** @param wiring the merchant's handler, versions, shipping policy and instrument; the handler check of 8.5 runs here */
     public AgentStack(URI merchantUrl, Path dbFile, TimeScale scale, long seed, IdGenerator ids, String paymentToken,
                Duration approvalLease, String canary, MerchantWiring wiring) {
-        this.wiring = wiring;
+        this(List.of(new Merchant(Scenarios.SHOP, merchantUrl, wiring)), dbFile, scale, seed, ids, paymentToken,
+                approvalLease, canary);
+    }
+
+    /**
+     * A stack over every merchant of {@code lane}, each pointed at its own proxy and wired as the lab merchant, with the
+     * lease of an ordinary run.
+     */
+    static AgentStack forLane(Lane lane, Path dbFile, TimeScale scale, long seed, IdGenerator ids,
+                              String paymentToken) {
+        List<Merchant> merchants = new java.util.ArrayList<>();
+        for (int i = 0; i < lane.merchantCount(); i++) {
+            merchants.add(new Merchant(lane.merchantIds().get(i), lane.agentFacingUrl(i), MerchantWiring.LAB));
+        }
+        return new AgentStack(merchants, dbFile, scale, seed, ids, paymentToken, scale.orchestrator().lease(), "");
+    }
+
+    /**
+     * @param merchants one or more; the first is the stack's primary one: its UCP-Agent string and shipping policy are
+     *     the stack's, and every merchant's handler check of 8.5 runs here
+     */
+    public AgentStack(List<Merchant> merchants, Path dbFile, TimeScale scale, long seed, IdGenerator ids,
+                      String paymentToken, Duration approvalLease, String canary) {
+        this.merchants = List.copyOf(merchants);
+        if (this.merchants.isEmpty()) {
+            throw new IllegalArgumentException("a stack has at least one merchant");
+        }
+        MerchantWiring wiring = this.merchants.getFirst().wiring();
         this.dbFile = dbFile;
         this.scale = scale;
         this.seed = seed;
@@ -118,9 +171,28 @@ public final class AgentStack implements AutoCloseable {
         SqlRecoveryScan scan = new SqlRecoveryScan(db);
         ucp = scale.ucp(wiring.ucpAgent());
         breakers = new CircuitBreakers(ucp, clock);
-        shop = new MerchantEntry(Scenarios.SHOP, merchantUrl, "Lane shop", MerchantStatus.ACTIVE);
-        policy = new RuleBasedPolicyEngine(policyConfig,
-                m -> m.equals(Scenarios.SHOP) ? Optional.of(shop) : Optional.empty(), new FreshUserUsage(), clock);
+        for (Merchant m : this.merchants) {
+            if (entries.put(m.id(), new MerchantEntry(m.id(), m.url(), "Lane shop", MerchantStatus.ACTIVE)) != null) {
+                throw new IllegalArgumentException("a merchant is listed twice");
+            }
+            instruments.put(m.id(), m.wiring().instrument().apply(paymentToken));
+            MerchantInstruments.requireMatchingHandler(m.id(), m.wiring().handlerId(), instruments.get(m.id()));
+        }
+        Map<MerchantId, MerchantGateway> discovery = new LinkedHashMap<>();
+        int at = 0;
+        for (Merchant m : this.merchants) {
+            UcpHttpGateway gateway = gateway(m, random(seed ^ 0x5eed, at), ids);
+            discovery.put(m.id(), gateway);
+            catalogs.put(m.id(), new CatalogClient(gateway, ucp, new JdkHttpTransport(ucp), breakers,
+                    clock, Sleeper.THREAD, random(seed * 7 + 1, at), ids));
+            at++;
+        }
+        registry = this.merchants.size() == 1
+                ? new InMemoryMerchantRegistry(List.of(entries.get(this.merchants.getFirst().id())))
+                : ConfiguredMerchantRegistry.start(this.merchants.stream().map(m -> new MerchantSettings(m.id(),
+                        "Lane shop", m.url(), MerchantStatus.ACTIVE, Optional.empty(), java.util.Set.of(),
+                        m.wiring().ucpVersions(), Optional.empty())).toList(), discovery::get, clock);
+        policy = new RuleBasedPolicyEngine(policyConfig, registry::find, new FreshUserUsage(), clock);
         String workerId = RecoveryWorker.newWorkerId(ids);
         byte[] random = new byte[ApprovalSecret.MIN_BYTES];
         new SecureRandom().nextBytes(random);
@@ -130,14 +202,9 @@ public final class AgentStack implements AutoCloseable {
         tokens = new ApprovalTokens(ApprovalSecret.of(secret));
         canaryFingerprint = fingerprint(Arrays.copyOfRange(secret, random.length, secret.length));
         Arrays.fill(secret, (byte) 0);
-        instrument = wiring.instrument().apply(paymentToken);
-        MerchantInstruments.requireMatchingHandler(Scenarios.SHOP, wiring.handlerId(), instrument);
         approvalService = new DefaultApprovalService(intents, approvals, tokens, clock, ids, workerId, approvalLease,
                 DefaultApprovalService.DEFAULT_TTL, DefaultApprovalService.DEFAULT_MAX_AUTH_AGE);
         orchestrator = orchestrator(intents, approvals, approvalService, ids, workerId, new SplittableRandom(~seed));
-        catalog = new CatalogClient(gateway(new SplittableRandom(seed ^ 0x5eed), ids), ucp,
-                new JdkHttpTransport(ucp), breakers, clock, Sleeper.THREAD,
-                new SplittableRandom(seed * 7 + 1), ids);
         worker = new RecoveryWorker(intents, scan, orchestrator, clock, Thread::sleep, Runnable::run, scale.recovery(),
                 workerId);
         scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -195,14 +262,26 @@ public final class AgentStack implements AutoCloseable {
     private DefaultOrchestrator orchestrator(SqlIntentRepository repo, SqlApprovalRepository approvalRepo,
                                              DefaultApprovalService service, IdGenerator ids, String workerId,
                                              SplittableRandom jitter) {
-        UcpHttpGateway gateway = gateway(new SplittableRandom(seed), ids);
-        return new DefaultOrchestrator(repo, approvalRepo, service, id -> gateway, policy, new RequotePolicy(policyConfig),
-                id -> instrument, wiring.fulfillmentPolicy(), scale.orchestrator(), clock, ids, workerId, jitter);
+        Map<MerchantId, UcpHttpGateway> gateways = new LinkedHashMap<>();
+        int at = 0;
+        for (Merchant m : merchants) {
+            gateways.put(m.id(), gateway(m, random(seed, at++), ids));
+        }
+        return new DefaultOrchestrator(repo, approvalRepo, service, MerchantGateways.of(gateways), policy,
+                new RequotePolicy(policyConfig), MerchantInstruments.of(instruments),
+                merchants.getFirst().wiring().fulfillmentPolicy(), scale.orchestrator(), clock, ids, workerId, jitter);
     }
 
-    private UcpHttpGateway gateway(SplittableRandom random, IdGenerator ids) {
-        return new UcpHttpGateway(shop, ucp, wiring.transport().apply(new JdkHttpTransport(ucp)), breakers, clock, Sleeper.THREAD, random, ids,
-                java.util.Set.of(), wiring.handlerId(), wiring.ucpVersions());
+    /** Merchant 0 gets {@code base} as it always did; the others get seeds of their own derived from it. */
+    private static SplittableRandom random(long base, int merchant) {
+        return new SplittableRandom(merchant == 0 ? base : base ^ (merchant * 0x9E3779B97F4A7C15L));
+    }
+
+    private UcpHttpGateway gateway(Merchant m, SplittableRandom random, IdGenerator ids) {
+        MerchantWiring wiring = m.wiring();
+        return new UcpHttpGateway(entries.get(m.id()), ucp, wiring.transport().apply(new JdkHttpTransport(ucp)),
+                breakers, clock, Sleeper.THREAD, random, ids, java.util.Set.of(), wiring.handlerId(),
+                wiring.ucpVersions());
     }
 
     /**
@@ -238,12 +317,16 @@ public final class AgentStack implements AutoCloseable {
     }
 
     /**
-     * The ports of an agent row's tools (m5-plan section 9): the lane's one merchant, its catalog through the proxy,
-     * and this stack's orchestrator. No approval service and no gateway, so no tool can approve or complete (I6).
+     * The ports of an agent row's tools (m5-plan section 9): the stack's registry, each merchant's catalog through its
+     * proxy, and this stack's orchestrator. No approval service and no gateway, so no tool can approve or complete (I6).
      */
     ToolPorts toolPorts() {
-        MerchantRegistry registry = new InMemoryMerchantRegistry(List.of(shop));
-        return new ToolPorts(registry, Map.of(Scenarios.SHOP, catalog), orchestrator);
+        return new ToolPorts(registry, Map.copyOf(catalogs), orchestrator);
+    }
+
+    /** The registry P1 and the tools read: the real one over several merchants, a one-entry one over one. */
+    MerchantRegistry registry() {
+        return registry;
     }
 
     /** How many intents {@code user} has in this run's database (S12's check, section 8's no-side-effect check). */
