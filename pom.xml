@@ -277,6 +277,8 @@
                             <jvmArgs>
                                 <jvmArg>-Dproperty.tries=${mutation.property.tries}</jvmArg>
                                 <jvmArg>-Dproperty.seed=${mutation.property.seed}</jvmArg>
+                                <!-- PIT's test JVMs write partial crash-matrix tables; only they may skip the comparison (CrashMatrixContract). -->
+                                <jvmArg>-Dcrash.matrix.partial=allowed</jvmArg>
                             </jvmArgs>
                         </configuration>
                     </plugin>
