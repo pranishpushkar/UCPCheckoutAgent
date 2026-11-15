@@ -144,7 +144,13 @@ public record Scenario(
          * The agent runtime proposes (M5, 13.1 D6): {@code AgentRuntime.run} with a {@code ScriptedModel} replaying the
          * row's script and a {@link ScriptedUser}; the run's intents are then decided and driven as in M4.
          */
-        AGENT
+        AGENT,
+        /**
+         * Each of the row's {@link Multi#users} proposes the same basket at the target (the quote reserves nothing), and
+         * the approver decides every intent as its owner. Then every intent's first complete is sent at the same instant,
+         * each by a thread of its own released through a barrier, on a schedule seeded by the run (S21).
+         */
+        RACE
     }
 
     public Scenario {

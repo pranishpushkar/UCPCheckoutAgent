@@ -3,6 +3,7 @@ package dev.ucplab.eval.check;
 import dev.ucplab.core.approval.ApprovalRecord;
 import dev.ucplab.core.approval.ApprovalSnapshot;
 import dev.ucplab.core.approval.ApprovalStatus;
+import dev.ucplab.core.identity.UserId;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.merchant.MutatingOp;
 import dev.ucplab.eval.AutoApprover;
@@ -107,10 +108,14 @@ public final class I3CompleteNeedsApproval implements InvariantCheck {
                     v.add(where + ": the stored approval row " + row.id() + " for decision #" + d.seq() + " is "
                             + row.status());
                 }
-                if (!row.owner().equals(e.owner()) || !row.decidedBy().equals(Optional.of(e.owner()))) {
+                // The owner of the intent decides its approvals, and the intent belongs to a user the harness signed in as.
+                UserId owns = e.intents().stream().filter(p -> p.intent().id().equals(intent))
+                        .map(p -> p.intent().owner()).findFirst().orElse(e.owner());
+                if (!e.users().contains(owns) || !row.owner().equals(owns)
+                        || !row.decidedBy().equals(Optional.of(owns))) {
                     v.add(where + ": the stored approval row " + row.id() + " is owned by " + row.owner().value()
                             + " and decided by " + row.decidedBy().map(u -> u.value()).orElse("nobody")
-                            + ", not the run's user " + e.owner().value());
+                            + ", not the run's user " + e.owner().value() + " (intent owner " + owns.value() + ")");
                 }
             }, () -> v.add(where + ": D holds no approval row for decision #" + d.seq() + " of " + intent.value()));
         }

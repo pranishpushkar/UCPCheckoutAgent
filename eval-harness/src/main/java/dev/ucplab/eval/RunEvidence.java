@@ -35,6 +35,8 @@ import java.util.stream.Collectors;
  * @param views a run over several merchants (m6a-plan C11): what each merchant's own ground truth, proxy log and breaker
  *     held, in lane order. Empty for a lane of one, where {@link #orders}, {@link #sessions} and {@link #proxyLog} are the
  *     merchant's; with views they are merchant 0's, and the checks run on one {@link #slice} per view
+ * @param otherUsers the users the harness signed in as besides {@link #owner} (S21: two users); empty for every other row.
+ *     I3 accepts an approval decided by the owner of its own intent, if that owner is {@code owner} or one of these
  */
 public record RunEvidence(
         String scenarioId,
@@ -55,7 +57,8 @@ public record RunEvidence(
         List<Child> children,
         Optional<AgentRun> agentRun,
         String runLog,
-        List<MerchantView> views) {
+        List<MerchantView> views,
+        List<UserId> otherUsers) {
 
     /**
      * One merchant's side of a run over several merchants: O and G from the merchant, L from the proxy in front of it, and
@@ -141,6 +144,25 @@ public record RunEvidence(
         Objects.requireNonNull(agentRun, "agentRun");
         Objects.requireNonNull(runLog, "runLog");
         views = List.copyOf(views);
+        otherUsers = List.copyOf(otherUsers);
+    }
+
+    /** A run of one user: see {@link #views} for a run over several merchants. */
+    public RunEvidence(String scenarioId, int run, long seed, int lane, UserId owner, Optional<String> aborted,
+                       List<IntentId> proposed, List<Persisted> intents, List<GroundTruth.Order> orders,
+                       Map<String, GroundTruth.Session> sessions, List<LogEntry> proxyLog,
+                       List<AutoApprover.Decision> approvals, Instant startedAt, Optional<Instant> terminalSeenAt,
+                       int crashes, List<Child> children, Optional<AgentRun> agentRun, String runLog,
+                       List<MerchantView> views) {
+        this(scenarioId, run, seed, lane, owner, aborted, proposed, intents, orders, sessions, proxyLog, approvals,
+                startedAt, terminalSeenAt, crashes, children, agentRun, runLog, views, List.of());
+    }
+
+    /** Every user of the run: the owner, then the others. */
+    public List<UserId> users() {
+        List<UserId> all = new java.util.ArrayList<>(List.of(owner));
+        all.addAll(otherUsers);
+        return List.copyOf(all);
     }
 
     /** An agent run of a lane of one: no view of any other merchant. */
@@ -156,7 +178,7 @@ public record RunEvidence(
     /** The same evidence with the run aborted for {@code reason} (a row's claim that the run did not bear out). */
     public RunEvidence withAborted(Optional<String> reason) {
         return new RunEvidence(scenarioId, run, seed, lane, owner, reason, proposed, intents, orders, sessions, proxyLog,
-                approvals, startedAt, terminalSeenAt, crashes, children, agentRun, runLog, views);
+                approvals, startedAt, terminalSeenAt, crashes, children, agentRun, runLog, views, otherUsers);
     }
 
     /**
@@ -173,7 +195,7 @@ public record RunEvidence(
                 proposed.stream().filter(id -> mine.contains(id) || (first && !persistedAnywhere.contains(id))).toList(),
                 intents.stream().filter(p -> mine.contains(p.intent().id())).toList(), view.orders(), view.sessions(),
                 view.proxyLog(), approvals.stream().filter(d -> mine.contains(d.intentId())).toList(), startedAt,
-                terminalSeenAt, crashes, children, agentRun, runLog, List.of());
+                terminalSeenAt, crashes, children, agentRun, runLog, List.of(), otherUsers);
     }
 
     /** A run with no agent runtime: an orchestrator-direct row. */

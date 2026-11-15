@@ -63,7 +63,8 @@ class MultiMerchantScenariosTest {
         assertThat(found.all()).as("%s run %d", s.id(), run).isEmpty();
         assertThat(RunResult.of(s, e, found).expected()).as("%s run %d expected", s.id(), run).isTrue();
         assertThat(e.views()).as("%s run %d has a view of each merchant", s.id(), run)
-                .extracting(RunEvidence.MerchantView::merchant).containsExactly(A, B, C);
+                .extracting(RunEvidence.MerchantView::merchant)
+                .containsExactlyElementsOf(List.of(A, B, C).subList(0, s.multi().merchants()));
         e.views().forEach(v -> assertThat(v.proxyLog()).allSatisfy(l -> assertThat(l.settled()).isTrue()));
         return e;
     }
@@ -98,5 +99,49 @@ class MultiMerchantScenariosTest {
             assertThat(atB).extracting(LogEntry::path).noneMatch(p -> p.contains("/checkout-sessions"));
             assertThat(view(e, A).proxyLog()).extracting(LogEntry::path).anyMatch(p -> p.contains("/checkout-sessions"));
         }
+    }
+
+    /** What S21 must leave: one order at B, none at A, one intent COMPLETED, the other out of stock. */
+    private static void assertOneWinner(RunEvidence e, String what) {
+        assertThat(e.intents()).as(what).hasSize(2);
+        assertThat(e.intents()).extracting(p -> p.intent().state())
+                .containsExactlyInAnyOrder(IntentState.COMPLETED, IntentState.FAILED_NOT_CHARGED);
+        assertThat(e.intents()).filteredOn(p -> p.intent().state() == IntentState.FAILED_NOT_CHARGED)
+                .singleElement().satisfies(p -> assertThat(p.intent().failureReason()).contains("out_of_stock"));
+        assertThat(e.intents()).extracting(p -> p.intent().owner()).doesNotHaveDuplicates();
+        assertThat(e.intents()).extracting(p -> p.intent().merchantId()).containsOnly(B);
+        assertThat(view(e, B).orders()).as(what + ": orders at B").hasSize(1);
+        assertThat(view(e, A).orders()).as(what + ": orders at A").isEmpty();
+    }
+
+    // Covers: S21, I1, 19, A.1 (two users buy the one Wool Cap at B at the same moment. Both proposals reach approval at
+    // stock 1, both are approved, both completes are in flight together; B serves one and answers out_of_stock to the
+    // other: exactly one order, one intent COMPLETED, the other FAILED_NOT_CHARGED with out_of_stock)
+    @Test
+    void s21_runs_exactlyOneOrder_oneWinner_oneOutOfStock() {
+        for (int run = 0; run < RUNS; run++) {
+            RunEvidence e = runClean(Scenarios.S21, run);
+
+            assertOneWinner(e, "S21 run " + run);
+        }
+    }
+
+    /** S21 with the merchant's stock raised to 2 once both quotes are pending: a merchant whose stock check never trips. */
+    private static Scenario s21AgainstAMerchantThatOversells() {
+        Scenario s = Scenarios.S21;
+        return new Scenario(s.id(), s.title(), s.fault(), s.expected(), s.requiredInvariants(), s.rules(), s.approver(),
+                s.driver(), s.target(), s.basket(), s.paymentToken(), (m, t) -> m.setStock("b_cap_03", 2),
+                s.faultWindow(), s.agent(), s.multi());
+    }
+
+    // Covers: S21, I1 (the row can fail: against a merchant that sells the Wool Cap twice, two orders exist for the one in
+    // stock, and the run is aborted with the oversell, never passed. The lab merchant cannot be stubbed, so its own stock
+    // control stands in for a merchant that skips the check)
+    @Test
+    void s21_failsAgainstAMerchantThatOversells() {
+        RunEvidence e = run(s21AgainstAMerchantThatOversells(), 0);
+
+        assertThat(e.aborted()).hasValueSatisfying(why -> assertThat(why).contains("S21 claim").contains("2 orders"));
+        assertThat(view(e, B).orders()).hasSize(2);
     }
 }

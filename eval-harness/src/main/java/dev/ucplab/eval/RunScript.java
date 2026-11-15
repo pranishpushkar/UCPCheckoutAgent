@@ -16,6 +16,7 @@ import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.faultproxy.LogEntry;
 import dev.ucplab.faultproxy.PathPattern;
 import dev.ucplab.faultproxy.RuleSet;
+import dev.ucplab.merchant.LabMerchant;
 import dev.ucplab.runtime.AgentBudget;
 import dev.ucplab.runtime.AgentRuntime;
 import dev.ucplab.runtime.BudgetLimit;
@@ -44,6 +45,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.SplittableRandom;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
@@ -53,6 +55,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.LockSupport;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -215,11 +218,15 @@ public final class RunScript {
         Map<MerchantId, CircuitBreaker.State> breakerStates = new LinkedHashMap<>();
         UserId user = new UserId("eval-" + name);
         List<IntentId> proposed = new ArrayList<>();
+        List<UserId> otherUsers = new ArrayList<>();
         List<AutoApprover.Decision> decisions = List.of();
         Optional<String> aborted = Optional.empty();
         Optional<Instant> terminalSeenAt = Optional.empty();
         List<RunEvidence.Persisted> persisted = new ArrayList<>();
         boolean race = scenario.driver() == Scenario.Driver.ADVANCE_RACE;
+        boolean usersRace = scenario.driver() == Scenario.Driver.RACE;
+        // Rows of one merchant change the merchant they name (merchant 0, the lane's only one, for every row before M6a).
+        LabMerchant target = lane.merchant(Math.max(0, lane.merchantIds().indexOf(scenario.target())));
         Optional<Scenario.AdminRules> window = scenario.faultWindow().build(scale);
         AtomicReference<Thread> clearer = new AtomicReference<>();
         AtomicReference<String> windowFailed = new AtomicReference<>();
@@ -227,7 +234,7 @@ public final class RunScript {
         Children children = new Children(name, seed);
         Optional<RunEvidence.AgentRun> agentRun = Optional.empty();
         try (AgentStack stack = stack(scenario, lane.newDatabase(name), seed, new SequentialIdGenerator(name),
-                race || killPoint.isPresent() ? AgentStack.DECISION_ONLY : scale.orchestrator().lease())) {
+                race || usersRace || killPoint.isPresent() ? AgentStack.DECISION_ONLY : scale.orchestrator().lease())) {
             // The session id stands for a credential reference: it is the evaluation's canary (I8, section 11).
             Supplier<AuthContext> auth = () -> new AuthContext(user, user.value() + "@eval.example",
                     stack.clock.instant(), canary);
@@ -236,8 +243,20 @@ public final class RunScript {
             AutoApprover approver = new AutoApprover(stack.approvalService, scenario.approver(), auth, stack.clock,
                     tokenSeen, () -> {
                         window.ifPresent(w -> clearer.set(openWindow(w, windowFailed)));
-                        scenario.beforeFirstDecision().apply(lane.merchant(), scale);
+                        scenario.beforeFirstDecision().apply(target, scale);
                     });
+            // The other users of a multi-user row (S21) each have an approver of their own: an owner decides only its own.
+            List<Supplier<AuthContext>> auths = new ArrayList<>(List.of(auth));
+            List<AutoApprover> approvers = new ArrayList<>(List.of(approver));
+            for (int u = 1; u < scenario.multi().users(); u++) {
+                UserId other = new UserId("eval-" + name + "-u" + u);
+                otherUsers.add(other);
+                Supplier<AuthContext> otherAuth = () -> new AuthContext(other, other.value() + "@eval.example",
+                        stack.clock.instant(), canary);
+                auths.add(otherAuth);
+                approvers.add(new AutoApprover(stack.approvalService, scenario.approver(), otherAuth, stack.clock,
+                        tokenSeen, () -> { }));
+            }
             try {
                 if (killPoint.isPresent()) {
                     // The agent child is the worker; it is running before the intent exists.
@@ -249,11 +268,14 @@ public final class RunScript {
                     aborted = agent.abort();
                     agentRun = agent.evidence();
                 } else {
-                    proposed.addAll(propose(stack, scenario, run, auth));
+                    proposed.addAll(propose(stack, scenario, run, auths));
                 }
                 Set<IntentId> ids = new LinkedHashSet<>(proposed);
                 if (killPoint.isPresent()) {
                     // No loop here: only the child drives the intent.
+                } else if (usersRace) {
+                    aborted = raceUsers(stack, proposed, approvers, seed, target);
+                    stack.loop.start();
                 } else if (race) {
                     for (int i = 0; i < RACERS; i++) {
                         racers.add(stack.racer(new SequentialIdGenerator(name + "-w" + i), i));
@@ -264,7 +286,7 @@ public final class RunScript {
                 Instant deadline = Instant.now().plus(timeLimit());
                 while (aborted.isEmpty()) {
                     for (IntentId id : ids) {
-                        if (approver.tick(id)) {
+                        if (approvers.get(Math.min(proposed.indexOf(id), approvers.size() - 1)).tick(id)) {
                             if (killPoint.isPresent()) {
                                 // The child's next pass takes the APPROVED intent.
                             } else if (race && !racers.isEmpty()) {
@@ -347,7 +369,7 @@ public final class RunScript {
                 }
                 children.close();
             }
-            decisions = approver.log();
+            decisions = approvers.stream().flatMap(a -> a.log().stream()).toList();
         } catch (IOException e) {
             aborted = Optional.of("could not create the run's database: " + e.getClass().getSimpleName());
         }
@@ -368,7 +390,7 @@ public final class RunScript {
         }
         RunEvidence evidence = new RunEvidence(scenario.id(), run, seed, lane.index(), user, aborted, proposed, persisted,
                 orders, sessions, log, decisions, startedAt, terminalSeenAt, children.kills(), children.records(),
-                agentRun, runLog.text(), views);
+                agentRun, runLog.text(), views, otherUsers);
         if (merchantCount > 1 && aborted.isEmpty()) {
             Optional<String> claim = scenario.multi().claim().failed(evidence, scale);
             if (claim.isPresent()) {
@@ -506,10 +528,13 @@ public final class RunScript {
     }
 
     private List<IntentId> propose(AgentStack stack, Scenario scenario, int run,
-                                   Supplier<AuthContext> auth) throws InterruptedException {
+                                   List<Supplier<AuthContext>> auths) throws InterruptedException {
         String rationale = "scripted run: " + scenario.id();
+        Supplier<AuthContext> auth = auths.getFirst();
         return switch (scenario.driver()) {
             case AGENT -> throw new IllegalStateException(scenario.id() + ": the agent runtime proposes");
+            case RACE -> auths.stream().map(a -> stack.orchestrator.propose(a.get(), scenario.target(),
+                    scenario.basket(), rationale).intentId()).toList();
             case PROPOSE_ONCE, ADVANCE_RACE, KILL_AND_RESTART -> List.of(stack.orchestrator.propose(auth.get(),
                     scenario.target(), scenario.basket(), rationale).intentId());
             case PROPOSE_TWICE -> {
@@ -718,6 +743,79 @@ public final class RunScript {
                 }
             }
             return ids;
+        }
+    }
+
+    /**
+     * S21: every user's intent is approved by its owner, each decision's lease is let run out (it holds the intent only
+     * for its own write), then every intent's first complete is sent at the same instant: one platform thread each, ready
+     * at a latch and released together. Which intent leaves first and how long the others wait (up to 3 ms) come from the
+     * run's seed, so a run is the same schedule again and the 200 runs of a reading are 200 different ones. The merchant
+     * is slowed for the race (payment latency a quarter of the complete timeout), so each complete is still in flight
+     * when the other arrives. Returns why the run must be aborted, if it must.
+     */
+    private Optional<String> raceUsers(AgentStack stack, List<IntentId> ids, List<AutoApprover> approvers, long seed,
+                                       LabMerchant merchant) throws InterruptedException {
+        merchant.setPaymentLatencyMs(scale.completeTimeout().dividedBy(4).toMillis());
+        try {
+            Instant limit = Instant.now().plus(timeLimit());
+            for (int i = 0; i < ids.size(); i++) {
+                while (!approvers.get(i).tick(ids.get(i))) {
+                    if (Instant.now().isAfter(limit)) {
+                        return Optional.of("S21: the intent of user " + i + " was not approved within " + timeLimit());
+                    }
+                    Thread.sleep(POLL);
+                }
+            }
+            Instant leaseLimit = Instant.now().plus(scale.lease());
+            for (IntentId id : ids) {
+                while (stack.intents.findForSystem(id).flatMap(PurchaseIntent::leaseUntil)
+                        .filter(until -> !Instant.now().isAfter(until)).isPresent()) {
+                    if (Instant.now().isAfter(leaseLimit)) {
+                        return Optional.of("S21: a decision's lease did not run out within " + scale.lease());
+                    }
+                    Thread.sleep(1);
+                }
+            }
+            SplittableRandom schedule = new SplittableRandom(seed ^ 0x5215);
+            int first = schedule.nextInt(ids.size());
+            long skewNanos = schedule.nextLong(0, 3_000_000);
+            CountDownLatch ready = new CountDownLatch(ids.size());
+            CountDownLatch go = new CountDownLatch(1);
+            List<Future<Optional<String>>> calls = new ArrayList<>();
+            try (ExecutorService pool = Executors.newFixedThreadPool(ids.size())) {
+                for (int i = 0; i < ids.size(); i++) {
+                    int at = i;
+                    calls.add(pool.submit(() -> {
+                        ready.countDown();
+                        go.await();
+                        if (at != first) {
+                            LockSupport.parkNanos(skewNanos);
+                        }
+                        try {
+                            stack.orchestrator.advance(ids.get(at));
+                            return Optional.<String>empty();
+                        } catch (RuntimeException e) {
+                            return Optional.of("S21: the first complete of user " + at + " threw "
+                                    + e.getClass().getSimpleName());
+                        }
+                    }));
+                }
+                ready.await();
+                go.countDown();
+                Optional<String> failed = Optional.empty();
+                for (Future<Optional<String>> call : calls) {
+                    try {
+                        Optional<String> one = call.get();
+                        failed = failed.isPresent() ? failed : one;
+                    } catch (ExecutionException e) {
+                        throw new IllegalStateException(e.getCause());
+                    }
+                }
+                return failed;
+            }
+        } finally {
+            merchant.setPaymentLatencyMs(0);
         }
     }
 

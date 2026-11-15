@@ -261,6 +261,37 @@ public final class Scenarios {
     /** What the catalog tools call on a merchant. */
     private static final String CATALOG_ALL = "/ucp/v1/catalog/*";
 
+    /** The one Wool Cap merchant B holds ({@code dev/catalogs/b.json}). */
+    static final String S21_ITEM = "b_cap_03";
+    static final int S21_STOCK = 1;
+
+    /**
+     * S21 (13.2): two users buy the one Wool Cap at merchant B at the same moment. The row's claim: B ends with one order
+     * for the one in stock, never two, one intent COMPLETED and the other FAILED_NOT_CHARGED.
+     */
+    public static final Scenario S21 = new Scenario("S21", "two users buy the last item at the same moment",
+            "none; two users propose " + S21_ITEM + " x 1 at merchant B (stock " + S21_STOCK + "), both approve, both"
+                    + " first completes are released together on a seeded schedule; payment latency complete timeout / 4",
+            Set.of(IntentState.COMPLETED, IntentState.FAILED_NOT_CHARGED), List.of("I1"), (t, run) -> RuleSet.empty(),
+            AutoApprover.Policy.APPROVE_ALL, Scenario.Driver.RACE, SHOP_B, List.of(new ProposedLine(S21_ITEM, 1)), PAY_OK,
+            Scenario.MerchantEvent.NONE, Scenario.FaultWindow.NONE, Optional.empty(),
+            new Scenario.Multi(2, 2, java.util.Map.of(), (e, scale) -> {
+                RunEvidence.MerchantView b = e.views().stream().filter(v -> v.merchant().equals(SHOP_B)).findFirst()
+                        .orElseThrow();
+                if (b.orders().size() != S21_STOCK) {
+                    return Optional.of("S21 claim: " + b.orders().size() + " orders at the merchant for " + S21_STOCK
+                            + " in stock");
+                }
+                long completed = e.intents().stream().filter(p -> p.intent().state() == IntentState.COMPLETED).count();
+                long failed = e.intents().stream().filter(p -> p.intent().state() == IntentState.FAILED_NOT_CHARGED)
+                        .count();
+                if (completed != 1 || failed != 1) {
+                    return Optional.of("S21 claim: " + completed + " intents COMPLETED and " + failed
+                            + " FAILED_NOT_CHARGED, not one of each");
+                }
+                return Optional.empty();
+            }));
+
     /** A-S20's claim (see {@link #A_S20}). */
     private static final Scenario.Claim A_S20_CLAIM = (e, scale) -> {
         Duration first = e.agentRun().map(a -> a.record().toolEvents()).filter(l -> !l.isEmpty())
@@ -317,7 +348,7 @@ public final class Scenarios {
     /** Every row the harness can run: the catalogue rows in catalogue order, then the agent rows. */
     public static List<Scenario> all() {
         return List.of(S0, S1, S2, S3, S4, S5A, S5B, S6, S7, S8, S9, S11, S13, S14, S28,
-                A_S0, A_S2, A_S4, A_S10, A_S11, A_S12, A_B, A_S20);
+                A_S0, A_S2, A_S4, A_S10, A_S11, A_S12, A_B, A_S20, S21);
     }
 
     /**
