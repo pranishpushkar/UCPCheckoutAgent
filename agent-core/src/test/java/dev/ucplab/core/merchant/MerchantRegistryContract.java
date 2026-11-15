@@ -65,4 +65,17 @@ public abstract class MerchantRegistryContract {
         assertThat(registry.find(GAMMA_SUSPENDED.id()).map(MerchantEntry::status))
                 .isIn(Optional.empty(), Optional.of(MerchantStatus.SUSPENDED));
     }
+
+    // Covers: 19, P1, Appendix B (active() and find() never disagree: a merchant is listed active exactly when find reports it
+    // ACTIVE, so a policy that reads find and a tool that reads active see the same merchants)
+    @Test
+    void active_andFind_agreeForEveryMerchant() {
+        MerchantRegistry registry = create(List.of(ALPHA, GAMMA_SUSPENDED, BETA));
+
+        for (MerchantEntry e : List.of(ALPHA, GAMMA_SUSPENDED, BETA)) {
+            boolean listed = registry.active().stream().anyMatch(a -> a.id().equals(e.id()));
+            boolean foundActive = registry.find(e.id()).map(f -> f.status() == MerchantStatus.ACTIVE).orElse(false);
+            assertThat(listed).as("%s listed active", e.id()).isEqualTo(foundActive);
+        }
+    }
 }

@@ -275,6 +275,29 @@ class MerchantGatesTest {
         assertThat(t.calls).filteredOn(c -> c.method().equals("POST")).isEmpty();
     }
 
+    // Covers: 8.5, 19, 26.2 (every discovery failure carries a fixed reason code, so a registry maps by constant and never by
+    // reading a message)
+    @Test
+    void everyDiscoveryFailure_carriesItsFixedReasonCode() {
+        String ok = fixture("discovery");
+        Map<String, String> bodies = new java.util.LinkedHashMap<>();
+        bodies.put(UcpHttpGateway.INCOMPATIBLE_VERSION, ok.replace("\"2026-08-25\"", "\"2030-01-01\""));
+        bodies.put(UcpHttpGateway.CAPABILITY_MISSING, ok.replace("dev.ucp.shopping.checkout", "dev.ucp.shopping.cart"));
+        bodies.put(UcpHttpGateway.ENDPOINT_NOT_ALLOWED, ok.replace("127.0.0.1:8081/ucp/v1", "evil.example:8081/ucp/v1"));
+        bodies.put(UcpHttpGateway.HANDLER_MISSING, ok.replace("mock_pay_1", "other_pay_9"));
+        bodies.put(UcpHttpGateway.INVALID_PROFILE, "not json");
+        bodies.forEach((reason, body) -> {
+            Transport t = new Transport(call -> reply(200, body));
+            UcpHttpGateway g = gateway(new MerchantEntry(A, URI.create("http://127.0.0.1:8081"), "A", MerchantStatus.ACTIVE), t);
+            assertThatThrownBy(() -> g.discover(A)).isInstanceOfSatisfying(DiscoveryFailedException.class,
+                    e -> assertThat(e.reason()).as("reason for %s", reason).isEqualTo(reason));
+        });
+        Transport down = new Transport(call -> reply(500, "error_not_found"));
+        UcpHttpGateway g = gateway(new MerchantEntry(A, URI.create("http://127.0.0.1:8081"), "A", MerchantStatus.ACTIVE), down);
+        assertThatThrownBy(() -> g.discover(A)).isInstanceOfSatisfying(DiscoveryFailedException.class,
+                e -> assertThat(e.reason()).isEqualTo(UcpHttpGateway.UNREACHABLE));
+    }
+
     // Covers: 8.5, 19 (a listed second host and port is used: the create goes to it, and the merchant keeps one breaker)
     @Test
     void aListedEndpointHost_isUsed_andSharesTheMerchantsBreaker() {
