@@ -1,9 +1,14 @@
-# The lab stack (DESIGN 21.1 and 25.3, M6): lab-net, merchant-a, fault-proxy and agent-service.
+# The lab stack (DESIGN 21.1 and 25.3, M6a): lab-net, three merchants (merchant-a to -c), three fault proxies
+# (fault-proxy-a to -c) and agent-service.
 #
-# The merchant and the proxy bind 127.0.0.1 only (Appendix A, section 12), so every lab container shares the network
-# namespace of lab-net, which never restarts and so outlives a `docker kill` of any other service (25.5 step 8).
-# /_lab and the proxy admin API are reachable only inside that namespace. lab-net publishes 8080 on the host's
-# loopback only: the agent-service console and API.
+# The merchants and the proxies bind 127.0.0.1 only (Appendix A, section 12), so every lab container shares the network
+# namespace of lab-net, which never restarts and so outlives a `docker kill` of any other service (25.5 step 8; if lab-net
+# itself is killed, scripts/lab-recover.sh restarts the others). /_lab and the proxy admin API are reachable only inside
+# that namespace. lab-net publishes 8080 on the host's loopback only: the agent-service console and API.
+#
+# One merchant image serves all three merchants: merchant-b and merchant-c pass --catalog with a file from dev/catalogs/,
+# bind-mounted read-only (configuration, never an image layer). agent-service reads dev/merchants.yaml the same way and
+# starts only when all three proxies are healthy, because its startup check suspends a merchant it cannot reach.
 #
 # Build the jars first: ./mvnw -B -ntp -DskipTests package, and copy .env.example to .env.
 #
@@ -34,7 +39,35 @@ services:
       timeout: 2s
       retries: 15
 
-  fault-proxy:
+  merchant-b:
+    image: ucplab/merchant:local
+    network_mode: service:lab-net
+    depends_on:
+      - lab-net
+    command: ["9002", "--catalog", "/catalogs/b.json"]
+    volumes:
+      - ./dev/catalogs:/catalogs:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:9002/.well-known/ucp"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  merchant-c:
+    image: ucplab/merchant:local
+    network_mode: service:lab-net
+    depends_on:
+      - lab-net
+    command: ["9003", "--catalog", "/catalogs/c.json"]
+    volumes:
+      - ./dev/catalogs:/catalogs:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:9003/.well-known/ucp"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  fault-proxy-a:
     image: ucplab/fault-proxy:local
     build:
       context: .
@@ -50,6 +83,32 @@ services:
       timeout: 2s
       retries: 15
 
+  fault-proxy-b:
+    image: ucplab/fault-proxy:local
+    network_mode: service:lab-net
+    depends_on:
+      merchant-b:
+        condition: service_healthy
+    command: ["--port", "9102", "--upstream", "http://127.0.0.1:9002"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:9102/.well-known/ucp"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  fault-proxy-c:
+    image: ucplab/fault-proxy:local
+    network_mode: service:lab-net
+    depends_on:
+      merchant-c:
+        condition: service_healthy
+    command: ["--port", "9103", "--upstream", "http://127.0.0.1:9003"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:9103/.well-known/ucp"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
   agent-service:
     image: ucplab/agent-service:local
     build:
@@ -57,12 +116,19 @@ services:
       dockerfile: docker/agent-service.Dockerfile
     network_mode: service:lab-net
     depends_on:
-      fault-proxy:
+      fault-proxy-a:
+        condition: service_healthy
+      fault-proxy-b:
+        condition: service_healthy
+      fault-proxy-c:
         condition: service_healthy
     environment:
       - AGENT_PROFILE=local
-      - MERCHANT_URL=http://127.0.0.1:9101
-      - MERCHANT_LAB_URL=http://127.0.0.1:9001
+      - MERCHANTS_FILE=/config/merchants.yaml
+      # The names merchants.yaml's token_ref entries point at; the values are in .env (the lab's mock tokens).
+      - MERCHANT_A_TOKEN=${MERCHANT_A_TOKEN:?copy .env.example to .env first}
+      - MERCHANT_B_TOKEN=${MERCHANT_B_TOKEN:?copy .env.example to .env first}
+      - MERCHANT_C_TOKEN=${MERCHANT_C_TOKEN:?copy .env.example to .env first}
       - DATABASE_URL=jdbc:sqlite:/data/ucplab.db
       - APPROVAL_SECRET=${APPROVAL_SECRET:?copy .env.example to .env first}
       - AGENT_MODEL=${AGENT_MODEL:-scripted}
@@ -70,6 +136,7 @@ services:
       - GEMINI_API_KEY
     volumes:
       - ucplab-data:/data
+      - ./dev/merchants.yaml:/config/merchants.yaml:ro
     healthcheck:
       test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8080/readyz"]
       interval: 2s

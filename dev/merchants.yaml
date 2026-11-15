@@ -1,0 +1,34 @@
+# The merchants of the Compose stack (DESIGN 19, 25.3, M6a), read by agent-service as MERCHANTS_FILE=/config/merchants.yaml.
+# `url` is where the agent reaches a merchant: its fault proxy. `lab_url` is the merchant itself, for the lab's ground-truth
+# reads and resets (the local profile only). Every container shares lab-net's network namespace, so all of these are 127.0.0.1.
+# `token_ref` names the environment variable that holds the payment token; the token itself is never in this file. The lab's
+# values are the mock tokens in .env.example. Merchant A serves the built-in catalog; B and C serve dev/catalogs/b.json
+# and c.json (distinct item ids, so get_product is unambiguous).
+merchants:
+  - id: merchant-a
+    name: Merchant A
+    url: http://127.0.0.1:9101
+    lab_url: http://127.0.0.1:9001
+    payment_handler:
+      id: mock_pay_1
+      type: mock_card
+      credential_type: MOCK
+      token_ref: env:MERCHANT_A_TOKEN
+  - id: merchant-b
+    name: Merchant B
+    url: http://127.0.0.1:9102
+    lab_url: http://127.0.0.1:9002
+    payment_handler:
+      id: mock_pay_1
+      type: mock_card
+      credential_type: MOCK
+      token_ref: env:MERCHANT_B_TOKEN
+  - id: merchant-c
+    name: Merchant C
+    url: http://127.0.0.1:9103
+    lab_url: http://127.0.0.1:9003
+    payment_handler:
+      id: mock_pay_1
+      type: mock_card
+      credential_type: MOCK
+      token_ref: env:MERCHANT_C_TOKEN

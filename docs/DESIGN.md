@@ -1159,6 +1159,7 @@ The approval token is delivered only through `GET /api/intents/{id}/approval` to
 | `PUT /api/lab/faults` | Replace the fault rules at one merchant (`merchant_id`, default `merchant-a`; the proxy rule format in section 12). Rules apply only to the caller's lab id |
 | `DELETE /api/lab/faults` | Remove the rules at one merchant (`merchant_id`, default `merchant-a`) |
 | `GET /api/lab/orders?merchant_id=` | Ground-truth orders from the caller's sandbox at each merchant |
+| `GET /api/lab/merchants` | Read-only (local and demo profiles only, like the routes above): lists each configured merchant's `merchant_id`, `name` and `status`, plus its fixed `reason` while it is SUSPENDED, for the console's merchant selector. Never a URL, a lab address or a credential |
 | `POST /api/lab/reset` | Reset the caller's sandbox at every merchant and clear their rules |
 
 In `prod` these routes do not exist (404). Until M6b adds per-user sandboxes (24.4) the `demo` profile refuses to start, and the routes exist in `local` only.

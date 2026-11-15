@@ -4,7 +4,7 @@
 # Step 1 is the clone; run this from the checkout. Step 5 to 7 is the console, or scripts/quickstart-smoke.sh.
 # Step 8 (the live model) is in the README only: it reads your key from the shell and is not run here.
 #
-#   scripts/quickstart.sh          steps 2 to 4: start the stack and wait until all four services are healthy
+#   scripts/quickstart.sh          steps 2 to 4: start the stack and wait until all eight services are healthy
 #   scripts/quickstart.sh --down   the same, then step 9
 set -euo pipefail
 cd "$(dirname "$0")/.."

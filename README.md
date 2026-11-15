@@ -12,8 +12,9 @@ This repository is **a production-grade transaction core inside a lab-scoped sys
 Needs JDK 21 and Docker with Compose v2. Nothing else is installed on the host, and no API key is needed.
 
 1. Clone: `git clone https://github.com/pranishpushkar/UCPCheckoutAgent.git && cd UCPCheckoutAgent`
-2. Steps 2 to 4 are `scripts/quickstart.sh`. They copy the local-only settings, build the jars and start four
-   containers, and wait until all are healthy:
+2. Steps 2 to 4 are `scripts/quickstart.sh`. They copy the local-only settings, build the jars and start eight
+   containers (three merchants, each behind its own fault proxy, the agent service and the network they share), and wait
+   until all are healthy:
 
 ```sh quickstart
 cp .env.example .env
@@ -22,9 +23,11 @@ docker compose up -d --build --wait
 ```
 
 5. Open <http://localhost:8080>, sign in as **alice**, send `hi`, answer `a blue mug`, then press **Approve**. The
-   timeline reaches COMPLETED and the order counter shows 1.
+   timeline reaches COMPLETED and merchant A's order counter shows 1 (the scripted model's first search hit is
+   merchant A's Blue Mug; B and C keep 0).
 6. Press **Drop next complete response** and buy again. The timeline shows COMPLETING, then RECONCILING, then COMPLETED,
-   and the counter shows 2: one new order, not two.
+   and merchant A's counter shows 2: one new order, not two. The **Merchant** selector in the fault lab picks which
+   merchant a fault hits (merchant A when you do not choose).
 7. Or with the command line, which `scripts/quickstart-smoke.sh` runs for you:
    `scripts/ucplab --user alice run hi`, `scripts/ucplab --user alice answer <run> "a blue mug"`,
    `scripts/ucplab --user alice approve <intent>`, `scripts/ucplab --user alice wait <intent>`. As **bob**,
@@ -45,14 +48,16 @@ docker compose down -v
 ```
 
 `AGENT_MODEL=gemini` with no key refuses to start, with the one line `AGENT_MODEL=gemini needs GEMINI_API_KEY` in
-`docker compose logs agent-service`. Each user may start 10 runs an hour (P5): a second quick start on the same volume
-needs `docker compose down -v` first. The manual browser checklist is [docs/demo.md](docs/demo.md).
+`docker compose logs agent-service`. Each user may start 10 runs an hour (P5), and the smoke uses five of alice's: a
+second quick start on the same volume needs `docker compose down -v` first. If you kill `lab-net`, the other containers
+stay on its dead network and keep reporting healthy: run `scripts/lab-recover.sh`. The manual browser checklist is [docs/demo.md](docs/demo.md).
 
 ## How the quick start is proved
 
 `.github/workflows/quickstart.yml` runs on a clean checkout: `scripts/quickstart.sh` (the commands above, by the same
 file), then `scripts/quickstart-smoke.sh` (run, approve, wait for COMPLETED and one order; the drop preset and a purchase
-that reconciles, two orders in all; bob's `not found`), then `scripts/image-secret-scan.sh`, then `docker compose down -v`.
+that reconciles, two orders in all; bob's `not found`; then two merchants: one intent approved at A and one rejected at B,
+orders 1 and 0, and a purchase at A that completes while B answers 503), then `scripts/image-secret-scan.sh`, then `docker compose down -v`.
 
 The scan exports each of the three images with `docker save`, unpacks every layer, and searches every file, the image
 config and its history for planted canaries (a `.env` with a canary key, a file in `data/`, a file in the repository
