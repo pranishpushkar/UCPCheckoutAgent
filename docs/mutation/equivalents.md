@@ -4,7 +4,7 @@ An entry counts only with the owner's `approved:` line, which a session adds onl
 A mutant is matched by class, method, mutator and description, never by line, so a refactor does not silently invalidate an entry.
 A mutant on a star path that is listed here is the only kind of survivor allowed there; "unreachable code" is a finding, not an equivalent.
 
-Format, one block per mutant. **An entry without an `approved:` line is only a proposal and still counts as a survivor.** The owner's decisions of 2026-11-15 on entries 1 to 22 are recorded below (entry 2 was refused and killed by a test, so it is gone; the numbers of the others are kept). Entry 21 is "justified", not equivalent. Entries 66 and 67 (P8) were refused and are removed with the exhaustive switch of P9 fix 2. Entries 24 and 30 (P7) were refused and killed by tests, so they are gone too. Entries 8, 9, 11 and 12 are about the text of an IllegalArgumentException, which is deliberately not asserted.
+Format, one block per mutant. **An entry without an `approved:` line is only a proposal and still counts as a survivor.** The owner's decisions of 2026-11-15 on entries 1 to 22 are recorded below (entry 2 was refused and killed by a test, so it is gone; the numbers of the others are kept). Entry 21 is "justified", not equivalent. Entries 66 and 67 (P8) were refused and are gone: `CircuitBreaker.tryAcquire` is an exhaustive switch with no `default`. Entries 63 to 65 (the constant returns of the old switch) went with it: the rewritten switch has no such mutant (PIT, run `ucpE`). Entries 24 and 30 (P7) were refused and killed by tests, so they are gone too. Entries 8, 9, 11 and 12 are about the text of an IllegalArgumentException, which is deliberately not asserted.
 
 ```
 ### <fully qualified class>.<method> <mutator name>
@@ -375,34 +375,6 @@ Format, one block per mutant. **An entry without an `approved:` line is only a p
 - why it is equivalent: the line already returns the constant true
 - the test that shows it: none possible: the bytecode result is identical
 - approved: owner 2026-11-15
-
-### 63. dev.ucplab.ucp.CircuitBreaker.tryAcquire BooleanTrueReturnValsMutator (the `return true;` of CLOSED)
-- description: replaced boolean return with true
-- why it is equivalent: the line already returns the constant true
-- the test that shows it: none possible: the bytecode result is identical
-- approved: owner 2026-11-15
-
-### 64. dev.ucplab.ucp.CircuitBreaker.tryAcquire BooleanTrueReturnValsMutator (the `return true;` of a due probe)
-- description: replaced boolean return with true
-- why it is equivalent: the line already returns the constant true
-- the test that shows it: none possible: the bytecode result is identical
-- approved: owner 2026-11-15
-
-### 65. dev.ucplab.ucp.CircuitBreaker.tryAcquire BooleanFalseReturnValsMutator (the `return false;` of an open breaker)
-- description: replaced boolean return with false
-- why it is equivalent: the line already returns the constant false
-- the test that shows it: none possible: the bytecode result is identical
-- approved: owner 2026-11-15
-
-### 66. dev.ucplab.ucp.CircuitBreaker.tryAcquire BooleanFalseReturnValsMutator (the `return false;` of the `default` branch, NO_COVERAGE)
-- description: replaced boolean return with false
-- why it is equivalent: the line already returns the constant false. Also: the `default` branch of a switch over the three-valued `State` enum cannot be reached (all of CLOSED, OPEN and HALF_OPEN have a case). Justified as unreachable defensive code, proposed for the owner to approve or to have the branch removed in a later change
-- the test that shows it: none possible
-
-### 67. dev.ucplab.ucp.CircuitBreaker.tryAcquire BooleanTrueReturnValsMutator (the `return false;` of the `default` branch, NO_COVERAGE)
-- description: replaced boolean return with true
-- why it is equivalent: the `default` branch cannot be reached: `state` is one of the three enum values, each with its own case. Unreachable defensive code (the rule says unreachable code is a finding: it is listed here as one, for the owner to approve or to have the branch removed in a later change)
-- the test that shows it: none possible
 
 ### 68. dev.ucplab.ucp.Redactor.changed RemoveConditionalMutator_EQUAL_IF
 - description: removed conditional - replaced equality check with true
