@@ -450,39 +450,46 @@ Format, one block per mutant. **An entry without an `approved:` line is only a p
 - the test that shows it: `SqlPersistenceMutationTest.aFailedMigrationInTheHistory_isNotCurrent` (the `!isFailed()` operand is killed by it) passes with and without the mutation
 - approved: owner 2026-11-15
 
-## Proposed in H3 P10 (found by the final runs), not yet approved
+## From H3 P10 (found by the final runs)
 
 ### 80. dev.ucplab.core.approval.DefaultApprovalService.decide RemoveConditionalMutator_EQUAL_IF (the `leaseOwner().equals(Optional.of(workerId))` operand of `tookLease`)
 - description: removed conditional - replaced equality check with true
 - why it is equivalent: a lease held live by another worker makes `claim` answer Busy before this line is reached, and a lease of another worker that has run out is not live, so the second operand already makes `tookLease` true. The operand cannot change the result for any state `decide` gets here with
 - the test that shows it: `DecideReleasesItsLeaseTest.aLeaseTheWorkerAlreadyHeld_isNotReleased` and `busy_leavesTheHoldersLeaseAlone` pass with and without the mutation (the other operand is killed by them)
+- approved: owner 2026-11-15
 
 ### 81. dev.ucplab.core.intent.InMemoryIntentRepository.releaseLease BooleanFalseReturnValsMutator (the `return false;` of a lease not held by the owner)
 - description: replaced boolean return with false for dev/ucplab/core/intent/InMemoryIntentRepository::releaseLease
 - why it is equivalent: the line already returns the constant false: the mutated return is the same value
 - the test that shows it: none possible: the bytecode result is identical
+- approved: owner 2026-11-15
 
 ### 82. dev.ucplab.core.intent.InMemoryIntentRepository.releaseLease BooleanTrueReturnValsMutator (the `return true;` after the release)
 - description: replaced boolean return with true for dev/ucplab/core/intent/InMemoryIntentRepository::releaseLease
 - why it is equivalent: the line already returns the constant true
 - the test that shows it: none possible: the bytecode result is identical
+- approved: owner 2026-11-15
 
 ### 83. dev.ucplab.persistence.SqlIntentRepository.insertAttempt VoidMethodCallMutator (the `setNull` of an absent http status)
 - description: removed call to java/sql/PreparedStatement::setNull
-- why it is equivalent: PIT removes the call and keeps the evaluation of its argument `n++`, so the placeholder stays unbound, and an unbound parameter is bound as NULL by the driver (the same value `setNull` writes). Checked by hand: removing the call and its `n++` is red, removing the call alone is green
+- why it is equivalent: justified: SQLite binds an unbound parameter as NULL (every statement is opened fresh in a try-with-resources). PIT removes the call and keeps the evaluation of its argument `n++`, so the placeholder stays unbound and is bound as NULL (the same value `setNull` writes). Checked by hand: removing the call and its `n++` is red, removing the call alone is green
 - the test that shows it: `IntentRepositoryContract.recordAttempt_keepsEveryFieldOfTheAttempt` (an attempt with no http status) passes with and without the mutation
+- approved: owner 2026-11-15
 
 ### 84. dev.ucplab.persistence.SqlIntentRepository.updateAttempt VoidMethodCallMutator (the `setNull` of an absent http status)
 - description: removed call to java/sql/PreparedStatement::setNull
-- why it is equivalent: as 83
+- why it is equivalent: as 83: justified: SQLite binds an unbound parameter as NULL (every statement is opened fresh in a try-with-resources)
 - the test that shows it: `IntentRepositoryContract.resolveAttempt*` (a resolve with no http status) pass with and without the mutation
+- approved: owner 2026-11-15
 
 ### 85. dev.ucplab.persistence.SqlIntentRepository.lambda$claimRecoverable$14 RemoveConditionalMutator_EQUAL_ELSE (the `excluded.isEmpty()` test)
 - description: removed conditional - replaced equality check with false
 - why it is equivalent: with no excluded intent the mutant builds `AND id NOT IN ()`, which SQLite accepts and which is true for every row: the same rows are selected
 - the test that shows it: `IntentRepositoryContract.claimRecoverable_*` (with and without an exclude set) pass with and without the mutation
+- approved: owner 2026-11-15
 
 ### 86. dev.ucplab.persistence.SqlIntentRepository.storedSession RemoveConditionalMutator_EQUAL_IF (the `r.next()` test)
 - description: removed conditional - replaced equality check with true
-- why it is equivalent: for an intent with no row the mutant reads `getString(1)` before any `next()`; the SQLite driver answers null for it, so the result is the same empty Optional. Driver behaviour, checked by hand (the test below is green with the mutation)
+- why it is equivalent: justified: driver behaviour (sqlite-jdbc answers null before `next()`). For an intent with no row the mutant reads `getString(1)` before any `next()`, so the result is the same empty Optional. Checked by hand (the test below is green with the mutation)
 - the test that shows it: `IntentRepositoryContract.resolveAttemptWithIntent_forAnUnknownIntent_isNotFound` passes with and without the mutation
+- approved: owner 2026-11-15
