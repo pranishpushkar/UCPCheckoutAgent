@@ -57,7 +57,10 @@ fails. A mutant that no test notices is a place where the same kind of bug could
 It proves that the tests fail when a guard, a boundary, a return value or a call on the mutated classes changes. It does not prove that the
 invariants are the right ones, that equivalence claims are right (a person decides), or anything about code it does not mutate. **Not mutated:**
 agent-service's owner scoping (covered by S18 and M6b's checks), the agent runtime and its tools, the faults the proxy injects, the evaluation harness,
-the merchants. Concurrency interleavings stay with the seeded property tests.
+the merchants. Concurrency interleavings stay with the seeded property tests. The SQL itself is not mutated either: PIT mutates Java bytecode, so the
+migrations and the V7 trigger that stops `purchase_intent.merchant_id` from changing (I11) are not mutants; the trigger's own contract test
+(`MigrationsTest.v7_aRawUpdateOfMerchantId_aborts_otherUpdatesDoNot` and `v7_upgradesAV6DatabaseWithRows_leavingEveryRowUnchanged`) covers it, and a
+plant in the SQL (a trigger that lets the update through) is what that test is for.
 
 ## Cost (measured in P1, Java 21, Maven 3.10.0, 4 threads, 500 schedules)
 

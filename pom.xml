@@ -231,8 +231,10 @@
                 <mutation.mutators>STRONGER</mutation.mutators>
                 <!-- The module's own tests. agent-persistence puts core's test-jar on its classpath, whose tests read paths relative to
                      agent-core and fail there, so its run passes -Dmutation.targetTests='dev.ucplab.persistence.*' (one glob: a comma list on the command line matched nothing).
-                     SqlCrashMatrixTest, the one persistence test in a core package, is not selected; P9 decides how to include it. -->
+                     SqlCrashMatrixTest, the one persistence test in a core package (it needs the package-private CrashHarness of core's
+                     test-jar), is selected by the second glob: -Dmutation.targetTests2='dev.ucplab.core.orchestrator.SqlCrashMatrixTest'. -->
                 <mutation.targetTests>dev.ucplab.*</mutation.targetTests>
+                <mutation.targetTests2>dev.ucplab.NONE</mutation.targetTests2>
                 <mutation.extraExcludedTests>dev.ucplab.NONE</mutation.extraExcludedTests>
                 <mutation.property.tries>500</mutation.property.tries>
                 <mutation.property.seed>1</mutation.property.seed>
@@ -250,6 +252,7 @@
                                  other packages, and a narrow selection reads as no coverage (the H3 Stage 0 trap). -->
                             <targetTests>
                                 <param>${mutation.targetTests}</param>
+                                <param>${mutation.targetTests2}</param>
                             </targetTests>
                             <excludedTestClasses>
                                 <!-- the evaluation harness starts servers and child JVMs (S9, S14): minutes per run, and not part of any star path -->

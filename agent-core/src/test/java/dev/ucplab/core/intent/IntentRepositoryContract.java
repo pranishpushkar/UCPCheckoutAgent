@@ -308,6 +308,26 @@ public abstract class IntentRepositoryContract {
         return List.of(first, second);
     }
 
+    // Covers: 7.3 step 3, I7 (an attempt is stored with every field it was given, answered or not: its status, http status, hash,
+    // frozen body, response and times). Kills SqlIntentRepository.insertAttempt:536 (NO_COVERAGE: the http status of an attempt
+    // written already answered) and the fields around it
+    @Test
+    void recordAttempt_keepsEveryFieldOfTheAttempt() {
+        PurchaseIntent claimed = insertAndClaim("i1", ALICE, "d1", W1);
+        MerchantAttempt answered = new MerchantAttempt(new AttemptId("a1"), claimed.id(), AttemptOp.COMPLETE, 2,
+                Optional.of(IdempotencyKey.derive(claimed.id(), MutatingOp.COMPLETE, 2)), Optional.of("hash-1"),
+                Optional.of(new FrozenBody("{\"payment\":{}}")), AttemptStatus.RESPONDED, Optional.of(402),
+                Optional.of("{\"code\":\"declined\"}"), clock.instant(), Optional.of(clock.instant().plusSeconds(3)));
+        MerchantAttempt bare = new MerchantAttempt(new AttemptId("a2"), claimed.id(), AttemptOp.GET, 0, Optional.empty(),
+                Optional.empty(), Optional.empty(), AttemptStatus.UNCERTAIN, Optional.empty(), Optional.empty(), clock.instant(),
+                Optional.empty());
+
+        repo.recordAttempt(answered, claimed.withState(IntentState.QUOTING, clock.instant()), 0, W1);
+        repo.recordAttempt(bare, repo.findForSystem(claimed.id()).orElseThrow(), 1, W1);
+
+        assertThat(repo.attempts(claimed.id())).containsExactly(answered, bare);
+    }
+
     // Covers: 7.6 (settling is a fenced write: it resolves every named attempt and leaves the intent and its version alone)
     @Test
     void resolveAttempts_settlesAllAttemptsAndKeepsVersion_whenFencingMatches() {

@@ -403,3 +403,45 @@ Format, one block per mutant. **An entry without an `approved:` line is only a p
 - description: removed conditional - replaced equality check with true
 - why it is equivalent: as 68
 - the test that shows it: the same test (the "never rebuild" mutation is killed by `anUncertainCause_isScrubbed`)
+
+## Proposed in H3 P9 (agent-persistence), not yet approved
+
+### 72. dev.ucplab.persistence.Database.close RemoveConditionalMutator_EQUAL_IF (the `closed.compareAndSet(false, true)` test)
+- description: removed conditional - replaced equality check with true
+- why it is equivalent: the body only closes the idle connections; run a second time (or by a second caller) the queue is already empty, so nothing is closed twice and nothing else changes
+- the test that shows it: `DatabaseMutationTest.close_closesIdleConnections_andThoseThatComeBackLater` (it closes twice) passes with and without the mutation
+
+### 73. dev.ucplab.persistence.Database.isUsable RemoveConditionalMutator_EQUAL_IF (the `!c.isClosed()` operand)
+- description: removed conditional - replaced equality check with true
+- why it is equivalent: with the operand forced true, a closed connection goes on to `c.getAutoCommit()`, which throws a SQLException on a closed connection, and the catch returns false: the same answer
+- the test that shows it: `DatabaseMutationTest.aReadThatFails_keepsAUsableConnection_andReplacesABrokenOne` passes with and without the mutation
+
+### 74. dev.ucplab.persistence.Database.isUsable BooleanTrueReturnValsMutator (the `return false;` in the `catch (SQLException)`, NO_COVERAGE)
+- description: replaced boolean return with true
+- why it is equivalent: unreachable with SQLite: `isClosed()` does not throw, and `getAutoCommit()` throws only on a closed connection, which the first operand has already answered. Proposed as unreachable defensive code (the rule calls unreachable code a finding: listed here as one, for the owner to approve or to have the catch removed in a later change)
+- the test that shows it: none possible
+
+### 75. dev.ucplab.persistence.Database.open VoidMethodCallMutator (the `db.close()` after a failed connect)
+- description: removed call to Database::close
+- why it is equivalent: a connect fails deterministically at the first connection (a path that cannot be opened), when no connection exists yet, so there is nothing for `close()` to close; the exception is the same
+- the test that shows it: `DatabaseMutationTest.aFileThatCannotBeOpened_isRefused` passes with and without the mutation
+
+### 76. dev.ucplab.persistence.Database.write RemoveConditionalMutator_EQUAL_IF (the `begun` operand of `healthy = begun && rollBack(c)`, in the SQLException catch)
+- description: removed conditional - replaced equality check with true
+- why it is equivalent: `begun` is false only when `setAutoCommit(false)` itself failed, which happens on a connection that is already broken; `rollBack` then fails as well and returns false, the same value. Checked by hand: forcing `begun` to true leaves every test green, forcing the rollback result to true is red
+- the test that shows it: `DatabaseMutationTest.aStatementFailureThatCannotBeRolledBack_alsoReplacesTheConnection` passes with and without the mutation
+
+### 77. dev.ucplab.persistence.Database.write RemoveConditionalMutator_EQUAL_IF (the same `begun` operand, in the RuntimeException catch)
+- description: removed conditional - replaced equality check with true
+- why it is equivalent: as 76
+- the test that shows it: `DatabaseMutationTest.aConnectionThatCannotBeRolledBack_isClosedAndReplaced` passes with and without the mutation
+
+### 78. dev.ucplab.persistence.Migrations.isCurrent RemoveConditionalMutator_EQUAL_IF (the `info.current() != null` operand)
+- description: removed conditional - replaced equality check with true
+- why it is equivalent: with no migration pending, at least one is applied (the classpath holds migrations), so `current()` is not null whenever the first operand is true
+- the test that shows it: `MigrationsTest.isCurrent_onlyAfterEveryMigration_andNeverMigrates` passes with and without the mutation
+
+### 79. dev.ucplab.persistence.Migrations.lambda$isCurrent$0 RemoveConditionalMutator_EQUAL_IF (the `m.getState().isApplied()` operand)
+- description: removed conditional - replaced equality check with true
+- why it is equivalent: `info.applied()` lists only migrations in an applied state (Flyway puts the others in `pending()`), so the operand is true for every element
+- the test that shows it: `SqlPersistenceMutationTest.aFailedMigrationInTheHistory_isNotCurrent` (the `!isFailed()` operand is killed by it) passes with and without the mutation
