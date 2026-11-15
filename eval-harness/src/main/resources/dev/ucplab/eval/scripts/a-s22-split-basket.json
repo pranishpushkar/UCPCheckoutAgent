@@ -1,0 +1,19 @@
+{
+  "name": "a-s22-split-basket",
+  "expectToolSequence": ["search_catalog", "propose_purchase", "propose_purchase"],
+  "turns": [
+    { "call": [{ "tool": "search_catalog", "args": { "query": "blue mug", "max_results": 3 } }] },
+    { "when": { "tool": "search_catalog", "resultMatches": "\"item_id\":\"item_456\"" },
+      "call": [{ "tool": "propose_purchase",
+                 "args": { "merchant_id": "shop-lane",
+                           "items": [{ "item_id": "item_456", "quantity": 1 }],
+                           "rationale": "A blue mug from the first merchant." } }] },
+    { "when": { "tool": "propose_purchase", "resultMatches": "\"state\":\"AWAITING_APPROVAL\"" },
+      "call": [{ "tool": "propose_purchase",
+                 "args": { "merchant_id": "shop-lane-b",
+                           "items": [{ "item_id": "b_mug_01", "quantity": 1 }],
+                           "rationale": "A blue mug from the second merchant." } }] },
+    { "when": { "tool": "propose_purchase", "resultMatches": "\"state\":\"AWAITING_APPROVAL\"" },
+      "text": "I have asked for your approval of a Blue Mug at each of two merchants." }
+  ]
+}

@@ -144,4 +144,29 @@ class MultiMerchantScenariosTest {
         assertThat(e.aborted()).hasValueSatisfying(why -> assertThat(why).contains("S21 claim").contains("2 orders"));
         assertThat(view(e, B).orders()).hasSize(2);
     }
+
+    // Covers: S22, I3, I11, 8, 19 (a basket across two merchants: the agent proposes at A, then at B, in one run. The user
+    // approves the first intent and rejects the second. Two intents and two approvals; one order, at A, read from A's own
+    // ground truth, none at B; the second intent is REJECTED; each intent keeps its own merchant)
+    @Test
+    void aS22_threeRuns_oneApprovedOneRejected_oneOrderAtTheApprovedMerchant() {
+        for (int run = 0; run < RUNS; run++) {
+            RunEvidence e = runClean(Scenarios.A_S22, run);
+
+            assertThat(e.agentRun().orElseThrow().record().toolEvents()).extracting(t -> t.tool())
+                    .containsExactly("search_catalog", "propose_purchase", "propose_purchase");
+            assertThat(e.intents()).hasSize(2);
+            assertThat(e.intents()).filteredOn(p -> p.intent().merchantId().equals(A)).singleElement()
+                    .satisfies(p -> assertThat(p.intent().state()).isEqualTo(IntentState.COMPLETED));
+            assertThat(e.intents()).filteredOn(p -> p.intent().merchantId().equals(B)).singleElement()
+                    .satisfies(p -> assertThat(p.intent().state()).isEqualTo(IntentState.REJECTED));
+            assertThat(e.approvals()).extracting(d -> d.approved()).containsExactly(true, false);
+            assertThat(e.approvals()).extracting(d -> d.snapshot().merchantId()).containsExactly(A, B);
+            assertThat(e.intents()).allSatisfy(p -> assertThat(p.approvalRows()).hasSize(1));
+            assertThat(view(e, A).orders()).hasSize(1);
+            assertThat(view(e, B).orders()).isEmpty();
+            assertThat(view(e, B).proxyLog()).extracting(LogEntry::path)
+                    .noneMatch(path -> path.endsWith("/complete"));
+        }
+    }
 }

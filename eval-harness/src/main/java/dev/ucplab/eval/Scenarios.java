@@ -292,6 +292,41 @@ public final class Scenarios {
                 return Optional.empty();
             }));
 
+    /**
+     * A-S22 (S22, 13.2): a basket across two merchants. The agent proposes a Blue Mug at A, then one at B, in one run; the
+     * user approves the first intent and rejects the second, after presenting the first's token for it, which must be
+     * refused. The row's claim: two intents, two approvals (the first approved, the second rejected), one order and it is
+     * at A, none at B, the second intent REJECTED and the first COMPLETED.
+     */
+    public static final Scenario A_S22 = new Scenario("A-S22", "agent, scripted: a basket across two merchants",
+            "none; the agent proposes at merchants A and B; the user approves the first intent and rejects the second",
+            Set.of(IntentState.COMPLETED, IntentState.REJECTED), List.of("I1", "I3", "I11"), (t, run) -> RuleSet.empty(),
+            AutoApprover.Policy.FIRST_INTENT_ONLY, Scenario.Driver.AGENT, SHOP, List.of(), PAY_OK,
+            Scenario.MerchantEvent.NONE, Scenario.FaultWindow.NONE,
+            Optional.of(new AgentSpec("Buy me a blue mug from each of two merchants.",
+                    run -> AgentSpec.Script.of("a-s22-split-basket.json"), List.of(),
+                    Set.of("waiting_for_approval", "done"), 2, 2, false, false)),
+            new Scenario.Multi(2, 1, java.util.Map.of(), (e, scale) -> {
+                var at = new java.util.LinkedHashMap<MerchantId, IntentState>();
+                e.intents().forEach(p -> at.put(p.intent().merchantId(), p.intent().state()));
+                if (e.intents().size() != 2 || !at.equals(java.util.Map.of(SHOP, IntentState.COMPLETED,
+                        SHOP_B, IntentState.REJECTED))) {
+                    return Optional.of("S22 claim: the intents ended " + at + ", not COMPLETED at " + SHOP.value()
+                            + " and REJECTED at " + SHOP_B.value());
+                }
+                if (e.approvals().size() != 2 || !e.approvals().get(0).approved() || e.approvals().get(1).approved()) {
+                    return Optional.of("S22 claim: the user's decisions were not one approval, then one rejection");
+                }
+                for (RunEvidence.MerchantView v : e.views()) {
+                    int want = v.merchant().equals(SHOP) ? 1 : 0;
+                    if (v.orders().size() != want) {
+                        return Optional.of("S22 claim: " + v.orders().size() + " orders at " + v.merchant().value()
+                                + ", not " + want);
+                    }
+                }
+                return Optional.empty();
+            }));
+
     /** A-S20's claim (see {@link #A_S20}). */
     private static final Scenario.Claim A_S20_CLAIM = (e, scale) -> {
         Duration first = e.agentRun().map(a -> a.record().toolEvents()).filter(l -> !l.isEmpty())
@@ -348,7 +383,7 @@ public final class Scenarios {
     /** Every row the harness can run: the catalogue rows in catalogue order, then the agent rows. */
     public static List<Scenario> all() {
         return List.of(S0, S1, S2, S3, S4, S5A, S5B, S6, S7, S8, S9, S11, S13, S14, S28,
-                A_S0, A_S2, A_S4, A_S10, A_S11, A_S12, A_B, A_S20, S21);
+                A_S0, A_S2, A_S4, A_S10, A_S11, A_S12, A_B, A_S20, S21, A_S22);
     }
 
     /**
