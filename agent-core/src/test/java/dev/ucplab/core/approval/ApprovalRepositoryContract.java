@@ -124,6 +124,20 @@ public abstract class ApprovalRepositoryContract {
         assertThat(repo.listForSystem(I2)).isEmpty();
     }
 
+    // Covers: T2, 9.2 (an approval inserted already decided is stored with its decision). Kills SqlApprovalRepository.lambda$insert$0:70
+    // and :71 VoidMethodCall (the time and the user of the decision)
+    @Test
+    void insert_keepsADecisionThatIsAlreadyThere() {
+        ApprovalRecord pending = approval("a1", I1, ALICE);
+        ApprovalRecord decided = new ApprovalRecord(pending.id(), pending.intentId(), pending.owner(), pending.snapshot(),
+                pending.snapshotHash(), pending.tokenHash(), pending.expiresAt(), ApprovalStatus.REJECTED,
+                Optional.of(T0.plusSeconds(9)), Optional.of(ALICE));
+
+        put(decided);
+
+        assertThat(repo.findLatestForSystem(I1)).contains(decided);
+    }
+
     // Covers: 9.2, I10 (a decision records when and by whom)
     @Test
     void transition_movesStatusAndRecordsDecision_whenStatusMatches() {

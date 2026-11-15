@@ -23,7 +23,7 @@ import java.util.concurrent.locks.ReentrantLock;
  *
  * <p>Like the SQL {@code UPDATE}, {@link #update} writes only the mutable columns. The owner, merchant, dedupe key,
  * creation time and lease are never taken from the caller's copy; the lease changes only through
- * {@link #claimRecoverable} and {@link #renewLease}.
+ * {@link #claimRecoverable}, {@link #renewLease} and {@link #releaseLease}.
  */
 public final class InMemoryIntentRepository implements IntentRepository {
 
@@ -300,6 +300,23 @@ public final class InMemoryIntentRepository implements IntentRepository {
         }
     }
 
+    @Override
+    public boolean releaseLease(IntentId id, String owner) {
+        Objects.requireNonNull(id, "id");
+        Objects.requireNonNull(owner, "owner");
+        lock.lock();
+        try {
+            PurchaseIntent stored = intents.get(id);
+            if (stored == null || !stored.leaseOwner().equals(Optional.of(owner))) {
+                return false;
+            }
+            intents.put(id, stored.withLease(Optional.empty(), Optional.empty()));
+            return true;
+        } finally {
+            lock.unlock();
+        }
+    }
+
     /** System view for {@link InMemoryRecoveryScan}: the intents in {@code state}, oldest first. */
     List<PurchaseIntent> inState(IntentState state) {
         lock.lock();
@@ -312,8 +329,11 @@ public final class InMemoryIntentRepository implements IntentRepository {
         }
     }
 
-    /** The owner's intents, in no particular order: the view {@link InMemoryIntentQueries} pages over (T2). */
-    List<PurchaseIntent> ownedBy(UserId owner) {
+    /**
+     * The owner's intents, in no particular order: the view {@link InMemoryIntentQueries} pages over (T2) and
+     * {@link dev.ucplab.core.policy.InMemoryPolicyUsage} counts from.
+     */
+    public List<PurchaseIntent> ownedBy(UserId owner) {
         lock.lock();
         try {
             return intents.values().stream().filter(i -> i.owner().equals(owner)).toList();

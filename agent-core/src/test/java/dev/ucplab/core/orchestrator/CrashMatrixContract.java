@@ -51,6 +51,10 @@ abstract class CrashMatrixContract {
 
     private record Result(int row, String crashPoint, String endState, int orders) {}
 
+    /** Set by the mutation profile only: under PIT a table may be partial, so the comparison may be skipped then. */
+    private static final String PARTIAL_PROPERTY = "crash.matrix.partial";
+    private static final String PARTIAL_ALLOWED = "allowed";
+
     private static final ConcurrentLinkedQueue<Result> RESULTS = new ConcurrentLinkedQueue<>();
 
     /** An adapter's own rows (SQL row 20) go into the same result table. */
@@ -157,11 +161,11 @@ abstract class CrashMatrixContract {
         }
     }
 
-    // Covers: NFR4 (the matrix has every row of the plan, in order)
+    // Covers: NFR4 (the matrix has every row of the plan, in order, then the rows added since: 21 is the lease release of 9.2)
     @Test
     void boundaries_haveEveryRowOfThePlan() {
         assertThat(Stream.of(Boundary.values()).map(b -> b.row).toList())
-                .containsExactlyElementsOf(java.util.stream.IntStream.rangeClosed(1, 20).boxed().toList());
+                .containsExactlyElementsOf(java.util.stream.IntStream.rangeClosed(1, 21).boxed().toList());
         assertThat(Stream.of(Boundary.values()).filter(b -> b.points.isEmpty()).map(b -> b.row))
                 .as("only the SQL-statement row has no in-memory point").containsExactly(20);
     }
@@ -231,15 +235,33 @@ abstract class CrashMatrixContract {
     /**
      * An adapter's table must equal the in-memory one row for row (crash points, end states, orders), except the rows
      * that exist only for that adapter (20). The in-memory table is written by agent-core's run, which comes first in the
-     * reactor; when it is not there (this module run alone) there is nothing to compare.
+     * reactor; when it is not there (this module run alone) there is nothing to compare. A partial table fails the run
+     * unless the mutation profile allowed it.
      */
     private static void compareWithInMemory(Path adapterTable, String table) throws IOException {
         Path memory = Path.of("..", "agent-core", "target", "crash-matrix-in-memory.md");
         if (adapterTable.getFileName().toString().equals("crash-matrix-in-memory.md") || !Files.exists(memory)) {
             return;
         }
-        Function<String, List<String>> shared = t -> t.lines().filter(l -> !l.startsWith("| 20 |")).toList();
-        assertThat(shared.apply(table)).as("%s against the in-memory crash matrix", adapterTable.getFileName())
-                .isEqualTo(shared.apply(Files.readString(memory)));
+        Function<String, List<String>> shared = t -> t.lines().filter(l -> !l.startsWith("| 20 |")).distinct().toList();
+        long points = points().count();
+        List<String> memoryTable = shared.apply(Files.readString(memory));
+        List<String> adapterRows = shared.apply(table);
+        // PIT runs tests one at a time and the same class many times in one JVM, so a table written under PIT holds a few
+        // rows or the same rows again and again. Only a run that says so (the mutation profile sets the property) may
+        // skip the comparison then. Everywhere else, `verify` included, both tables must be the whole matrix (one
+        // distinct result line per point, the header's two lines aside): a missing row fails, it is never skipped.
+        if (PARTIAL_ALLOWED.equals(System.getProperty(PARTIAL_PROPERTY))
+                && (adapterRows.size() - 2 != points || memoryTable.size() - 2 != points)) {
+            return;
+        }
+        assertThat(memoryTable.size() - 2).as("the in-memory crash matrix is whole: one result line per point").isEqualTo((int) points);
+        // Name what is missing before comparing the whole, so the failure points at the row, not at two long tables.
+        List<String> missing = memoryTable.stream().filter(l -> !adapterRows.contains(l)).toList();
+        assertThat(missing).as("%s lacks these result rows of the in-memory crash matrix", adapterTable.getFileName()).isEmpty();
+        assertThat(adapterRows).as("%s against the in-memory crash matrix", adapterTable.getFileName())
+                .isEqualTo(memoryTable);
+        assertThat(adapterRows.size() - 2).as("%s is whole: one result line per point", adapterTable.getFileName())
+                .isEqualTo((int) points);
     }
 }

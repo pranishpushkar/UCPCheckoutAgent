@@ -434,7 +434,8 @@ class FaultyMerchantModelTest {
         });
     }
 
-    // Covers: A.1 (complete on a checkout that is not ready, no buyer email: not_ready, a recoverable error)
+    // Covers: A.1, 14 level 2 (complete on a checkout that is not ready, no buyer email: the missing-email message of every
+    // incomplete render, then not_ready, a recoverable error)
     @Test
     void complete_onIncompleteCheckout_answersNotReady() {
         SessionId id = ok(merchant.create(
@@ -443,10 +444,9 @@ class FaultyMerchantModelTest {
         CheckoutView view = ok(merchant.complete(id, PAY_OK, COMPLETE_KEY));
 
         assertThat(view.status()).isEqualTo(CheckoutStatus.INCOMPLETE);
-        assertThat(only(view)).satisfies(m -> {
-            assertThat(m.code()).isEqualTo("not_ready");
-            assertThat(m.severity()).contains("recoverable");
-        });
+        // As the lab merchant's render: the incomplete session says the buyer email is missing, then the answer's own error.
+        assertThat(codes(view)).containsExactly("missing", "not_ready");
+        assertThat(view.messages().get(1).severity()).contains("recoverable");
     }
 
     // Covers: A.1, A.3 (while a charge runs: complete answers complete_in_progress, update answers checkout_busy,

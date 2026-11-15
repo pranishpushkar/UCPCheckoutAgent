@@ -73,6 +73,13 @@
             <groupId>dev.ucplab</groupId>
             <artifactId>agent-ucp</artifactId>
         </dependency>
+        <!-- H3 P3: the registry contract lives in core's tests, as the repository contracts do. -->
+        <dependency>
+            <groupId>dev.ucplab</groupId>
+            <artifactId>agent-core</artifactId>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>dev.ucplab</groupId>
             <artifactId>agent-persistence</artifactId>

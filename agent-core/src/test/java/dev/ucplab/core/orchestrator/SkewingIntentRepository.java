@@ -118,4 +118,9 @@ final class SkewingIntentRepository implements IntentRepository {
     public boolean renewLease(IntentId id, String owner, Duration lease) {
         return delegate.renewLease(id, owner, lease);
     }
+
+    @Override
+    public boolean releaseLease(IntentId id, String owner) {
+        return delegate.releaseLease(id, owner);
+    }
 }

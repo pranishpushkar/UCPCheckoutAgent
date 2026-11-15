@@ -45,21 +45,18 @@ public final class CircuitBreaker implements Gate {
         lock.lock();
         try {
             Instant now = clock.instant();
-            switch (state) {
-                case CLOSED:
-                    return true;
-                case OPEN:
-                case HALF_OPEN:
-                    // OPEN since `since`, or the probe went out at `since`: after one period a probe is (again) due.
+            return switch (state) {
+                case CLOSED -> true;
+                // OPEN since `since`, or the probe went out at `since`: after one period a probe is (again) due.
+                case OPEN, HALF_OPEN -> {
                     if (!now.isBefore(since.plus(openFor))) {
                         state = State.HALF_OPEN;
                         since = now;
-                        return true;
+                        yield true;
                     }
-                    return false;
-                default:
-                    return false;
-            }
+                    yield false;
+                }
+            };
         } finally {
             lock.unlock();
         }

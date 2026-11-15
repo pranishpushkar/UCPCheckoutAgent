@@ -134,7 +134,8 @@ public final class DefaultApprovalService implements ApprovalService {
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(token, "token");
 
-        if (intents.find(auth.user(), id).isEmpty()) {
+        Optional<PurchaseIntent> owned = intents.find(auth.user(), id);
+        if (owned.isEmpty()) {
             return new ApprovalDecision.NotFound();
         }
         if (!auth.isRecent(clock, maxAuthAge)) {
@@ -162,7 +163,27 @@ public final class DefaultApprovalService implements ApprovalService {
                                     .orElse(Duration.ZERO)))
                     .orElseGet(ApprovalDecision.NotFound::new);
         }
-        PurchaseIntent intent = claimed.get();
+        // 9.2: decide releases any lease it took, on every path. A lease this worker already held and live is not one it
+        // took: the claim only renewed it, and it stays.
+        boolean tookLease = !(owned.get().leaseOwner().equals(Optional.of(workerId))
+                && owned.get().leaseUntil().map(until -> until.isAfter(now)).orElse(false));
+        try {
+            return decideHolding(auth, id, approval, approve, claimed.get(), now);
+        } finally {
+            if (tookLease) {
+                release(id);
+            }
+        }
+    }
+
+    /** The lease decide took is over at once: cleared, only if this worker still holds it (7.6, 9.2). */
+    private void release(IntentId id) {
+        intents.releaseLease(id, workerId);
+    }
+
+    /** The part of {@link #decide} that runs under the lease. */
+    private ApprovalDecision decideHolding(
+            AuthContext auth, IntentId id, ApprovalRecord approval, boolean approve, PurchaseIntent intent, Instant now) {
         if (intent.state() != IntentState.AWAITING_APPROVAL) {
             return new ApprovalDecision.NotPending();
         }

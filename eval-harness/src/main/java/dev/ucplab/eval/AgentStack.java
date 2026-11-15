@@ -5,6 +5,7 @@ import dev.ucplab.core.approval.ApprovalTokens;
 import dev.ucplab.core.approval.DefaultApprovalService;
 import dev.ucplab.core.id.IdGenerator;
 import dev.ucplab.core.identity.UserId;
+import dev.ucplab.core.merchant.InMemoryMerchantRegistry;
 import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantProfile;
@@ -241,22 +242,7 @@ public final class AgentStack implements AutoCloseable {
      * and this stack's orchestrator. No approval service and no gateway, so no tool can approve or complete (I6).
      */
     ToolPorts toolPorts() {
-        MerchantRegistry registry = new MerchantRegistry() {
-            @Override
-            public List<MerchantEntry> active() {
-                return List.of(shop);
-            }
-
-            @Override
-            public Optional<MerchantEntry> find(MerchantId id) {
-                return id.equals(Scenarios.SHOP) ? Optional.of(shop) : Optional.empty();
-            }
-
-            @Override
-            public MerchantProfile profile(MerchantId id) {
-                throw new UnsupportedOperationException("the tools do not read profiles");
-            }
-        };
+        MerchantRegistry registry = new InMemoryMerchantRegistry(List.of(shop));
         return new ToolPorts(registry, Map.of(Scenarios.SHOP, catalog), orchestrator);
     }
 

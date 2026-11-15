@@ -108,4 +108,10 @@ public interface IntentRepository {
 
     /** False means the lease is lost and the caller must stop working on the intent (7.6). */
     boolean renewLease(IntentId id, String owner, Duration lease);
+
+    /**
+     * Clears the lease of {@code id} if {@code owner} holds it, so another worker's claim succeeds at once (7.6, 9.2).
+     * Returns whether it did. A lease held by another worker, no lease and an unknown intent change nothing and give false.
+     */
+    boolean releaseLease(IntentId id, String owner);
 }

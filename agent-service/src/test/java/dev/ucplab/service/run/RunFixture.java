@@ -16,6 +16,7 @@ import dev.ucplab.core.intent.IntentStatus;
 import dev.ucplab.core.intent.ProposalResult;
 import dev.ucplab.core.intent.ProposedLine;
 import dev.ucplab.core.intent.StepResult;
+import dev.ucplab.core.merchant.InMemoryMerchantRegistry;
 import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantProfile;
@@ -86,22 +87,7 @@ final class RunFixture {
     }
 
     private static ToolPorts ports() {
-        MerchantRegistry registry = new MerchantRegistry() {
-            @Override
-            public List<MerchantEntry> active() {
-                return List.of();
-            }
-
-            @Override
-            public Optional<MerchantEntry> find(MerchantId id) {
-                return Optional.empty();
-            }
-
-            @Override
-            public MerchantProfile profile(MerchantId id) {
-                throw new UnsupportedOperationException();
-            }
-        };
+        MerchantRegistry registry = new InMemoryMerchantRegistry(List.of());
         Orchestrator orchestrator = new Orchestrator() {
             @Override
             public ProposalResult propose(AuthContext auth, MerchantId merchant, List<ProposedLine> lines,

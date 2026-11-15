@@ -67,6 +67,12 @@ final class Lab {
     };
 
     final MutableClock clock = new MutableClock(T0);
+    /** The policy settings of the workers built after this is set (table 9.1 defaults). */
+    PolicyConfig policyConfig = PolicyConfig.defaults();
+    /** The clock the orchestrators read, when a test needs one that differs from the repositories' (default: {@link #clock}). */
+    java.time.Clock orchestratorClock;
+    /** When true, policy reads the lab's own intents (P3, P5) instead of seeing no usage. */
+    boolean countUsage;
     final IntentRepository intents;
     final ApprovalRepository approvals;
     final RecoveryScan scan;
@@ -166,17 +172,20 @@ final class Lab {
             String workerId, java.util.function.Function<MerchantId, MerchantGateway> gateways,
             java.util.function.Function<MerchantId, PaymentInstrument> instruments,
             ApprovalRepository approvalRepository, IntentRepository intentRepository) {
-        PolicyConfig policyConfig = PolicyConfig.defaults();
+        PolicyUsage usage = countUsage
+                ? new dev.ucplab.core.policy.InMemoryPolicyUsage(
+                        (InMemoryIntentRepository) intents, (InMemoryApprovalRepository) approvals)
+                : NO_USAGE;
         RuleBasedPolicyEngine policy = new RuleBasedPolicyEngine(policyConfig,
                 m -> m.equals(SHOP) || m.equals(SHOP_B)
                         ? Optional.of(new MerchantEntry(m, URI.create("http://127.0.0.1:8081"), "Shop", MerchantStatus.ACTIVE))
                         : Optional.empty(),
-                NO_USAGE, clock);
+                usage, clock);
         DefaultApprovalService approvalService = new DefaultApprovalService(intentRepository, approvalRepository,
                 new ApprovalTokens(SECRET), clock, ids, workerId, config.lease(), DefaultApprovalService.DEFAULT_TTL,
                 DefaultApprovalService.DEFAULT_MAX_AUTH_AGE);
         DefaultOrchestrator orchestrator = new DefaultOrchestrator(intentRepository, approvalRepository, approvalService, gateways, policy,
-                new RequotePolicy(policyConfig), instruments, config, clock, ids, workerId, new SplittableRandom(42));
+                new RequotePolicy(policyConfig), instruments, config, orchestratorClock != null ? orchestratorClock : clock, ids, workerId, new SplittableRandom(42));
         return new Worker(workerId, orchestrator, approvalService);
     }
 
