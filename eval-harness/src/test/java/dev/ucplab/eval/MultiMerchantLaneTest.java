@@ -159,7 +159,10 @@ class MultiMerchantLaneTest {
     // its run is what it was; a row that names more than a lane holds is refused)
     @Test
     void everyExistingRow_isALaneOfOne_andABadMultiIsRefused() {
-        assertThat(Scenarios.all()).allSatisfy(s -> assertThat(s.multi()).isEqualTo(Scenario.Multi.ONE));
+        List<String> before = List.of("S0", "S1", "S2", "S3", "S4", "S5a", "S5b", "S6", "S7", "S8", "S9", "S11", "S13", "S14",
+                "S28", "A-S0", "A-S2", "A-S4", "A-S10", "A-S11", "A-S12", "A-B");
+        assertThat(Scenarios.all().stream().filter(s -> before.contains(s.id())).toList()).hasSize(before.size())
+                .allSatisfy(s -> assertThat(s.multi()).isEqualTo(Scenario.Multi.ONE));
         assertThat(Scenario.Multi.ONE.merchants()).isEqualTo(1);
         assertThat(Scenario.Multi.ONE.users()).isEqualTo(1);
         org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,

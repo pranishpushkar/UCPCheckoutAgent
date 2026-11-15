@@ -58,6 +58,14 @@ public final class EvidenceWriter {
         put(dir, "sessions.json", e.sessions().values().stream().map(EvidenceWriter::session).toList());
         put(dir, "approvals.json", e.approvals().stream().map(EvidenceWriter::decision).toList());
         put(dir, "intents.json", e.intents().stream().map(EvidenceWriter::persisted).toList());
+        for (RunEvidence.MerchantView v : e.views()) {
+            // A merchant's ids are its own, so each gets a folder: merchant-<id>/{proxy-log,orders,sessions,breaker}.json.
+            Path at = Files.createDirectories(dir.resolve("merchant-" + v.merchant().value()));
+            put(at, "proxy-log.json", v.proxyLog().stream().map(EvidenceWriter::entry).toList());
+            put(at, "orders.json", v.orders().stream().map(EvidenceWriter::order).toList());
+            put(at, "sessions.json", v.sessions().values().stream().map(EvidenceWriter::session).toList());
+            put(at, "breaker.json", Map.of("state", v.breaker().map(Enum::name).orElse("unread")));
+        }
         for (int i = 0; i < e.children().size(); i++) {
             Files.writeString(dir.resolve("child-" + (i + 1) + ".log"), e.children().get(i).log(),
                     StandardCharsets.UTF_8);

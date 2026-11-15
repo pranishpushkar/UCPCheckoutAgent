@@ -12,6 +12,7 @@ import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.ProposalResult;
 import dev.ucplab.core.intent.PurchaseIntent;
 import dev.ucplab.core.intent.StepResult;
+import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.faultproxy.LogEntry;
 import dev.ucplab.faultproxy.PathPattern;
 import dev.ucplab.faultproxy.RuleSet;
@@ -22,7 +23,9 @@ import dev.ucplab.runtime.RunOutcome;
 import dev.ucplab.runtime.RunTrace;
 import dev.ucplab.runtime.ScriptDriftException;
 import dev.ucplab.runtime.ScriptedModel;
+import dev.ucplab.runtime.ToolPorts;
 import dev.ucplab.runtime.ToolRegistry;
+import dev.ucplab.ucp.CircuitBreaker;
 import java.io.IOException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -75,6 +78,14 @@ public final class RunScript {
     static final Duration ASK_TIMEOUT = Duration.ofMinutes(5);
     /** How far the clock of an A-B wall-clock run moves on every read: 30 s pass within a few calls. */
     static final Duration WALL_CLOCK_STEP = Duration.ofSeconds(4);
+    /**
+     * The most a search waits for one merchant in a row over several merchants: the tool's 2 s (19) over the time scale,
+     * so a hung merchant costs a row what it costs at scale 1, in proportion. Rows of one merchant keep the 2 s.
+     */
+    static Duration searchLimit(TimeScale scale) {
+        return ToolPorts.DEFAULT_PER_MERCHANT.dividedBy(scale.k());
+    }
+
     /** S14: how many workers race (13.2). */
     public static final int RACERS = 24;
 
@@ -186,9 +197,22 @@ public final class RunScript {
     private RunEvidence run(Scenario scenario, int run, long seed, Optional<KillPoint> killPoint, RunLog runLog) {
         Instant startedAt = Instant.now();
         String name = "L" + lane.index() + "-" + scenario.id() + "-r" + run;
-        lane.merchant().reset();
+        int merchantCount = scenario.multi().merchants();
+        for (int i = 0; i < merchantCount; i++) {
+            lane.merchant(i).reset();
+        }
         lane.proxy().install(scenario.rules().build(scale, run));
+        for (int i = 1; i < merchantCount; i++) {
+            // A proxy keeps the last row's rules until told otherwise: every merchant of a row starts from its own.
+            Scenario.Rules rules = scenario.multi().rulesAt().get(i);
+            lane.proxy(i).install(rules == null ? RuleSet.empty() : rules.build(scale, run));
+        }
         long startSeq = lane.proxyLogMark();
+        long[] startSeqs = new long[merchantCount];
+        for (int i = 1; i < merchantCount; i++) {
+            startSeqs[i] = lane.proxyLogMark(i);
+        }
+        Map<MerchantId, CircuitBreaker.State> breakerStates = new LinkedHashMap<>();
         UserId user = new UserId("eval-" + name);
         List<IntentId> proposed = new ArrayList<>();
         List<AutoApprover.Decision> decisions = List.of();
@@ -202,9 +226,8 @@ public final class RunScript {
         List<AgentStack.Racer> racers = new ArrayList<>();
         Children children = new Children(name, seed);
         Optional<RunEvidence.AgentRun> agentRun = Optional.empty();
-        try (AgentStack stack = new AgentStack(lane.agentFacingUrl(), lane.newDatabase(name), scale, seed,
-                new SequentialIdGenerator(name), scenario.paymentToken(),
-                race || killPoint.isPresent() ? AgentStack.DECISION_ONLY : scale.orchestrator().lease(), canary)) {
+        try (AgentStack stack = stack(scenario, lane.newDatabase(name), seed, new SequentialIdGenerator(name),
+                race || killPoint.isPresent() ? AgentStack.DECISION_ONLY : scale.orchestrator().lease())) {
             // The session id stands for a credential reference: it is the evaluation's canary (I8, section 11).
             Supplier<AuthContext> auth = () -> new AuthContext(user, user.value() + "@eval.example",
                     stack.clock.instant(), canary);
@@ -286,7 +309,11 @@ public final class RunScript {
                 if (windowFailed.get() != null) {
                     aborted = aborted.or(() -> Optional.of(windowFailed.get()));
                 }
-                if (!awaitSettled(startSeq)) {
+                if (merchantCount > 1) {
+                    lane.merchantIds().subList(0, merchantCount)
+                            .forEach(id -> breakerStates.put(id, stack.breakers().forMerchant(id).state()));
+                }
+                if (!awaitSettled(startSeq, startSeqs)) {
                     aborted = aborted.or(() -> Optional.of("the proxy did not settle within " + settleLimit()));
                 }
                 if (window.isPresent()) {
@@ -335,9 +362,53 @@ public final class RunScript {
         }
         List<LogEntry> log = lane.proxy().log(startSeq);
         lane.proxyLogMark();
-        return new RunEvidence(scenario.id(), run, seed, lane.index(), user, aborted, proposed, persisted, orders, sessions,
-                log, decisions, startedAt, terminalSeenAt, children.kills(), children.records(), agentRun,
-                runLog.text());
+        List<RunEvidence.MerchantView> views = new ArrayList<>();
+        for (int i = 0; merchantCount > 1 && i < merchantCount; i++) {
+            views.add(view(i, persisted, startSeq, startSeqs, breakerStates));
+        }
+        RunEvidence evidence = new RunEvidence(scenario.id(), run, seed, lane.index(), user, aborted, proposed, persisted,
+                orders, sessions, log, decisions, startedAt, terminalSeenAt, children.kills(), children.records(),
+                agentRun, runLog.text(), views);
+        if (merchantCount > 1 && aborted.isEmpty()) {
+            Optional<String> claim = scenario.multi().claim().failed(evidence, scale);
+            if (claim.isPresent()) {
+                return evidence.withAborted(claim);
+            }
+        }
+        return evidence;
+    }
+
+    /** The stack of a run: over the one merchant of an ordinary row, over the row's merchants of a multi row. */
+    private AgentStack stack(Scenario scenario, Path db, long seed, SequentialIdGenerator ids, Duration lease) {
+        if (scenario.multi().merchants() == 1) {
+            return new AgentStack(lane.agentFacingUrl(), db, scale, seed, ids, scenario.paymentToken(), lease, canary);
+        }
+        List<AgentStack.Merchant> merchants = new ArrayList<>();
+        for (int i = 0; i < scenario.multi().merchants(); i++) {
+            merchants.add(new AgentStack.Merchant(lane.merchantIds().get(i), lane.agentFacingUrl(i),
+                    MerchantWiring.LAB));
+        }
+        return new AgentStack(merchants, db, scale, seed, ids, scenario.paymentToken(), lease, canary);
+    }
+
+    /** What merchant {@code i} itself, and the proxy in front of it, hold for this run. */
+    private RunEvidence.MerchantView view(int i, List<RunEvidence.Persisted> persisted, long startSeq, long[] startSeqs,
+                                          Map<MerchantId, CircuitBreaker.State> breakerStates) {
+        MerchantId id = lane.merchantIds().get(i);
+        GroundTruth truth = lane.groundTruth(i);
+        List<GroundTruth.Order> orders = truth.orders();
+        Map<String, GroundTruth.Session> sessions = new LinkedHashMap<>();
+        for (GroundTruth.Order o : orders) {
+            truth.session(o.checkoutId()).ifPresent(s -> sessions.put(s.id(), s));
+        }
+        for (RunEvidence.Persisted p : persisted) {
+            if (p.intent().merchantId().equals(id)) {
+                p.intent().sessionId().ifPresent(sid -> truth.session(sid.value()).ifPresent(s -> sessions.put(s.id(), s)));
+            }
+        }
+        List<LogEntry> log = lane.proxy(i).log(i == 0 ? startSeq : startSeqs[i]);
+        lane.proxyLogMark(i);
+        return new RunEvidence.MerchantView(id, orders, sessions, log, Optional.ofNullable(breakerStates.get(id)));
     }
 
     /**
@@ -498,7 +569,7 @@ public final class RunScript {
             return model.generate(conversation, tools);
         };
         AgentRuntime runtime = new AgentRuntime(checked, live.map(LiveModel::model).orElse("scripted"),
-                stack.toolPorts(), runs, AgentBudget.DEFAULT, ASK_TIMEOUT, clock);
+                toolPorts(stack, scenario), runs, AgentBudget.DEFAULT, ASK_TIMEOUT, clock);
         Optional<RunOutcome> outcome = Optional.empty();
         Optional<String> abort = Optional.empty();
         try {
@@ -536,6 +607,11 @@ public final class RunScript {
                     + ToolRegistry.NAMES));
         }
         return new AgentResult(record.map(RunRecord::intentIds).orElse(List.of()), abort, evidence);
+    }
+
+    /** The tools' ports: over several merchants, the limit for one merchant is the time scale's (see {@link #searchLimit}). */
+    private ToolPorts toolPorts(AgentStack stack, Scenario scenario) {
+        return scenario.multi().merchants() == 1 ? stack.toolPorts() : stack.toolPorts().withPerMerchant(searchLimit(scale));
     }
 
     /** A live client holds HTTP resources; it is closed when its run ends. Closing never fails a run. */
@@ -783,10 +859,20 @@ public final class RunScript {
         }
     }
 
-    /** Polls the run's slice of the proxy log until every entry is settled, up to {@link #settleLimit()}. */
-    private boolean awaitSettled(long startSeq) throws InterruptedException {
+    /** Every entry of the run's slice of each proxy's log is settled. */
+    private boolean settled(long startSeq, long[] startSeqs) {
+        for (int i = 0; i < startSeqs.length; i++) {
+            if (!lane.proxy(i).log(i == 0 ? startSeq : startSeqs[i]).stream().allMatch(LogEntry::settled)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Polls the run's slice of every proxy's log until every entry is settled, up to {@link #settleLimit()}. */
+    private boolean awaitSettled(long startSeq, long[] startSeqs) throws InterruptedException {
         Instant deadline = Instant.now().plus(settleLimit());
-        while (!lane.proxy().log(startSeq).stream().allMatch(LogEntry::settled)) {
+        while (!settled(startSeq, startSeqs)) {
             if (Instant.now().isAfter(deadline)) {
                 return false;
             }

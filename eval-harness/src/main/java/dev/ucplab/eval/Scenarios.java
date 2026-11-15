@@ -8,6 +8,8 @@ import dev.ucplab.faultproxy.Match;
 import dev.ucplab.faultproxy.Rule;
 import dev.ucplab.faultproxy.RuleSet;
 import dev.ucplab.runtime.BudgetLimit;
+import dev.ucplab.ucp.CircuitBreaker;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
@@ -256,6 +258,53 @@ public final class Scenarios {
                         .replace('_', '-') + ".json", Optional.of(breach));
             }, List.of(), Set.of("budget_exceeded"), 0, 0, false, true));
 
+    /** What the catalog tools call on a merchant. */
+    private static final String CATALOG_ALL = "/ucp/v1/catalog/*";
+
+    /** A-S20's claim (see {@link #A_S20}). */
+    private static final Scenario.Claim A_S20_CLAIM = (e, scale) -> {
+        Duration first = e.agentRun().map(a -> a.record().toolEvents()).filter(l -> !l.isEmpty())
+                .map(l -> l.getFirst().took()).orElse(Duration.ofDays(1));
+        if (first.compareTo(RunScript.searchLimit(scale).multipliedBy(2)) >= 0) {
+            return Optional.of("S20 claim: the first search took " + first.toMillis() + " ms, so it waited for the failing"
+                    + " merchant (limit " + RunScript.searchLimit(scale).toMillis() + " ms)");
+        }
+        for (RunEvidence.MerchantView v : e.views()) {
+            CircuitBreaker.State want = v.merchant().equals(SHOP_B) ? CircuitBreaker.State.OPEN
+                    : CircuitBreaker.State.CLOSED;
+            if (!v.breaker().equals(Optional.of(want))) {
+                return Optional.of("S20 claim: the breaker of " + v.merchant().value() + " is "
+                        + v.breaker().map(Enum::name).orElse("unread") + ", not " + want);
+            }
+        }
+        RunEvidence.MerchantView b = e.views().stream().filter(v -> v.merchant().equals(SHOP_B)).findFirst().orElseThrow();
+        if (b.proxyLog().stream().anyMatch(l -> l.path().contains("/checkout-sessions"))) {
+            return Optional.of("S20 claim: a checkout call reached the failing merchant");
+        }
+        return Optional.empty();
+    };
+
+    /**
+     * A-S20 (S20, 13.2): merchant B is failing and A and C are not. B's catalog hangs on its first call (so the search
+     * must return at the per-merchant limit, not after B's attempts) and answers 503 after that (so B's breaker opens). The
+     * script searches three times, so the failures that open the breaker are certain, then buys from A. The row's claim:
+     * the first search came back inside twice the limit, B's breaker is OPEN and A's and C's are CLOSED, and nothing was
+     * sent to B but catalog reads.
+     */
+    public static final Scenario A_S20 = new Scenario("A-S20", "agent, scripted: one of three merchants fails",
+            "at merchant B: delay on the first POST " + CATALOG_ALL + " (a hang), then fail_before_forward {status 503} on"
+                    + " every POST " + CATALOG_ALL,
+            Set.of(IntentState.COMPLETED), List.of("I1", "I11"), (t, run) -> RuleSet.empty(),
+            AutoApprover.Policy.APPROVE_ALL, Scenario.Driver.AGENT, SHOP, List.of(), PAY_OK,
+            Scenario.MerchantEvent.NONE, Scenario.FaultWindow.NONE,
+            Optional.of(AgentSpec.of("Buy me one blue mug.", "a-s20-one-merchant-down.json", List.of(), AWAITING, 1, 1,
+                    false)),
+            new Scenario.Multi(3, 1, java.util.Map.of(1, (t, run) -> rules(run,
+                    new Rule("hang-first-catalog", Match.of("POST", CATALOG_ALL).withNth(1),
+                            new Action.Delay(t.completeTimeout().toMillis())),
+                    new Rule("catalog-503", Match.of("POST", CATALOG_ALL),
+                            Action.FailBeforeForward.status(503)))), A_S20_CLAIM));
+
     /**
      * The rows live mode runs (m5-plan section 10, C18): S10 and S12. The other agent rows exist to drive the runtime
      * down a path a script forces (a second proposal, an unlisted merchant, a budget breach), which a live model need
@@ -268,7 +317,7 @@ public final class Scenarios {
     /** Every row the harness can run: the catalogue rows in catalogue order, then the agent rows. */
     public static List<Scenario> all() {
         return List.of(S0, S1, S2, S3, S4, S5A, S5B, S6, S7, S8, S9, S11, S13, S14, S28,
-                A_S0, A_S2, A_S4, A_S10, A_S11, A_S12, A_B);
+                A_S0, A_S2, A_S4, A_S10, A_S11, A_S12, A_B, A_S20);
     }
 
     /**

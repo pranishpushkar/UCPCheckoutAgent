@@ -50,11 +50,16 @@ public record Scenario(
     /**
      * The shape of a row over several merchants (m6a-plan C11): {@code merchants} in the lane (1 to
      * {@value Lane#MAX_MERCHANTS}), {@code users} signed in for the run, and the proxy rules of each merchant after the
-     * first, by lane index ({@link Scenario#rules} is merchant 0's).
+     * first, by lane index ({@link Scenario#rules} is merchant 0's). {@code claim} is the row's own statement about the run
+     * as a whole, which no invariant makes (S20: B was left out, and only B's breaker opened).
      */
-    public record Multi(int merchants, int users, Map<Integer, Rules> rulesAt) {
-        /** A lane of one merchant and one user, with no rules elsewhere. */
-        public static final Multi ONE = new Multi(1, 1, Map.of());
+    public record Multi(int merchants, int users, Map<Integer, Rules> rulesAt, Claim claim) {
+        /** A lane of one merchant and one user, with no rules elsewhere and no claim. */
+        public static final Multi ONE = new Multi(1, 1, Map.of(), Claim.NONE);
+
+        public Multi(int merchants, int users, Map<Integer, Rules> rulesAt) {
+            this(merchants, users, rulesAt, Claim.NONE);
+        }
 
         public Multi {
             if (merchants < 1 || merchants > Lane.MAX_MERCHANTS) {
@@ -64,12 +69,25 @@ public record Scenario(
                 throw new IllegalArgumentException("a row has at least one user: " + users);
             }
             rulesAt = Map.copyOf(rulesAt);
+            Objects.requireNonNull(claim, "claim");
             for (int at : rulesAt.keySet()) {
                 if (at < 1 || at >= merchants) {
                     throw new IllegalArgumentException("rules at merchant " + at + " of " + merchants);
                 }
             }
         }
+    }
+
+    /**
+     * What a row over several merchants says about the run as a whole, checked once the proxies are quiet. A run whose
+     * claim fails is aborted with the reason, never passed (as S8's missed window is).
+     */
+    @FunctionalInterface
+    public interface Claim {
+        Claim NONE = (e, t) -> Optional.empty();
+
+        /** Why the run does not bear the row out, or empty if it does. */
+        Optional<String> failed(RunEvidence evidence, TimeScale scale);
     }
 
     /** The proxy rules of one run, built for the run's time scale; some rows vary by run (S13). */
