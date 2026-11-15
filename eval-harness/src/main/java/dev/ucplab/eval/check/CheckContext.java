@@ -52,6 +52,11 @@ public final class CheckContext {
                 harnessPoll, 0);
     }
 
+    /** The same context for a run's side at another merchant (I2: same merchant). */
+    public CheckContext withMerchant(MerchantId other) {
+        return new CheckContext(ucp, orchestrator, recovery, hmacKey, other, harnessPoll, crashes);
+    }
+
     public CheckContext withCrashes(int n) {
         return new CheckContext(ucp, orchestrator, recovery, hmacKey, merchant, harnessPoll, n);
     }

@@ -3,7 +3,6 @@ package dev.ucplab.runtime;
 import dev.ucplab.core.agent.ToolSpec;
 import dev.ucplab.core.json.CanonicalJson;
 import dev.ucplab.core.merchant.CallOutcome;
-import dev.ucplab.core.merchant.CatalogGateway;
 import dev.ucplab.core.merchant.CatalogPage;
 import dev.ucplab.core.merchant.CatalogProduct;
 import dev.ucplab.core.merchant.CatalogSearch;
@@ -14,14 +13,17 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
 /**
  * {@code search_catalog} (6.2): {@code query} (1 to 200 characters) and {@code max_results} (1 to 10). Searches each
  * active merchant's catalog and returns {@code {items:[{merchant_id, item_id, title, price_minor, currency,
  * in_stock}]}}, one entry per variant, at most {@code max_results}. {@code title} is wrapped; the merchant's own
- * availability word is left out. A variant whose id a tool would not accept back is left out. When every active
- * merchant's search failed: {@code {"error":"unavailable"}}.
+ * availability word is left out. A variant whose id a tool would not accept back is left out. Every active merchant is
+ * asked at once, for {@link ToolPorts#perMerchant()} at most (19); the items are merged round-robin in registry order. A
+ * merchant that timed out or failed is left out and named in {@code unavailable}; when every active merchant failed:
+ * {@code {"error":"unavailable"}}.
  */
 final class SearchCatalogTool implements Tool {
 
@@ -60,27 +62,61 @@ final class SearchCatalogTool implements Tool {
         } catch (Args.Invalid e) {
             return ToolOutcome.invalid(e.getMessage());
         }
-        List<Object> items = new ArrayList<>();
         List<MerchantEntry> active = ports.merchants().active();
-        int failed = 0;
-        for (MerchantEntry merchant : active) {
-            CatalogGateway catalog = ports.catalogs().get(merchant.id());
-            if (catalog == null || !(catalog.search(new CatalogSearch(query, max)) instanceof CallOutcome.Ok<CatalogPage> ok)) {
-                failed++;
+        List<Optional<CatalogPage>> pages = askAll(active, new CatalogSearch(query, max));
+        List<List<Object>> perMerchant = new ArrayList<>();
+        List<String> unavailable = new ArrayList<>();
+        for (int i = 0; i < active.size(); i++) {
+            MerchantEntry merchant = active.get(i);
+            if (pages.get(i).isEmpty()) {
+                unavailable.add(merchant.id().value());
                 continue;
             }
-            for (CatalogProduct product : ok.value().products()) {
+            List<Object> mine = new ArrayList<>();
+            for (CatalogProduct product : pages.get(i).get().products()) {
                 for (CatalogVariant variant : product.variants()) {
-                    if (items.size() < max && Args.ID.matcher(variant.itemId()).matches()) {
-                        items.add(item(merchant, product, variant));
+                    if (Args.ID.matcher(variant.itemId()).matches()) {
+                        mine.add(item(merchant, product, variant));
                     }
                 }
             }
+            perMerchant.add(mine);
         }
-        if (!active.isEmpty() && failed == active.size()) {
+        if (!active.isEmpty() && unavailable.size() == active.size()) {
             return ToolOutcome.error("unavailable");
         }
-        return ToolOutcome.ok(Map.of("items", items));
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("items", roundRobin(perMerchant, max));
+        if (!unavailable.isEmpty()) {
+            result.put("unavailable", unavailable);
+        }
+        return ToolOutcome.ok(result);
+    }
+
+    /** The page of each merchant in {@code active}'s order; empty if it timed out, failed or answered with anything but a page. */
+    private List<Optional<CatalogPage>> askAll(List<MerchantEntry> active, CatalogSearch request) {
+        return FanOut.ask(ports, active, c -> c.search(request)).stream()
+                .map(answer -> answer.flatMap(o -> o instanceof CallOutcome.Ok<CatalogPage> ok
+                        ? Optional.of(ok.value()) : Optional.<CatalogPage>empty()))
+                .toList();
+    }
+
+    /** One item from each merchant in turn, in registry order, each merchant's own order kept, up to {@code max}. */
+    private static List<Object> roundRobin(List<List<Object>> perMerchant, int max) {
+        List<Object> out = new ArrayList<>();
+        for (int round = 0; out.size() < max; round++) {
+            boolean any = false;
+            for (List<Object> mine : perMerchant) {
+                if (round < mine.size() && out.size() < max) {
+                    out.add(mine.get(round));
+                    any = true;
+                }
+            }
+            if (!any) {
+                break;
+            }
+        }
+        return out;
     }
 
     private static Map<String, Object> item(MerchantEntry merchant, CatalogProduct product, CatalogVariant variant) {

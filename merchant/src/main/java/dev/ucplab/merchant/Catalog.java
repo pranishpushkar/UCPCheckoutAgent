@@ -6,15 +6,26 @@ import java.util.*;
 final class Catalog {
     record Item(String id, String title, long price, int stock) {}
 
-    private final Map<String, Item> items = new LinkedHashMap<>();
+    /** The built-in catalog (DESIGN A.2): what {@code new Catalog()} serves and {@code reset()} restores. */
+    static final List<Item> BUILT_IN = List.of(
+            new Item("item_123", "Red T-Shirt", 2500, 100),
+            new Item("item_456", "Blue Mug", 1200, 50),
+            new Item("item_789", "Limited Sneakers", 12000, 3));
 
-    Catalog() { reset(); }
+    private final Map<String, Item> items = new LinkedHashMap<>();
+    private final List<Item> initial;
+
+    Catalog() { this(BUILT_IN); }
+
+    /** A catalog that starts with these items, and that {@code reset()} returns to (the {@code --catalog} option). */
+    Catalog(List<Item> initial) {
+        this.initial = List.copyOf(initial);
+        reset();
+    }
 
     synchronized void reset() {
         items.clear();
-        put(new Item("item_123", "Red T-Shirt", 2500, 100));
-        put(new Item("item_456", "Blue Mug", 1200, 50));
-        put(new Item("item_789", "Limited Sneakers", 12000, 3));
+        initial.forEach(this::put);
     }
 
     private void put(Item i) { items.put(i.id(), i); }

@@ -95,7 +95,7 @@ class ConsoleStaticTest {
         String card = card(js);
 
         Set<String> allowed = Set.of("snapshot", "lines", "item_id", "quantity", "unit_price_minor", "currency",
-                "total_minor", "expires_at", "token");
+                "total_minor", "expires_at", "token", "merchant_id");
         Set<String> read = new LinkedHashSet<>();
         Matcher fields = Pattern.compile("\\b(?:approval|snapshot|line)\\.([A-Za-z_]+)").matcher(card);
         while (fields.find()) {
@@ -116,6 +116,43 @@ class ConsoleStaticTest {
         assertThat(arguments).as("calls of showApprovalCard (one definition, one use)")
                 .containsExactly("id, approvalResponse", "id, approvalResponse");
         assertThat(card).contains("const approvalResponse = await api(\"GET\", \"/api/intents/\" + id + \"/approval\");");
+    }
+
+    // Covers: 9.3 L4, I2, I3, 24.2, 24.3, D7, m6a C9 (one card per awaiting intent: each is built for its own intent, headed by
+    // the merchant of its own snapshot, and its Approve and Reject carry that card's own id and token, never a shared
+    // button; the page has a container for the cards and no single card)
+    @Test
+    void approvalCards_areOnePerIntent_headedByTheirOwnMerchant_withTheirOwnToken() throws IOException {
+        String js = read("console.js");
+        String card = card(js);
+        String html = read("index.html");
+
+        assertThat(card).contains("snapshot.merchant_id").contains("data-intent");
+        assertThat(card).contains("approve.onclick = () => decide(id, token, \"approve\");")
+                .contains("reject.onclick = () => decide(id, token, \"reject\");");
+        for (String shared : List.of("$(\"approve\")", "$(\"reject\")", "$(\"card-body\")", "$(\"card-foot\")",
+                "$(\"approval-card\")")) {
+            assertThat(card).as("the card's code uses the single-card element " + shared).doesNotContain(shared);
+        }
+        assertThat(html).contains("id=\"approval-cards\"").doesNotContain("id=\"approval-card\"")
+                .doesNotContain("id=\"approve\"");
+        // Every awaiting intent of a run is asked for its approval, not only the newest.
+        assertThat(js).contains("intents.forEach(loadApproval)");
+    }
+
+    // Covers: 24.3, D7, 23.3, m6a C9 (the fault lab names a merchant: a selector filled from /api/lab/merchants, "Merchant
+    // down" instead of "Merchant A down", faults sent with the chosen merchant_id, one order counter per merchant, and the
+    // run's other intents as one line each on the timeline)
+    @Test
+    void faultLab_hasAMerchantSelector_andACounterPerMerchant_andTheRunsOtherIntents() throws IOException {
+        String js = read("console.js");
+        String html = read("index.html");
+
+        assertThat(html).contains("id=\"lab-merchant\"").contains(">Merchant down<").doesNotContain("Merchant A down")
+                .contains("id=\"order-counters\"").contains("id=\"other-intents\"").doesNotContain("id=\"orders\"");
+        assertThat(js).contains("/api/lab/merchants").contains("merchant_id: $(\"lab-merchant\").value")
+                .contains("/api/lab/faults?merchant_id=").contains("/api/lab/orders?merchant_id=")
+                .doesNotContain("const MERCHANT = ").contains("showOtherIntents");
     }
 
     // Covers: 24.3 (the card's sentence about price and stock, the countdown, and the tax line computed from the snapshot)
@@ -142,7 +179,7 @@ class ConsoleStaticTest {
         List<String> calls = read("console.js").lines()
                 .filter(l -> l.contains("decide(") && !l.contains("async function decide(")).toList();
 
-        assertThat(calls).hasSize(2).allMatch(l -> l.matches("\\s*\\$\\(\"(approve|reject)\"\\)\\.onclick = \\(\\) => "
+        assertThat(calls).hasSize(2).allMatch(l -> l.matches("\\s*(approve|reject)\\.onclick = \\(\\) => "
                 + "decide\\(id, token, \"(approve|reject)\"\\);"));
     }
 

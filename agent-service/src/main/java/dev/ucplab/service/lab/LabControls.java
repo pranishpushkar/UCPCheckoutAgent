@@ -7,6 +7,7 @@ import dev.ucplab.core.identity.AuthContext;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentQueries;
 import dev.ucplab.core.intent.IntentState;
+import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.intent.PurchaseIntent;
 import dev.ucplab.core.json.CanonicalJson;
 import java.time.Clock;
@@ -24,7 +25,7 @@ import org.springframework.stereotype.Service;
 
 /**
  * The lab's fault controls (23.3, 24.3, m6-plan section 6), local profile only. Four presets, and a rule set of the
- * caller's own in the proxy's section 12 format. Rules go to the one proxy of M6's one merchant, so they are the lab's,
+ * caller's own in the proxy's section 12 format. Rules go to one merchant's proxy (the first merchant's when none is named), so they are the lab's,
  * not per user: that is why {@code demo} refuses to start until M6b has per-user sandboxes (D10).
  *
  * <p>The 503 preset's window ends after {@link #WINDOW}: {@link #sweep} removes the rule once the injected clock says
@@ -81,27 +82,49 @@ public class LabControls {
     private record Window(long version, Instant until) {
     }
 
-    private final ProxyAdmin proxy;
-    private final MerchantLab merchant;
+    /** One merchant's rule version and 503 window: each merchant's proxy is its own, so are these. */
+    private static final class Slot {
+        final AtomicLong version = new AtomicLong();
+        final AtomicReference<Window> window = new AtomicReference<>();
+    }
+
+    public static final String UNKNOWN_MERCHANT = "unknown merchant_id";
+
+    private final LabTargets targets;
+    private final Map<MerchantId, Slot> slots = new java.util.concurrent.ConcurrentHashMap<>();
     private final IntentQueries queries;
     private final ApprovalRepository approvals;
     private final Clock clock;
-    private final AtomicLong version = new AtomicLong();
-    private final AtomicReference<Window> window = new AtomicReference<>();
 
-    public LabControls(ProxyAdmin proxy, MerchantLab merchant, IntentQueries queries, ApprovalRepository approvals,
-                       Clock clock) {
-        this.proxy = Objects.requireNonNull(proxy, "proxy");
-        this.merchant = Objects.requireNonNull(merchant, "merchant");
+    public LabControls(LabTargets targets, IntentQueries queries, ApprovalRepository approvals, Clock clock) {
+        this.targets = Objects.requireNonNull(targets, "targets");
         this.queries = Objects.requireNonNull(queries, "queries");
         this.approvals = Objects.requireNonNull(approvals, "approvals");
         this.clock = Objects.requireNonNull(clock, "clock");
     }
 
+    /** The merchant a request without a merchant_id means: the first of the file. */
+    public MerchantId defaultMerchant() {
+        return targets.defaultMerchant();
+    }
+
+    private LabTargets.Target target(MerchantId id) {
+        return targets.find(Objects.requireNonNull(id, "id")).orElseThrow(() -> new Refused(UNKNOWN_MERCHANT));
+    }
+
+    private Slot slot(MerchantId id) {
+        return slots.computeIfAbsent(id, k -> new Slot());
+    }
+
     /** Installs the caller's own rule set (section 12 format); the proxy validates it. Returns the rule ids. */
     public List<String> replaceRules(Map<String, Object> ruleSet) {
+        return replaceRules(defaultMerchant(), ruleSet);
+    }
+
+    /** The same, at one merchant's proxy; the other merchants' rules and windows are untouched. */
+    public List<String> replaceRules(MerchantId merchant, Map<String, Object> ruleSet) {
         Objects.requireNonNull(ruleSet, "ruleSet");
-        install(CanonicalJson.write(ruleSet));
+        install(merchant, CanonicalJson.write(ruleSet));
         List<String> ids = new ArrayList<>();
         if (ruleSet.get("rules") instanceof List<?> rules) {
             for (Object rule : rules) {
@@ -115,24 +138,36 @@ public class LabControls {
 
     /** Applies a preset for {@code auth}; the rule ids it installed (none for {@code change_price}). */
     public List<String> preset(AuthContext auth, Preset preset) {
+        return preset(auth, defaultMerchant(), preset);
+    }
+
+    /**
+     * A preset at one merchant's proxy. {@code change_price} acts on the merchant of the caller's newest awaiting intent,
+     * whatever {@code merchant} says: it is derived from the intent, never given.
+     */
+    public List<String> preset(AuthContext auth, MerchantId merchant, Preset preset) {
         Objects.requireNonNull(auth, "auth");
         Objects.requireNonNull(preset, "preset");
+        if (preset != Preset.CHANGE_PRICE) {
+            target(merchant);
+        }
+        Slot slot = slot(merchant);
         return switch (preset) {
             case DROP_NEXT_COMPLETE -> {
-                install(ruleSet(rule("lab-drop-next-complete", Map.of("method", "POST", "pathPattern", COMPLETE_PATH),
+                install(merchant, ruleSet(rule("lab-drop-next-complete", Map.of("method", "POST", "pathPattern", COMPLETE_PATH),
                         Map.of("type", "forward_then_drop_response"), 1L)));
                 yield List.of("lab-drop-next-complete");
             }
             case MERCHANT_503 -> {
-                long v = version.incrementAndGet();
-                window.set(null);
-                proxy.replace(ruleSet(rule("lab-merchant-503", Map.of(),
+                long v = slot.version.incrementAndGet();
+                slot.window.set(null);
+                target(merchant).proxy().replace(ruleSet(rule("lab-merchant-503", Map.of(),
                         Map.of("type", "fail_before_forward", "status", 503L, "retryAfterSeconds", 1L), null)));
-                window.set(new Window(v, clock.instant().plus(WINDOW)));
+                slot.window.set(new Window(v, clock.instant().plus(WINDOW)));
                 yield List.of("lab-merchant-503");
             }
             case MERCHANT_DOWN -> {
-                install(ruleSet(rule("lab-merchant-down", Map.of(), Map.of("type", "fail_before_forward", "close", true),
+                install(merchant, ruleSet(rule("lab-merchant-down", Map.of(), Map.of("type", "fail_before_forward", "close", true),
                         null)));
                 yield List.of("lab-merchant-down");
             }
@@ -143,37 +178,61 @@ public class LabControls {
         };
     }
 
-    /** Removes the rules, and any 503 window with them. */
+    /** Removes the default merchant's rules, and any 503 window with them. */
     public void clearRules() {
-        version.incrementAndGet();
-        window.set(null);
-        proxy.clear();
+        clearRules(defaultMerchant());
     }
 
-    /** The merchant's own reset, then no rules. */
+    /** Removes one merchant's rules and its 503 window; the others are untouched. */
+    public void clearRules(MerchantId merchant) {
+        LabTargets.Target target = target(merchant);
+        Slot slot = slot(merchant);
+        slot.version.incrementAndGet();
+        slot.window.set(null);
+        target.proxy().clear();
+    }
+
+    /** Every merchant's own reset (23.3: reset covers every merchant), then no rules at any proxy. */
     public void reset() {
-        merchant.reset();
-        clearRules();
-    }
-
-    /** The merchant's ground-truth orders. */
-    public List<Map<String, Object>> orders() {
-        return merchant.orders();
-    }
-
-    /** Ends the 503 window when its time is up and nothing has replaced its rules since. */
-    public void sweep() {
-        Window w = window.get();
-        if (w != null && !clock.instant().isBefore(w.until()) && window.compareAndSet(w, null)
-                && version.get() == w.version()) {
-            proxy.clear();
+        for (MerchantId id : targets.ids()) {
+            targets.find(id).orElseThrow().merchant().reset();
+            clearRules(id);
         }
     }
 
-    private void install(String ruleSetJson) {
-        version.incrementAndGet();
-        window.set(null);
-        proxy.replace(ruleSetJson);
+    /** The default merchant's ground-truth orders. */
+    public List<Map<String, Object>> orders() {
+        return orders(defaultMerchant());
+    }
+
+    /** One merchant's ground-truth orders. */
+    public List<Map<String, Object>> orders(MerchantId merchant) {
+        return target(merchant).merchant().orders();
+    }
+
+    /** Whether the lab can control this merchant (it has a {@code lab_url}). */
+    public boolean controls(MerchantId merchant) {
+        return targets.find(Objects.requireNonNull(merchant, "merchant")).isPresent();
+    }
+
+    /** Ends each merchant's 503 window when its time is up and nothing has replaced its rules since. */
+    public void sweep() {
+        for (MerchantId id : targets.ids()) {
+            Slot slot = slot(id);
+            Window w = slot.window.get();
+            if (w != null && !clock.instant().isBefore(w.until()) && slot.window.compareAndSet(w, null)
+                    && slot.version.get() == w.version()) {
+                target(id).proxy().clear();
+            }
+        }
+    }
+
+    private void install(MerchantId merchant, String ruleSetJson) {
+        LabTargets.Target target = target(merchant);
+        Slot slot = slot(merchant);
+        slot.version.incrementAndGet();
+        slot.window.set(null);
+        target.proxy().replace(ruleSetJson);
     }
 
     /**
@@ -187,7 +246,7 @@ public class LabControls {
         IntentId id = newest.id();
         ApprovalRecord latest = approvals.findLatest(auth.user(), id).orElseThrow(() -> new Refused(NO_INTENT));
         SnapshotLine line = latest.snapshot().lines().getFirst();
-        merchant.setPrice(line.itemId(), line.unitPriceMinor() + 1);
+        target(latest.snapshot().merchantId()).merchant().setPrice(line.itemId(), line.unitPriceMinor() + 1);
     }
 
     private static Map<String, Object> rule(String id, Map<String, Object> match, Map<String, Object> action,

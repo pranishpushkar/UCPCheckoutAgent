@@ -72,7 +72,17 @@ public final class UcpHttpGateway implements MerchantGateway {
     public static final String ENDPOINT_NOT_ALLOWED = "endpoint_not_allowed";
     public static final String HANDLER_MISSING = "handler_missing";
     public static final String INCOMPATIBLE_VERSION = "incompatible_version";
+    public static final String CAPABILITY_MISSING = "capability_missing";
+    public static final String INVALID_PROFILE = "invalid_profile";
+    public static final String UNREACHABLE = DiscoveryFailedException.UNREACHABLE;
     private static final Duration PROFILE_TTL = Duration.ofMinutes(5);
+
+    /** Why discovery failed: a fixed reason code for a registry, and the text an operator reads (never a body). */
+    private record Problem(String reason, String text) {
+        static Problem of(String code) {
+            return new Problem(code, code);
+        }
+    }
 
     /** A checked profile, when it was fetched, and the UCP version negotiated with it (26.2). */
     private record Cached(MerchantProfile profile, Instant fetchedAt, String version) {}
@@ -165,11 +175,12 @@ public final class UcpHttpGateway implements MerchantGateway {
         if (cached != null && fresh(cached)) {
             return cached.profile();
         }
-        Optional<String> failure = refresh(false);
+        Optional<Problem> failure = refresh(false);
         Cached now = cache.get();
         if (failure.isPresent() || now == null) {
             throw new DiscoveryFailedException("discovery failed for " + merchant.id() + ": "
-                    + failure.orElse("no profile"));
+                    + failure.map(Problem::text).orElse("no profile"),
+                    failure.map(Problem::reason).orElse(UNREACHABLE));
         }
         return now.profile();
     }
@@ -179,22 +190,22 @@ public final class UcpHttpGateway implements MerchantGateway {
     }
 
     /** Fetches and checks the profile. Empty on success (the cache holds it); else why not. */
-    private Optional<String> refresh(boolean bypassBreaker) {
+    private Optional<Problem> refresh(boolean bypassBreaker) {
         ApiCall call = new ApiCall(AttemptOp.GET, "GET", URI.create(base + "/.well-known/ucp"), Optional.empty(),
                 Optional.empty(), bypassBreaker);
         return switch (executor.fetch(call)) {
-            case RetryExecutor.Fetched.Failed f -> Optional.of(describe(f.outcome()));
+            case RetryExecutor.Fetched.Failed f -> Optional.of(new Problem(UNREACHABLE, describe(f.outcome())));
             case RetryExecutor.Fetched.Body b -> {
                 try {
                     MerchantProfile profile = ProfileParser.parse(merchant.id(), b.reply().body());
                     Optional<String> version = negotiate(profile);
-                    Optional<String> problem = version.isEmpty() ? Optional.of(INCOMPATIBLE_VERSION) : incompatible(profile);
+                    Optional<Problem> problem = version.isEmpty() ? Optional.of(Problem.of(INCOMPATIBLE_VERSION)) : incompatible(profile);
                     if (problem.isEmpty()) {
                         cache.set(new Cached(profile, clock.instant(), version.get()));
                     }
                     yield problem;
                 } catch (IllegalArgumentException e) {
-                    yield Optional.of("invalid profile: " + e.getMessage());
+                    yield Optional.of(new Problem(INVALID_PROFILE, "invalid profile: " + e.getMessage()));
                 }
             }
         };
@@ -208,16 +219,16 @@ public final class UcpHttpGateway implements MerchantGateway {
         return Optional.of(p.ucpVersion()).filter(v -> ucpVersions.contains(v) && SUPPORTED_VERSIONS.contains(v));
     }
 
-    private Optional<String> incompatible(MerchantProfile p) {
+    private Optional<Problem> incompatible(MerchantProfile p) {
         if (!p.capabilities().contains(CHECKOUT_CAPABILITY)) {
-            return Optional.of("checkout capability missing");
+            return Optional.of(new Problem(CAPABILITY_MISSING, "checkout capability missing"));
         }
         if (!allowedHostPorts.contains(hostPort(p.checkoutEndpoint()))
                 || !base.getScheme().equalsIgnoreCase(p.checkoutEndpoint().getScheme())) {
-            return Optional.of(ENDPOINT_NOT_ALLOWED);
+            return Optional.of(Problem.of(ENDPOINT_NOT_ALLOWED));
         }
         if (!p.paymentHandlers().contains(paymentHandlerId)) {
-            return Optional.of(HANDLER_MISSING);
+            return Optional.of(Problem.of(HANDLER_MISSING));
         }
         return Optional.empty();
     }
@@ -228,10 +239,10 @@ public final class UcpHttpGateway implements MerchantGateway {
         if (cached != null && (!newIntent || fresh(cached))) {
             return Optional.of(cached);
         }
-        Optional<String> failure = refresh(!newIntent);
+        Optional<Problem> failure = refresh(!newIntent);
         Cached now = cache.get();
         if (failure.isPresent() || now == null) {
-            why[0] = failure.orElse("no profile");
+            why[0] = failure.map(Problem::text).orElse("no profile");
             return Optional.empty();
         }
         return Optional.of(now);

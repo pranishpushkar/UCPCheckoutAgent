@@ -5,14 +5,14 @@
 
 const TERMINAL = ["COMPLETED", "REJECTED", "FAILED_NOT_CHARGED", "ESCALATED"];
 const RUN_WAITING = ["waiting_for_user", "done", "waiting_for_approval"];
-const MERCHANT = "merchant-a";
 
 let csrf = "";
-let currentRun = null;      // {id, status}
+let currentRun = null;      // {id, status, intents}
 let currentIntent = null;   // {id, state}
 let intentTimer = null;
 let runTimer = null;
-let countdownTimer = null;
+const countdowns = new Map();   // intent id -> its card's expiry timer
+const counters = new Map();    // merchant id -> its order counter element
 
 const $ = (id) => document.getElementById(id);
 
@@ -134,7 +134,7 @@ async function send(event) {
 }
 
 function showRun(run) {
-  currentRun = {id: run.run_id, status: run.status};
+  currentRun = {id: run.run_id, status: run.status, intents: run.intent_ids || []};
   clear($("chat"));
   (run.messages || []).forEach((m) => {
     const item = el("li", m.text, m.role + (m.kind === "question" ? " question" : ""));
@@ -153,10 +153,12 @@ function showRun(run) {
     runTimer = window.setTimeout(pollRun, 1000);
   } else {
     loadRunDetails();
-    if (run.status === "waiting_for_approval" && intents.length > 0) {
-      loadApproval(intents[intents.length - 1]);
+    // Every intent of the run that awaits approval gets its own card, each headed by its own merchant (S22).
+    if (run.status === "waiting_for_approval") {
+      intents.forEach(loadApproval);
     }
   }
+  showOtherIntents(intents);
 }
 
 async function pollRun() {
@@ -188,28 +190,38 @@ async function loadRunDetails() {
 // messages. It reads the snapshot's lines, currency and total, the expiry and the token, and nothing else.
 
 // <approval-card>
+// One card per intent awaiting approval, each built from that intent's own approval response.
 async function loadApproval(id) {
   const approvalResponse = await api("GET", "/api/intents/" + id + "/approval");
   if (!approvalResponse.ok) {
-    hideApprovalCard();
+    hideApprovalCard(id);
     return;
   }
   showApprovalCard(id, approvalResponse);
 }
 
-function hideApprovalCard() {
-  window.clearInterval(countdownTimer);
-  $("approval-card").hidden = true;
+function hideApprovalCard(id) {
+  window.clearInterval(countdowns.get(id));
+  countdowns.delete(id);
+  document.querySelectorAll("#approval-cards [data-intent]").forEach((node) => {
+    if (node.getAttribute("data-intent") === id) {
+      node.remove();
+    }
+  });
 }
 
 function showApprovalCard(id, approvalResponse) {
   const approval = approvalResponse.data;
   const snapshot = approval.snapshot;
   const token = approval.token;       // kept in this closure only; never rendered, never stored
-  const body = $("card-body");
-  const foot = $("card-foot");
-  clear(body);
-  clear(foot);
+  hideApprovalCard(id);
+  const card = el("section", null, "card");
+  card.setAttribute("data-intent", id);
+  card.setAttribute("aria-label", "Approval from " + snapshot.merchant_id);
+  card.appendChild(el("h3", "Approval from " + snapshot.merchant_id));
+  const table = el("table");
+  const body = el("tbody");
+  const foot = el("tfoot");
   let linesTotal = 0;
   snapshot.lines.forEach((line) => {
     const row = el("tr");
@@ -232,31 +244,43 @@ function showApprovalCard(id, approvalResponse) {
   total.appendChild(el("td", ""));
   total.appendChild(el("td", money(snapshot.total_minor, snapshot.currency), "num"));
   foot.appendChild(total);
-  $("card-note").textContent = "Price and stock are not held.";
-  $("approval-card").hidden = false;
+  table.appendChild(body);
+  table.appendChild(foot);
+  card.appendChild(table);
+  card.appendChild(el("p", "Price and stock are not held.", "fixed"));
+  const expiry = el("p");
+  card.appendChild(expiry);
+  const actions = el("div", null, "actions");
+  const approve = el("button", "Approve");
+  approve.type = "button";
+  const reject = el("button", "Reject");
+  reject.type = "button";
+  actions.appendChild(approve);
+  actions.appendChild(reject);
+  card.appendChild(actions);
+  $("approval-cards").appendChild(card);
 
   const expiresAt = Date.parse(approval.expires_at);
-  window.clearInterval(countdownTimer);
   const tick = () => {
     const left = Math.max(0, Math.round((expiresAt - Date.now()) / 1000));
-    $("card-expiry").textContent = left > 0
+    expiry.textContent = left > 0
         ? "Expires in " + Math.floor(left / 60) + ":" + String(left % 60).padStart(2, "0")
         : "Expired. Ask for a new quote.";
-    $("approve").disabled = left === 0;
+    approve.disabled = left === 0;
   };
   tick();
-  countdownTimer = window.setInterval(tick, 1000);
+  countdowns.set(id, window.setInterval(tick, 1000));
 
-  $("approve").onclick = () => decide(id, token, "approve");
-  $("reject").onclick = () => decide(id, token, "reject");
+  approve.onclick = () => decide(id, token, "approve");
+  reject.onclick = () => decide(id, token, "reject");
 }
 // </approval-card>
 
 async function decide(id, token, decision) {
-  $("approve").disabled = true;
-  $("reject").disabled = true;
+  const buttons = document.querySelectorAll("#approval-cards [data-intent=\"" + id + "\"] button");
+  buttons.forEach((b) => { b.disabled = true; });
   const result = await api("POST", "/api/intents/" + id + "/approval", {token: token, decision: decision});
-  $("reject").disabled = false;
+  buttons.forEach((b) => { b.disabled = false; });
   if (result.status === 401 && result.data && result.data.code === "reauth_required") {
     setStatus("Signing in again to approve.");
     window.location.assign("/auth/login?reauth=true&return_to=/intents/" + id);
@@ -267,7 +291,7 @@ async function decide(id, token, decision) {
     loadApproval(id);
     return;
   }
-  hideApprovalCard();
+  hideApprovalCard(id);
   setStatus(decision === "approve" ? "Approved. Completing the purchase." : "Rejected.");
   watchIntent(id);
 }
@@ -310,9 +334,33 @@ async function pollIntent() {
       loadApproval(id);
     }
   }
+  if (currentRun) {
+    showOtherIntents(currentRun.intents);
+  }
   if (!TERMINAL.includes(state)) {
     intentTimer = window.setTimeout(pollIntent, 1000);
   }
+}
+
+// The run's other intents, one line each, beside the one the timeline follows (S22): merchant and state.
+async function showOtherIntents(ids) {
+  const list = $("other-intents");
+  if (!currentIntent || ids.length < 2) {
+    clear(list);
+    return;
+  }
+  const lines = [];
+  for (const id of ids) {
+    if (id === currentIntent.id) {
+      continue;
+    }
+    const result = await api("GET", "/api/intents/" + id);
+    if (result.ok) {
+      lines.push("Intent " + id + ": " + result.data.merchant_id + ", " + result.data.state.replace(/_/g, " ").toLowerCase());
+    }
+  }
+  clear(list);
+  lines.forEach((text) => list.appendChild(el("li", text)));
 }
 
 const LABELS = {
@@ -363,33 +411,45 @@ async function loadEvents(id) {
 // ---- the fault lab and the order counter ---------------------------------------------------------------------------
 
 async function startLab() {
-  const orders = await api("GET", "/api/lab/orders?merchant_id=" + MERCHANT);
-  if (orders.status === 404) {
+  const list = await api("GET", "/api/lab/merchants");
+  if (!list.ok) {
     return;     // not the local profile: the lab does not exist here
   }
+  const select = $("lab-merchant");
+  clear(select);
+  clear($("order-counters"));
+  list.data.merchants.forEach((m) => {
+    select.appendChild(el("option", m.name + (m.status === "ACTIVE" ? "" : " (suspended)")))
+        .setAttribute("value", m.merchant_id);
+    const box = el("div");
+    box.appendChild(el("dt", m.name));
+    const count = el("dd", "0");
+    box.appendChild(count);
+    $("order-counters").appendChild(box);
+    counters.set(m.merchant_id, count);
+  });
   $("fault-lab").hidden = false;
   $("counters").hidden = false;
-  showOrders(orders);
+  refreshOrders();
   window.setInterval(refreshOrders, 2000);
 }
 
-function showOrders(result) {
-  if (result.ok && Array.isArray(result.data.orders)) {
-    $("orders").textContent = String(result.data.orders.length);
+async function refreshOrders() {
+  for (const [merchant, count] of counters) {
+    const result = await api("GET", "/api/lab/orders?merchant_id=" + encodeURIComponent(merchant));
+    if (result.ok && Array.isArray(result.data.orders)) {
+      count.textContent = String(result.data.orders.length);
+    }
   }
 }
 
-async function refreshOrders() {
-  showOrders(await api("GET", "/api/lab/orders?merchant_id=" + MERCHANT));
-}
-
 async function preset(name) {
-  const result = await api("PUT", "/api/lab/faults", {preset: name});
+  const result = await api("PUT", "/api/lab/faults", {preset: name, merchant_id: $("lab-merchant").value});
   setStatus(result.ok ? "Fault set: " + name.replace(/_/g, " ") + "." : errorText(result), !result.ok);
 }
 
 async function clearFaults() {
-  const result = await api("DELETE", "/api/lab/faults");
+  const result = await api("DELETE", "/api/lab/faults?merchant_id=" + encodeURIComponent($("lab-merchant").value));
   setStatus(result.ok || result.status === 204 ? "Faults cleared." : errorText(result), !result.ok);
 }
 

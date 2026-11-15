@@ -1,0 +1,18 @@
+{
+  "name": "a-s20-one-merchant-down",
+  "expectToolSequence": ["search_catalog", "search_catalog", "search_catalog", "propose_purchase"],
+  "turns": [
+    { "call": [{ "tool": "search_catalog", "args": { "query": "blue mug", "max_results": 3 } }] },
+    { "when": { "tool": "search_catalog", "resultMatches": "\"unavailable\":\\[\"shop-lane-b\"\\]" },
+      "call": [{ "tool": "search_catalog", "args": { "query": "mug", "max_results": 3 } }] },
+    { "when": { "tool": "search_catalog", "resultMatches": "\"unavailable\":\\[\"shop-lane-b\"\\]" },
+      "call": [{ "tool": "search_catalog", "args": { "query": "blue mug", "max_results": 5 } }] },
+    { "when": { "tool": "search_catalog", "resultMatches": "\"item_id\":\"item_456\"" },
+      "call": [{ "tool": "propose_purchase",
+                 "args": { "merchant_id": "shop-lane",
+                           "items": [{ "item_id": "item_456", "quantity": 1 }],
+                           "rationale": "The user asked for one blue mug; one merchant did not answer." } }] },
+    { "when": { "tool": "propose_purchase", "resultMatches": "\"state\":\"AWAITING_APPROVAL\"" },
+      "text": "I have asked for your approval of 1 Blue Mug from shop-lane. One merchant did not answer." }
+  ]
+}

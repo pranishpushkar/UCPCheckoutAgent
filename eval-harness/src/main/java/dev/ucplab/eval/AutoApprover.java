@@ -36,7 +36,14 @@ public final class AutoApprover {
          * line, {@value #CAREFUL_ITEM} x 1, and decline anything else. It reads the merchant's snapshot, never the
          * agent's prose (9.3 L4).
          */
-        CAREFUL
+        CAREFUL,
+        /**
+         * Approve the first intent it decides and reject every other one explicitly (S22: a basket of two merchants, the
+         * user wants only the first). Before it rejects an intent it presents the first intent's token for it, as a
+         * negative control: the system must refuse it (the token is bound to its own intent, I3). An approval it
+         * gets for it is logged as it happened, so the row sees the second intent approved with the first's token.
+         */
+        FIRST_INTENT_ONLY
     }
 
     /** The one item the careful approver approves, at quantity 1. */
@@ -62,6 +69,9 @@ public final class AutoApprover {
     private final Consumer<String> tokenSeen;
     private final Runnable beforeFirstDecision;
     private boolean first = true;
+    /** {@link Policy#FIRST_INTENT_ONLY}: the intent it approved, and its token (held here only, never logged). */
+    private Optional<IntentId> firstIntent = Optional.empty();
+    private String firstToken = "";
 
     /** @param auth a fresh sign-in of the intent's owner, called again for every read and every decision */
     public AutoApprover(DefaultApprovalService service, Policy policy, Supplier<AuthContext> auth, Clock clock) {
@@ -101,7 +111,21 @@ public final class AutoApprover {
             case DECLINE_ALL -> false;
             case APPROVE_FIRST_THEN_DECLINE -> seq == 1;
             case CAREFUL -> oneBlueMug(p.snapshot());
+            case FIRST_INTENT_ONLY -> firstIntent.isEmpty() || firstIntent.get().equals(id);
         };
+        if (policy == Policy.FIRST_INTENT_ONLY) {
+            if (firstIntent.isEmpty()) {
+                firstIntent = Optional.of(id);
+                firstToken = p.token();
+            } else if (!firstIntent.get().equals(id)) {
+                ApprovalDecision probe = service.decide(auth.get(), id, firstToken, true);
+                if (probe instanceof ApprovalDecision.Approved) {
+                    decided.add(p.snapshotHash());
+                    log.add(new Decision(id, seq, p.snapshot(), p.snapshotHash(), true, clock.instant()));
+                    return true;
+                }
+            }
+        }
         if (first) {
             first = false;
             beforeFirstDecision.run();

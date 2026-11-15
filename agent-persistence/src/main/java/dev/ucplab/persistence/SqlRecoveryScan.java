@@ -1,20 +1,27 @@
 package dev.ucplab.persistence;
 
+import dev.ucplab.core.intent.InFlightMerchants;
 import dev.ucplab.core.intent.IntentId;
+import dev.ucplab.core.intent.IntentState;
 import dev.ucplab.core.intent.RecoveryScan;
+import dev.ucplab.core.merchant.MerchantId;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * {@link RecoveryScan} over the database (7.6): intents still in AWAITING_APPROVAL whose newest approval is PENDING and
  * past its {@code expires_at}, or already EXPIRED, and whose lease is free. A system read: it takes no lease and
  * caches nothing (section 20).
  */
-public final class SqlRecoveryScan implements RecoveryScan {
+public final class SqlRecoveryScan implements RecoveryScan, InFlightMerchants {
 
     private final Database db;
 
@@ -47,6 +54,24 @@ public final class SqlRecoveryScan implements RecoveryScan {
                     }
                     return List.copyOf(out);
                 }
+            }
+        });
+    }
+
+    /** The distinct merchants of intents in any non-terminal state, across owners: a system read, like the one above. */
+    @Override
+    public Set<MerchantId> merchantsInFlight() {
+        String terminal = Arrays.stream(IntentState.values()).filter(IntentState::isTerminal)
+                .map(state -> "'" + state.name() + "'").collect(Collectors.joining(", "));
+        return db.read(c -> {
+            try (PreparedStatement s = c.prepareStatement(
+                    "SELECT DISTINCT merchant_id FROM purchase_intent WHERE state NOT IN (" + terminal + ")");
+                 ResultSet r = s.executeQuery()) {
+                Set<MerchantId> out = new HashSet<>();
+                while (r.next()) {
+                    out.add(new MerchantId(r.getString(1)));
+                }
+                return Set.copyOf(out);
             }
         });
     }

@@ -2,7 +2,6 @@ package dev.ucplab.service.lab;
 
 import dev.ucplab.core.json.CanonicalJson;
 import dev.ucplab.core.json.LenientJson;
-import dev.ucplab.service.config.ServiceProperties;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -12,14 +11,13 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import org.springframework.context.annotation.Profile;
-import org.springframework.stereotype.Component;
 
 /**
- * The merchant's own lab routes (12, 24.3), read directly and never through the proxy: ground-truth orders, the reset,
+ * One merchant's own lab routes (12, 24.3), read directly and never through the proxy: ground-truth orders, the reset,
  * and a price change. Local profile only (23.3).
  */
-@Component
 @Profile("local")
 public class MerchantLab {
 
@@ -28,8 +26,9 @@ public class MerchantLab {
     private final URI base;
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(TIMEOUT).build();
 
-    public MerchantLab(ServiceProperties properties) {
-        this.base = properties.merchantLabUrl();
+    /** @param labUrl the merchant itself, never its proxy */
+    public MerchantLab(URI labUrl) {
+        this.base = Objects.requireNonNull(labUrl, "labUrl");
     }
 
     /** {@code GET /_lab/orders}: the orders the merchant really created, as it reports them. */

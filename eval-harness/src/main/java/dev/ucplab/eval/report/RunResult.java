@@ -89,8 +89,8 @@ public record RunResult(String scenarioId, int run, long seed, int lane, Optiona
         Optional<IntentState> terminal = e.intents().isEmpty() ? Optional.empty()
                 : Optional.of(e.intents().getFirst().intent().state());
         boolean expected = scenario.agent().isPresent() ? agentExpected(scenario, e)
-                : e.aborted().isEmpty() && e.intents().size() == 1
-                        && terminal.map(scenario.expected()::contains).orElse(false);
+                : e.aborted().isEmpty() && e.intents().size() == scenario.multi().users()
+                        && e.intents().stream().allMatch(p -> scenario.expected().contains(p.intent().state()));
         Optional<Duration> reconcile = e.intents().isEmpty() ? Optional.empty()
                 : reconcileSpan(e.intents().getFirst().events());
         Optional<AgentStats> agent = e.agentRun().map(a -> new AgentStats(

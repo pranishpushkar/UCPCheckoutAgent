@@ -1,6 +1,5 @@
 package dev.ucplab.service.lab;
 
-import dev.ucplab.service.config.ServiceProperties;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -10,15 +9,13 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Objects;
 import org.springframework.context.annotation.Profile;
-import org.springframework.stereotype.Component;
 
 /**
- * The fault proxy's admin API (12): {@code POST /_proxy/rules} replaces the rule set and {@code DELETE /_proxy/rules}
+ * One merchant's fault proxy admin API (12): {@code POST /_proxy/rules} replaces the rule set and {@code DELETE /_proxy/rules}
  * clears it. The proxy is where the agent reaches the merchant ({@code MERCHANT_URL}), so its admin routes are on that
  * address. Local profile only (23.3). Nothing here sends a credential or reads the {@code bodyHmac} key, which no route
  * exposes.
  */
-@Component
 @Profile("local")
 public class ProxyAdmin {
 
@@ -36,8 +33,9 @@ public class ProxyAdmin {
     private final URI rules;
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(TIMEOUT).build();
 
-    public ProxyAdmin(ServiceProperties properties) {
-        this.rules = properties.merchant().baseUrl().resolve("/_proxy/rules");
+    /** @param merchantUrl where the agent reaches the merchant: its fault proxy, whose admin routes are on that address */
+    public ProxyAdmin(URI merchantUrl) {
+        this.rules = Objects.requireNonNull(merchantUrl, "merchantUrl").resolve("/_proxy/rules");
     }
 
     /** Replaces the proxy's rule set with {@code ruleSetJson} (the section 12 format). */

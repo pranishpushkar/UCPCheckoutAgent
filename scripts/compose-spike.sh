@@ -19,10 +19,10 @@ docker compose up -d --build --wait
 docker compose ps --format 'table {{.Service}}\t{{.State}}\t{{.Health}}\t{{.Ports}}'
 
 echo "== (1) discovery through the proxy, from inside the namespace"
-discovery=$(docker compose exec -T fault-proxy curl -fsS http://127.0.0.1:9101/.well-known/ucp)
+discovery=$(docker compose exec -T fault-proxy-a curl -fsS http://127.0.0.1:9101/.well-known/ucp)
 echo "$discovery" | head -c 400; echo
 echo "$discovery" | grep -q '127.0.0.1:9101' || fail "the proxy did not rewrite discovery to its own authority"
-log=$(docker compose exec -T fault-proxy curl -fsS 'http://127.0.0.1:9101/_proxy/log?after=0')
+log=$(docker compose exec -T fault-proxy-a curl -fsS 'http://127.0.0.1:9101/_proxy/log?after=0')
 echo "proxy log: $log" | head -c 400; echo
 echo "$log" | grep -q '/.well-known/ucp' || fail "the proxy log does not show the discovery request"
 echo "ok: discovery went through the proxy to the merchant"
@@ -45,7 +45,7 @@ done
 echo "inside the namespace, /_lab/orders is served (ground truth for the agent):"
 docker compose exec -T merchant-a curl -fsS http://127.0.0.1:9001/_lab/orders; echo
 echo "and the proxy refuses /_lab (section 12):"
-docker compose exec -T fault-proxy curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:9101/_lab/orders
+docker compose exec -T fault-proxy-a curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:9101/_lab/orders
 
 echo "== (3) docker compose down -v"
 docker compose down -v

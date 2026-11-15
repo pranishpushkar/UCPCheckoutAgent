@@ -7,6 +7,7 @@ import dev.ucplab.faultproxy.RuleSet;
 import dev.ucplab.merchant.LabMerchant;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -16,6 +17,8 @@ import java.util.Set;
  * scale), what the auto-approver does, how the proposal is driven, and what must come out. An agent row (M5,
  * {@link Driver#AGENT}) carries its {@link AgentSpec}; the agent proposes, and the rest of the run is as in M4.
  *
+ * @param multi how many merchants the row's lane holds, how many users it has, and the proxy rules at the merchants
+ *     after the first ({@link Multi#ONE}: every row before M6a)
  * @param target the merchant the proposal names; only {@link Scenarios#SHOP} is in a lane's registry
  * @param paymentToken the mock card token the agent pays with ({@code tok_decline} makes the merchant decline)
  * @param beforeFirstDecision a change to the merchant made once the first quote is pending, just before the approver
@@ -41,7 +44,51 @@ public record Scenario(
         String paymentToken,
         MerchantEvent beforeFirstDecision,
         FaultWindow faultWindow,
-        Optional<AgentSpec> agent) {
+        Optional<AgentSpec> agent,
+        Multi multi) {
+
+    /**
+     * The shape of a row over several merchants (m6a-plan C11): {@code merchants} in the lane (1 to
+     * {@value Lane#MAX_MERCHANTS}), {@code users} signed in for the run, and the proxy rules of each merchant after the
+     * first, by lane index ({@link Scenario#rules} is merchant 0's). {@code claim} is the row's own statement about the run
+     * as a whole, which no invariant makes (S20: B was left out, and only B's breaker opened).
+     */
+    public record Multi(int merchants, int users, Map<Integer, Rules> rulesAt, Claim claim) {
+        /** A lane of one merchant and one user, with no rules elsewhere and no claim. */
+        public static final Multi ONE = new Multi(1, 1, Map.of(), Claim.NONE);
+
+        public Multi(int merchants, int users, Map<Integer, Rules> rulesAt) {
+            this(merchants, users, rulesAt, Claim.NONE);
+        }
+
+        public Multi {
+            if (merchants < 1 || merchants > Lane.MAX_MERCHANTS) {
+                throw new IllegalArgumentException("a row has 1 to " + Lane.MAX_MERCHANTS + " merchants: " + merchants);
+            }
+            if (users < 1) {
+                throw new IllegalArgumentException("a row has at least one user: " + users);
+            }
+            rulesAt = Map.copyOf(rulesAt);
+            Objects.requireNonNull(claim, "claim");
+            for (int at : rulesAt.keySet()) {
+                if (at < 1 || at >= merchants) {
+                    throw new IllegalArgumentException("rules at merchant " + at + " of " + merchants);
+                }
+            }
+        }
+    }
+
+    /**
+     * What a row over several merchants says about the run as a whole, checked once the proxies are quiet. A run whose
+     * claim fails is aborted with the reason, never passed (as S8's missed window is).
+     */
+    @FunctionalInterface
+    public interface Claim {
+        Claim NONE = (e, t) -> Optional.empty();
+
+        /** Why the run does not bear the row out, or empty if it does. */
+        Optional<String> failed(RunEvidence evidence, TimeScale scale);
+    }
 
     /** The proxy rules of one run, built for the run's time scale; some rows vary by run (S13). */
     @FunctionalInterface
@@ -97,7 +144,13 @@ public record Scenario(
          * The agent runtime proposes (M5, 13.1 D6): {@code AgentRuntime.run} with a {@code ScriptedModel} replaying the
          * row's script and a {@link ScriptedUser}; the run's intents are then decided and driven as in M4.
          */
-        AGENT
+        AGENT,
+        /**
+         * Each of the row's {@link Multi#users} proposes the same basket at the target (the quote reserves nothing), and
+         * the approver decides every intent as its owner. Then every intent's first complete is sent at the same instant,
+         * each by a thread of its own released through a barrier, on a schedule seeded by the run (S21).
+         */
+        RACE
     }
 
     public Scenario {
@@ -115,6 +168,7 @@ public record Scenario(
         Objects.requireNonNull(beforeFirstDecision, "beforeFirstDecision");
         Objects.requireNonNull(faultWindow, "faultWindow");
         Objects.requireNonNull(agent, "agent");
+        Objects.requireNonNull(multi, "multi");
         if ((driver == Driver.AGENT) != agent.isPresent()) {
             throw new IllegalArgumentException(id + ": an agent spec goes with Driver.AGENT and only with it");
         }
@@ -130,7 +184,7 @@ public record Scenario(
                     Rules rules, AutoApprover.Policy approver, MerchantId target, String paymentToken,
                     AgentSpec agent) {
         this(id, title, fault, expected, requiredInvariants, rules, approver, Driver.AGENT, target, List.of(),
-                paymentToken, MerchantEvent.NONE, FaultWindow.NONE, Optional.of(agent));
+                paymentToken, MerchantEvent.NONE, FaultWindow.NONE, Optional.of(agent), Multi.ONE);
     }
 
     /** A row with a fault window and no agent. */
@@ -139,7 +193,7 @@ public record Scenario(
                     List<ProposedLine> basket, String paymentToken, MerchantEvent beforeFirstDecision,
                     FaultWindow faultWindow) {
         this(id, title, fault, expected, requiredInvariants, rules, approver, driver, target, basket, paymentToken,
-                beforeFirstDecision, faultWindow, Optional.empty());
+                beforeFirstDecision, faultWindow, Optional.empty(), Multi.ONE);
     }
 
     /** The expected outcome as the report writes it: the terminal states, or that the row leaves no intent. */

@@ -78,7 +78,10 @@ echo "ok: the control's canary was found, as it must be"
 
 echo "== plant canaries in the build context's neighbourhood"
 [ -f .env ] && { BACKUP=$(mktemp); cp .env "$BACKUP"; }
-{ echo "APPROVAL_SECRET=$C_SECRET"; echo "GEMINI_API_KEY=$C_KEY"; echo "CANARY_FILE_MARKER=$C_MARK"; } > .env
+# The three MERCHANT_*_TOKEN lines are the lab's mock token, there only so that Compose can interpolate compose.yaml; they
+# are not canaries.
+{ echo "APPROVAL_SECRET=$C_SECRET"; echo "GEMINI_API_KEY=$C_KEY"; echo "CANARY_FILE_MARKER=$C_MARK"
+  for m in A B C; do echo "MERCHANT_${m}_TOKEN=tok_ok"; done; } > .env
 mkdir -p data
 echo "$C_DATA" > data/canary-data.txt; PLANTED+=(data/canary-data.txt)
 echo "$C_ROOT" > canary-root.txt; PLANTED+=(canary-root.txt)

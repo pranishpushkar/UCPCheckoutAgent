@@ -1,12 +1,13 @@
 package dev.ucplab.service.config;
 
-import dev.ucplab.core.approval.ApprovalSecret;
 import dev.ucplab.core.agent.ModelKey;
+import dev.ucplab.core.approval.ApprovalSecret;
 import dev.ucplab.core.config.AgentProfile;
 import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantStatus;
 import dev.ucplab.core.policy.PolicyConfig;
+import dev.ucplab.ucp.registry.MerchantSettings;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
@@ -72,6 +73,7 @@ public final class ServiceProperties {
     private final ApprovalSecret approvalKey;
     private final PolicyConfig policy;
     private final MerchantEntry merchant;
+    private final List<MerchantSettings> merchants;
     private final List<String> localUsers;
     private final List<String> publicOrigins;
     private final AgentModel agentModel;
@@ -80,7 +82,8 @@ public final class ServiceProperties {
     private final URI merchantLabUrl;
 
     private ServiceProperties(AgentProfile profile, Path databaseFile, byte[] approvalSecret, ApprovalSecret approvalKey,
-                              PolicyConfig policy, MerchantEntry merchant, List<String> localUsers,
+                              PolicyConfig policy, MerchantEntry merchant, List<MerchantSettings> merchants,
+                              List<String> localUsers,
                               List<String> publicOrigins, AgentModel agentModel, Optional<ModelKey> modelKey,
                               Optional<URI> modelBaseUrl, URI merchantLabUrl) {
         this.profile = profile;
@@ -89,6 +92,7 @@ public final class ServiceProperties {
         this.approvalKey = approvalKey;
         this.policy = policy;
         this.merchant = merchant;
+        this.merchants = merchants;
         this.localUsers = localUsers;
         this.publicOrigins = publicOrigins;
         this.agentModel = agentModel;
@@ -178,9 +182,18 @@ public final class ServiceProperties {
         }
         Optional<URI> modelBaseUrl = env.get("GEMINI_BASE_URL").map(ServiceProperties::loopbackUrl);
 
-        return new ServiceProperties(profile, databaseFile, secretBytes, approvalKey, policy, merchant, localUsers,
+        // DESIGN 19: MERCHANTS_FILE lists the merchants; without it the one MERCHANT_URL merchant is the whole registry,
+        // exactly as in M6. The first merchant of the file is the one the single-merchant settings ({@link #merchant},
+        // {@link #merchantLabUrl}) and an omitted merchant_id of the lab routes mean.
+        MerchantEntry fallback = merchant;
+        URI fallbackLab = labUrl;
+        List<MerchantSettings> merchants = env.get("MERCHANTS_FILE").map(f -> MerchantsFile.load(Path.of(f), profile))
+                .orElseGet(() -> List.of(MerchantSettings.single(fallback, fallbackLab)));
+        MerchantSettings first = merchants.getFirst();
+
+        return new ServiceProperties(profile, databaseFile, secretBytes, approvalKey, policy, first.entry(first.fileStatus()), merchants, localUsers,
                 origins(env.get("PUBLIC_ORIGIN").orElse(DEFAULT_ORIGINS)), agentModel,
-                agentModel == AgentModel.GEMINI ? modelKey : Optional.empty(), modelBaseUrl, labUrl);
+                agentModel == AgentModel.GEMINI ? modelKey : Optional.empty(), modelBaseUrl, first.labUrl().orElse(fallbackLab));
     }
 
     /** A test points the live client at a loopback stub; any other host could receive the key, so it is refused. */
@@ -235,8 +248,14 @@ public final class ServiceProperties {
         return policy;
     }
 
+    /** The first merchant (M6's one merchant, and the lab's default). */
     public MerchantEntry merchant() {
         return merchant;
+    }
+
+    /** Every configured merchant, in file order (DESIGN 19); one, from {@code MERCHANT_URL}, without a file. */
+    public List<MerchantSettings> merchants() {
+        return merchants;
     }
 
     /** The names the local dev sign-in offers, in order (18.8). */

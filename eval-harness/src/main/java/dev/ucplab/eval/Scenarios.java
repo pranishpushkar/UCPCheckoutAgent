@@ -8,6 +8,8 @@ import dev.ucplab.faultproxy.Match;
 import dev.ucplab.faultproxy.Rule;
 import dev.ucplab.faultproxy.RuleSet;
 import dev.ucplab.runtime.BudgetLimit;
+import dev.ucplab.ucp.CircuitBreaker;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
@@ -23,8 +25,11 @@ import java.util.stream.Collectors;
  */
 public final class Scenarios {
 
-    /** The one merchant in every lane's registry. */
+    /** The one merchant in every lane's registry (merchant 0 of a lane of several). */
     public static final MerchantId SHOP = new MerchantId("shop-lane");
+    /** The second and third merchants of a lane of three (m6a-plan C11): the catalogs {@code b.json} and {@code c.json}. */
+    public static final MerchantId SHOP_B = new MerchantId("shop-lane-b");
+    public static final MerchantId SHOP_C = new MerchantId("shop-lane-c");
     /** A merchant no lane's registry holds (S11). */
     public static final MerchantId UNLISTED = new MerchantId("shop-unlisted");
     /** Every M4 run holds exactly this one basket, so every order in a run belongs to that run (m4-plan section 5). */
@@ -253,6 +258,119 @@ public final class Scenarios {
                         .replace('_', '-') + ".json", Optional.of(breach));
             }, List.of(), Set.of("budget_exceeded"), 0, 0, false, true));
 
+    /** What the catalog tools call on a merchant. */
+    private static final String CATALOG_ALL = "/ucp/v1/catalog/*";
+
+    /** The one Wool Cap merchant B holds ({@code dev/catalogs/b.json}). */
+    static final String S21_ITEM = "b_cap_03";
+    static final int S21_STOCK = 1;
+
+    /**
+     * S21 (13.2): two users buy the one Wool Cap at merchant B at the same moment. The row's claim: B ends with one order
+     * for the one in stock, never two, one intent COMPLETED and the other FAILED_NOT_CHARGED.
+     */
+    public static final Scenario S21 = new Scenario("S21", "two users buy the last item at the same moment",
+            "none; two users propose " + S21_ITEM + " x 1 at merchant B (stock " + S21_STOCK + "), both approve, both"
+                    + " first completes are released together on a seeded schedule; payment latency complete timeout / 4",
+            Set.of(IntentState.COMPLETED, IntentState.FAILED_NOT_CHARGED), List.of("I1"), (t, run) -> RuleSet.empty(),
+            AutoApprover.Policy.APPROVE_ALL, Scenario.Driver.RACE, SHOP_B, List.of(new ProposedLine(S21_ITEM, 1)), PAY_OK,
+            Scenario.MerchantEvent.NONE, Scenario.FaultWindow.NONE, Optional.empty(),
+            new Scenario.Multi(2, 2, java.util.Map.of(), (e, scale) -> {
+                RunEvidence.MerchantView b = e.views().stream().filter(v -> v.merchant().equals(SHOP_B)).findFirst()
+                        .orElseThrow();
+                if (b.orders().size() != S21_STOCK) {
+                    return Optional.of("S21 claim: " + b.orders().size() + " orders at the merchant for " + S21_STOCK
+                            + " in stock");
+                }
+                long completed = e.intents().stream().filter(p -> p.intent().state() == IntentState.COMPLETED).count();
+                long failed = e.intents().stream().filter(p -> p.intent().state() == IntentState.FAILED_NOT_CHARGED)
+                        .count();
+                if (completed != 1 || failed != 1) {
+                    return Optional.of("S21 claim: " + completed + " intents COMPLETED and " + failed
+                            + " FAILED_NOT_CHARGED, not one of each");
+                }
+                return Optional.empty();
+            }));
+
+    /**
+     * A-S22 (S22, 13.2): a basket across two merchants. The agent proposes a Blue Mug at A, then one at B, in one run; the
+     * user approves the first intent and rejects the second, after presenting the first's token for it, which must be
+     * refused. The row's claim: two intents, two approvals (the first approved, the second rejected), one order and it is
+     * at A, none at B, the second intent REJECTED and the first COMPLETED.
+     */
+    public static final Scenario A_S22 = new Scenario("A-S22", "agent, scripted: a basket across two merchants",
+            "none; the agent proposes at merchants A and B; the user approves the first intent and rejects the second",
+            Set.of(IntentState.COMPLETED, IntentState.REJECTED), List.of("I1", "I3", "I11"), (t, run) -> RuleSet.empty(),
+            AutoApprover.Policy.FIRST_INTENT_ONLY, Scenario.Driver.AGENT, SHOP, List.of(), PAY_OK,
+            Scenario.MerchantEvent.NONE, Scenario.FaultWindow.NONE,
+            Optional.of(new AgentSpec("Buy me a blue mug from each of two merchants.",
+                    run -> AgentSpec.Script.of("a-s22-split-basket.json"), List.of(),
+                    Set.of("waiting_for_approval", "done"), 2, 2, false, false)),
+            new Scenario.Multi(2, 1, java.util.Map.of(), (e, scale) -> {
+                var at = new java.util.LinkedHashMap<MerchantId, IntentState>();
+                e.intents().forEach(p -> at.put(p.intent().merchantId(), p.intent().state()));
+                if (e.intents().size() != 2 || !at.equals(java.util.Map.of(SHOP, IntentState.COMPLETED,
+                        SHOP_B, IntentState.REJECTED))) {
+                    return Optional.of("S22 claim: the intents ended " + at + ", not COMPLETED at " + SHOP.value()
+                            + " and REJECTED at " + SHOP_B.value());
+                }
+                if (e.approvals().size() != 2 || !e.approvals().get(0).approved() || e.approvals().get(1).approved()) {
+                    return Optional.of("S22 claim: the user's decisions were not one approval, then one rejection");
+                }
+                for (RunEvidence.MerchantView v : e.views()) {
+                    int want = v.merchant().equals(SHOP) ? 1 : 0;
+                    if (v.orders().size() != want) {
+                        return Optional.of("S22 claim: " + v.orders().size() + " orders at " + v.merchant().value()
+                                + ", not " + want);
+                    }
+                }
+                return Optional.empty();
+            }));
+
+    /** A-S20's claim (see {@link #A_S20}). */
+    private static final Scenario.Claim A_S20_CLAIM = (e, scale) -> {
+        Duration first = e.agentRun().map(a -> a.record().toolEvents()).filter(l -> !l.isEmpty())
+                .map(l -> l.getFirst().took()).orElse(Duration.ofDays(1));
+        if (first.compareTo(RunScript.searchLimit(scale).multipliedBy(2)) >= 0) {
+            return Optional.of("S20 claim: the first search took " + first.toMillis() + " ms, so it waited for the failing"
+                    + " merchant (limit " + RunScript.searchLimit(scale).toMillis() + " ms)");
+        }
+        for (RunEvidence.MerchantView v : e.views()) {
+            CircuitBreaker.State want = v.merchant().equals(SHOP_B) ? CircuitBreaker.State.OPEN
+                    : CircuitBreaker.State.CLOSED;
+            if (!v.breaker().equals(Optional.of(want))) {
+                return Optional.of("S20 claim: the breaker of " + v.merchant().value() + " is "
+                        + v.breaker().map(Enum::name).orElse("unread") + ", not " + want);
+            }
+        }
+        RunEvidence.MerchantView b = e.views().stream().filter(v -> v.merchant().equals(SHOP_B)).findFirst().orElseThrow();
+        if (b.proxyLog().stream().anyMatch(l -> l.path().contains("/checkout-sessions"))) {
+            return Optional.of("S20 claim: a checkout call reached the failing merchant");
+        }
+        return Optional.empty();
+    };
+
+    /**
+     * A-S20 (S20, 13.2): merchant B is failing and A and C are not. B's catalog hangs on its first call (so the search
+     * must return at the per-merchant limit, not after B's attempts) and answers 503 after that (so B's breaker opens). The
+     * script searches three times, so the failures that open the breaker are certain, then buys from A. The row's claim:
+     * the first search came back inside twice the limit, B's breaker is OPEN and A's and C's are CLOSED, and nothing was
+     * sent to B but catalog reads.
+     */
+    public static final Scenario A_S20 = new Scenario("A-S20", "agent, scripted: one of three merchants fails",
+            "at merchant B: delay on the first POST " + CATALOG_ALL + " (a hang), then fail_before_forward {status 503} on"
+                    + " every POST " + CATALOG_ALL,
+            Set.of(IntentState.COMPLETED), List.of("I1", "I11"), (t, run) -> RuleSet.empty(),
+            AutoApprover.Policy.APPROVE_ALL, Scenario.Driver.AGENT, SHOP, List.of(), PAY_OK,
+            Scenario.MerchantEvent.NONE, Scenario.FaultWindow.NONE,
+            Optional.of(AgentSpec.of("Buy me one blue mug.", "a-s20-one-merchant-down.json", List.of(), AWAITING, 1, 1,
+                    false)),
+            new Scenario.Multi(3, 1, java.util.Map.of(1, (t, run) -> rules(run,
+                    new Rule("hang-first-catalog", Match.of("POST", CATALOG_ALL).withNth(1),
+                            new Action.Delay(t.completeTimeout().toMillis())),
+                    new Rule("catalog-503", Match.of("POST", CATALOG_ALL),
+                            Action.FailBeforeForward.status(503)))), A_S20_CLAIM));
+
     /**
      * The rows live mode runs (m5-plan section 10, C18): S10 and S12. The other agent rows exist to drive the runtime
      * down a path a script forces (a second proposal, an unlisted merchant, a budget breach), which a live model need
@@ -265,7 +383,7 @@ public final class Scenarios {
     /** Every row the harness can run: the catalogue rows in catalogue order, then the agent rows. */
     public static List<Scenario> all() {
         return List.of(S0, S1, S2, S3, S4, S5A, S5B, S6, S7, S8, S9, S11, S13, S14, S28,
-                A_S0, A_S2, A_S4, A_S10, A_S11, A_S12, A_B);
+                A_S0, A_S2, A_S4, A_S10, A_S11, A_S12, A_B, A_S20, S21, A_S22);
     }
 
     /**

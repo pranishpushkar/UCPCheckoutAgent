@@ -165,13 +165,15 @@ public final class Evaluation {
         }
         byte[] key = hmacKey.clone();
         int laneCount = Math.min(config.lanes(), tasks.size());
+        // A lane holds as many merchants as the widest row it may run (1 for every row before M6a).
+        int merchantsPerLane = scenarios.stream().mapToInt(sc -> sc.multi().merchants()).max().orElse(1);
         Path work = Files.createTempDirectory("ucplab-eval-");
         Queue<RunResult> results = new ConcurrentLinkedQueue<>();
         try {
             List<Lane> lanes = new ArrayList<>();
             try {
                 for (int i = 0; i < laneCount; i++) {
-                    lanes.add(Lane.start(i, key, work));
+                    lanes.add(Lane.start(i, key, work, merchantsPerLane));
                 }
                 CheckContext checks = CheckContext.of(config.timeScale(), key, Scenarios.SHOP, RunScript.POLL);
                 Semaphore childSlots = new Semaphore(ChildProcess.MAX_CHILDREN);

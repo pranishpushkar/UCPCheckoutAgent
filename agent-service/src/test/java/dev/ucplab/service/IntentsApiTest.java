@@ -263,8 +263,9 @@ class IntentsApiTest {
             lines.add(Map.of("item_id", l.itemId(), "quantity", (long) l.quantity(),
                     "unit_price_minor", l.unitPriceMinor()));
         }
-        Map<String, Object> expected = Map.of("currency", latest.snapshot().currency(),
-                "total_minor", latest.snapshot().totalMinor(), "lines", lines);
+        // m6a C9: the card names the merchant of the stored snapshot (9.3 L4), here and in the intent's quote.
+        Map<String, Object> expected = Map.of("merchant_id", latest.snapshot().merchantId().value(),
+                "currency", latest.snapshot().currency(), "total_minor", latest.snapshot().totalMinor(), "lines", lines);
         assertThat(intent).containsEntry("id", id.value()).containsEntry("merchant_id", "merchant-a")
                 .containsEntry("state", "AWAITING_APPROVAL").containsEntry("quote", expected)
                 .containsEntry("approval", Map.of("status", "PENDING",

@@ -3,6 +3,8 @@ package dev.ucplab.service.config;
 import dev.ucplab.core.agent.ModelClient;
 import dev.ucplab.core.agent.ModelClientSettings;
 import dev.ucplab.core.id.IdGenerator;
+import dev.ucplab.core.merchant.CatalogGateway;
+import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.orchestrator.DefaultOrchestrator;
 import dev.ucplab.persistence.SqlIntentRepository;
 import dev.ucplab.persistence.SqlRunRepository;
@@ -10,6 +12,7 @@ import dev.ucplab.runtime.AgentBudget;
 import dev.ucplab.runtime.AgentRuntime;
 import dev.ucplab.runtime.ModelClients;
 import dev.ucplab.runtime.ToolPorts;
+import dev.ucplab.service.config.StackConfiguration.ConfiguredGateways;
 import dev.ucplab.service.run.DemoModel;
 import dev.ucplab.service.run.RunSupervisor;
 import dev.ucplab.service.run.RunSupervisorConfig;
@@ -18,10 +21,12 @@ import dev.ucplab.ucp.CircuitBreakers;
 import dev.ucplab.ucp.JdkHttpTransport;
 import dev.ucplab.ucp.Sleeper;
 import dev.ucplab.ucp.UcpConfig;
-import dev.ucplab.ucp.UcpHttpGateway;
+import dev.ucplab.ucp.registry.ConfiguredMerchantRegistry;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.random.RandomGenerator;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
@@ -58,23 +63,39 @@ public class RunConfiguration {
         };
     }
 
+    /** One catalog client per configured merchant, over the same gateway and the one {@link CircuitBreakers} (8.3, 19). */
     @Bean
-    CatalogClient catalogClient(ServiceProperties properties, UcpHttpGateway merchantGateway, UcpConfig ucp,
-                                CircuitBreakers breakers, Clock clock, RandomGenerator random, IdGenerator ids) {
-        return new CatalogClient(merchantGateway, ucp, new JdkHttpTransport(ucp), breakers, clock, Sleeper.THREAD,
-                random, ids);
+    CatalogClients catalogClients(ConfiguredGateways gateways, UcpConfig ucp, CircuitBreakers breakers, Clock clock,
+                                  RandomGenerator random, IdGenerator ids) {
+        Map<MerchantId, CatalogClient> byId = new LinkedHashMap<>();
+        gateways.byId().forEach((id, gateway) -> byId.put(id, new CatalogClient(gateway, ucp, new JdkHttpTransport(ucp),
+                breakers, clock, Sleeper.THREAD, random, ids)));
+        return new CatalogClients(Map.copyOf(byId));
+    }
+
+    /** The first merchant's catalog client: M6's one client, which a test or a single-merchant caller can still ask for. */
+    @Bean
+    CatalogClient catalogClient(ServiceProperties properties, CatalogClients clients) {
+        return clients.byId().get(properties.merchant().id());
     }
 
     @Bean
-    AgentRuntime agentRuntime(ModelClient model, ServiceProperties properties, StaticMerchantRegistry registry,
-                              CatalogClient catalog, DefaultOrchestrator orchestrator, SqlRunRepository runs,
+    AgentRuntime agentRuntime(ModelClient model, ServiceProperties properties, ConfiguredMerchantRegistry registry,
+                              CatalogClients catalogs, DefaultOrchestrator orchestrator, SqlRunRepository runs,
                               Clock clock, RunSupervisorConfig supervisorConfig) {
         String name = switch (properties.agentModel()) {
             case SCRIPTED -> "scripted";
             case GEMINI -> "gemini";
         };
-        ToolPorts ports = new ToolPorts(registry, Map.of(ServiceProperties.MERCHANT, catalog), orchestrator);
+        ToolPorts ports = new ToolPorts(registry, new LinkedHashMap<MerchantId, CatalogGateway>(catalogs.byId()), orchestrator);
         return new AgentRuntime(model, name, ports, runs, AgentBudget.DEFAULT, supervisorConfig.askTimeout(), clock);
+    }
+
+    /** The catalog client of each configured merchant, SUSPENDED ones included (19). */
+    public record CatalogClients(Map<MerchantId, CatalogClient> byId) {
+        public CatalogClients {
+            byId = Map.copyOf(Objects.requireNonNull(byId, "byId"));
+        }
     }
 
     /** One config drives both the runtime's {@code ask_user} wait and the supervisor's orphan rule, so they agree. */
