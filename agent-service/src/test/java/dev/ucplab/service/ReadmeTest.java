@@ -21,7 +21,8 @@ class ReadmeTest {
 
     private static final Path ROOT = Path.of("..").toAbsolutePath().normalize();
     private static final List<String> REPORTS = List.of("docs/results/m4-scripted-report.md",
-            "docs/results/m5-scripted-report.md", "docs/results/m5-live-report.md");
+            "docs/results/m5-scripted-report.md", "docs/results/m5-live-report.md",
+            "docs/results/m6a-scripted-report.md");
 
     private static String read(String name) throws IOException {
         return Files.readString(ROOT.resolve(name));
@@ -66,7 +67,7 @@ class ReadmeTest {
                 .anyMatch(l -> l.equals("AGENT_MODEL=gemini docker compose up -d agent-service"));
     }
 
-    // Covers: 16 (the README links the three committed reports, and each resolves to a file that git tracks)
+    // Covers: 16 (the README links the committed reports, and each resolves to a file that git tracks)
     @Test
     void reportLinks_resolveToCommittedFiles() throws IOException, InterruptedException {
         String readme = read("README.md");

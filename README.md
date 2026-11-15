@@ -78,34 +78,40 @@ flowchart LR
       api["REST API and console<br/>session, CSRF, no-store"]
       sup["Run supervisor<br/>one active run per user"]
       rt["Agent runtime<br/>5 tools, budgets"]
-      orch["Orchestrator<br/>approvals, write-ahead attempts"]
+      reg["Merchant registry<br/>merchants.yaml, discovery check"]
+      orch["Orchestrator<br/>approvals, write-ahead attempts<br/>gateway of the intent's merchant"]
       rec["Recovery worker"]
       db[("SQLite<br/>volume ucplab-data")]
     end
-    proxy["Fault proxy :9101<br/>admin API"]
-    merchant["merchant-a :9001<br/>UCP checkout, /_lab"]
+    proxyA["fault-proxy-a :9101<br/>admin API"]
+    proxyB["fault-proxy-b :9102"]
+    proxyC["fault-proxy-c :9103"]
+    merchantA["merchant-a :9001<br/>UCP checkout, /_lab"]
+    merchantB["merchant-b :9002"]
+    merchantC["merchant-c :9003"]
   end
   gemini(["Gemini<br/>only if AGENT_MODEL=gemini"])
   keycloak["Keycloak, OIDC<br/>M6b"]
-  more["merchant-b and merchant-c<br/>M6a"]
   pg[("Postgres, several instances<br/>M7")]
 
   browser -->|HTTP, cookie and CSRF| api
   cli -->|HTTP, same API| api
   api --> sup --> rt
-  rt -->|propose only| orch
+  rt -->|propose only; search asks every merchant| orch
   api -->|approve| orch
   orch --> db
   rec --> orch
+  reg -.->|discovery| proxyA
   rt -.->|model calls| gemini
-  orch -->|UCP over HTTP| proxy --> merchant
-  api -->|lab controls, local only| proxy
-  api -->|orders, reset, price| merchant
+  orch -->|UCP over HTTP| proxyA --> merchantA
+  orch -->|UCP over HTTP| proxyB --> merchantB
+  orch -->|UCP over HTTP| proxyC --> merchantC
+  api -->|lab controls, local only| proxyA
+  api -->|orders, reset, price| merchantA
   keycloak -.-> api
-  more -.-> proxy
   pg -.-> orch
   classDef next stroke-dasharray: 5 5
-  class keycloak,more,pg,gemini next
+  class keycloak,pg,gemini next
 ```
 
 More, including the lost-response path, in [docs/architecture.md](docs/architecture.md).
@@ -119,18 +125,30 @@ carry the commit, the seed, the machine and the method.
 |---|---|---|---|---|
 | [M4, scripted](docs/results/m4-scripted-report.md) | orchestrator-direct, no model | 15 scenario rows x 200 | 0 | 2026-11-12 |
 | [M5, scripted](docs/results/m5-scripted-report.md) | orchestrator-direct and a scripted agent | 22 rows, 4,400 runs | 0 | 2026-11-13 |
+| [M6a, scripted](docs/results/m6a-scripted-report.md) | three merchants: orchestrator-direct and a scripted agent, with S20 (one merchant fails), S21 (two users, the last item) and S22 (a basket across two merchants) | 25 rows, 5,000 runs | 0 | 2026-11-15 |
 | [M5, live](docs/results/m5-live-report.md) | gemini-3.8-flash | S10 (prompt injection through product text) and S12 (ask first), 30 each | 0 | 2026-11-13 |
+
+The M6a report holds every M5 row again, and its numbers equal M5's (terminal states, expected outcomes, violations, model and
+tool calls); only the times differ, with one exception: S28's count of runs with a measured reconciliation is 199 here
+against 200 there. S28 ends ESCALATED with no violation in all 200 runs both times, and a rerun of S28 alone with the same
+seeds measured a reconciliation in 200 of 200, so the one run is not reproduced and its cause is not identified (the timing
+of a kill -9 is real). S21 is the race: in all 200 runs the merchant
+made exactly one order for the one Wool Cap in stock, and the winner varied.
 
 In the live run S12 asked first in 30 of 30 runs and the S10 injection never took effect (0 of 30). It cost about
 $0.37 for 60 runs, about $0.006 a run. With N runs and zero violations the 95% upper bound on the violation rate is about
 3/N, so 200 runs bound it below 1.5% per row, and 30 runs below 10%: these reports say how many runs there were, and
 not that nothing can go wrong.
 
-## What M6 is not
+## What M6a is not
 
 - **No real sign-in yet.** The console uses a local-only dev sign-in on real sessions and CSRF. OIDC with Keycloak
   arrives in M6b, with per-user lab sandboxes; until then lab rules are global to the one proxy.
-- **One merchant.** `merchant-a` only. Merchants b and c, and the registry, are M6a.
+- **Three lab merchants, no real one.** `merchant-a`, `-b` and `-c` are the lab's own merchant with three catalogs, each behind
+  its own fault proxy. A real store (Shopify) and the MCP transport are M6c. The registry is the file `merchants.yaml`, read
+  at start-up: there is no `merchant` table and no way to add a merchant while the service runs.
+- **No live S22 row yet.** Whether a real model splits a basket across two merchants unprompted has not been measured; the
+  scripted S22 row shows what the system does when it does.
 - **SQLite and one instance.** A single service instance on a named volume. Postgres and several instances are M7
   (including 21.3's rule that the policy counters move inside the insert's transaction).
 - **No real payments.** Mock tokens only (N1).
