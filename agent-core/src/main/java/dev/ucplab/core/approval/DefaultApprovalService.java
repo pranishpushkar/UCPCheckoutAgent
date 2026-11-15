@@ -176,11 +176,9 @@ public final class DefaultApprovalService implements ApprovalService {
         }
     }
 
-    /** The lease decide took is over at once: renewed to a time already past, only if this worker still owns it. */
+    /** The lease decide took is over at once: cleared, only if this worker still holds it (7.6, 9.2). */
     private void release(IntentId id) {
-        // The port has no release call (Appendix B). renewLease is conditional on the owner, so a lease that another worker
-        // took in the meantime is never touched, and a lease that ends before now is free for every claim, this worker's too.
-        intents.renewLease(id, workerId, Duration.ofNanos(-1));
+        intents.releaseLease(id, workerId);
     }
 
     /** The part of {@link #decide} that runs under the lease. */

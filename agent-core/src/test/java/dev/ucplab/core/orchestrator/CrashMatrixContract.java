@@ -157,11 +157,11 @@ abstract class CrashMatrixContract {
         }
     }
 
-    // Covers: NFR4 (the matrix has every row of the plan, in order)
+    // Covers: NFR4 (the matrix has every row of the plan, in order, then the rows added since: 21 is the lease release of 9.2)
     @Test
     void boundaries_haveEveryRowOfThePlan() {
         assertThat(Stream.of(Boundary.values()).map(b -> b.row).toList())
-                .containsExactlyElementsOf(java.util.stream.IntStream.rangeClosed(1, 20).boxed().toList());
+                .containsExactlyElementsOf(java.util.stream.IntStream.rangeClosed(1, 21).boxed().toList());
         assertThat(Stream.of(Boundary.values()).filter(b -> b.points.isEmpty()).map(b -> b.row))
                 .as("only the SQL-statement row has no in-memory point").containsExactly(20);
     }

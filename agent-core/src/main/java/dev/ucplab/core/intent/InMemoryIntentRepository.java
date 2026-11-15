@@ -23,7 +23,7 @@ import java.util.concurrent.locks.ReentrantLock;
  *
  * <p>Like the SQL {@code UPDATE}, {@link #update} writes only the mutable columns. The owner, merchant, dedupe key,
  * creation time and lease are never taken from the caller's copy; the lease changes only through
- * {@link #claimRecoverable} and {@link #renewLease}.
+ * {@link #claimRecoverable}, {@link #renewLease} and {@link #releaseLease}.
  */
 public final class InMemoryIntentRepository implements IntentRepository {
 
@@ -294,6 +294,23 @@ public final class InMemoryIntentRepository implements IntentRepository {
                 return false;
             }
             intents.put(id, stored.withLease(stored.leaseOwner(), Optional.of(clock.instant().plus(lease))));
+            return true;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
+    public boolean releaseLease(IntentId id, String owner) {
+        Objects.requireNonNull(id, "id");
+        Objects.requireNonNull(owner, "owner");
+        lock.lock();
+        try {
+            PurchaseIntent stored = intents.get(id);
+            if (stored == null || !stored.leaseOwner().equals(Optional.of(owner))) {
+                return false;
+            }
+            intents.put(id, stored.withLease(Optional.empty(), Optional.empty()));
             return true;
         } finally {
             lock.unlock();

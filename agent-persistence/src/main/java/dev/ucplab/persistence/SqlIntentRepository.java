@@ -418,6 +418,20 @@ public final class SqlIntentRepository implements IntentRepository {
         });
     }
 
+    @Override
+    public boolean releaseLease(IntentId id, String owner) {
+        Objects.requireNonNull(id, "id");
+        Objects.requireNonNull(owner, "owner");
+        return db.write(c -> {
+            try (PreparedStatement s = c.prepareStatement(
+                    "UPDATE purchase_intent SET lease_owner = NULL, lease_until = NULL WHERE id = ? AND lease_owner = ?")) {
+                s.setString(1, id.value());
+                s.setString(2, owner);
+                return s.executeUpdate() == 1;
+            }
+        });
+    }
+
     /** The fenced write of 7.6: id, lease owner and version in one WHERE; on no match, the reason (lease, then version). */
     private static void fencedUpdate(Connection c, PurchaseIntent i, long expectedVersion, String leaseOwner)
             throws SQLException {

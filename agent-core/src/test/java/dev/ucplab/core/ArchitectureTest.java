@@ -83,6 +83,7 @@ class ArchitectureTest {
             Map.entry("IntentRepository.claimRecoverable(String,Duration,int)", "RecoveryWorker (7.6)"),
             Map.entry("IntentRepository.claimRecoverable(String,Duration,int,Set)", "RecoveryWorker (7.6)"),
             Map.entry("IntentRepository.renewLease(IntentId,String,Duration)", "RecoveryWorker (7.6)"),
+            Map.entry("IntentRepository.releaseLease(IntentId,String)", "ApprovalService.decide (9.2)"),
             // ApprovalRepository: the approval service, the orchestrator, RecoveryWorker and the harness.
             Map.entry("ApprovalRepository.insert(ApprovalRecord)", "ApprovalService.open; the owner is the record's"),
             Map.entry("ApprovalRepository.findLatestForSystem(IntentId)", "the orchestrator, RecoveryWorker (7.6)"),

@@ -23,6 +23,17 @@ enum Script {
         }
     },
 
+    /** The owner decides after the propose's lease has run out, so decide takes the lease and releases it (9.2): COMPLETED. */
+    DECIDE_AFTER_LEASE_LAPSED(OwnerAction.APPROVE) {
+        @Override
+        void run(CrashHarness h, CrashHarness.Process p) {
+            h.propose(p);
+            h.clock.advance(h.config.lease().plusSeconds(1));
+            h.approve(p, true);
+            h.drive(p);
+        }
+    },
+
     /** The complete is committed by the merchant but its answer is lost: RECONCILING, then the read shows completed. */
     LOST_COMPLETE_COMMITTED(OwnerAction.APPROVE) {
         @Override

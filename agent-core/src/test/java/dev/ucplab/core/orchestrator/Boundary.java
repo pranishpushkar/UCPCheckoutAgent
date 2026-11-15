@@ -130,7 +130,13 @@ enum Boundary {
 
     /** Needs a statement failpoint inside the SQL adapter, which an in-memory store does not have: no points here. */
     R20_SQL_STATEMENT_FAILPOINT(20, "SQL: statement failpoint inside recordAttempt and resolveAttempt", "7.3 steps 3 and 5",
-            Script.HAPPY);
+            Script.HAPPY),
+
+    // Added with the named lease release (H3 P7 fix 2): not a row of the m3 plan. The owner decides after the propose's lease has
+    // run out, so decide takes the lease itself, and gives it back.
+    R21_DECIDE_RELEASES_ITS_LEASE(21, "decide: releaseLease", "9.2, 7.6", Script.DECIDE_AFTER_LEASE_LAPSED,
+            Point.intent(CrashingIntentRepository.Op.RELEASE_LEASE, BEFORE, 1, COMPLETED, 1),
+            Point.intent(CrashingIntentRepository.Op.RELEASE_LEASE, AFTER, 1, COMPLETED, 1));
 
     enum Kind { INTENT, APPROVAL, GATEWAY }
 

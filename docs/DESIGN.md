@@ -506,7 +506,7 @@ Configuration file `policy.yaml`. `PolicyEngine.evaluateProposal(...)` and `eval
 - `approvalToken = base64url(HMAC_SHA256(approvalSecret, approvalId + ':' + intentId + ':' + snapshotHash))`.
 - Single use. TTL 10 minutes. Constant-time comparison.
 - `ApprovalService` is the only code that can move an intent to `APPROVED`.
-- `decide` releases any lease it took, on every path, including NotPending.
+- `decide` releases any lease it took, on every path, including NotPending, with `releaseLease` (Appendix B), which clears the lease only if this worker holds it.
 - The token goes to the approver channel only. It is never in a tool result or a prompt (I6, I8).
 
 **Snapshot and token details \[CONTRACT\].**
@@ -1423,6 +1423,8 @@ public interface IntentRepository {
   void resolveAttempts(IntentId intentId, List<AttemptId> ids, AttemptStatus status, Optional<Integer> httpStatus,
       Optional<String> responseJson, long expectedVersion, String leaseOwner);
   boolean renewLease(IntentId id, String owner, Duration lease); // false = lease lost (7.6)
+  /** Clears the lease if owner holds it, so another worker's claim succeeds at once; false = not the owner's, none, or unknown (7.6, 9.2). */
+  boolean releaseLease(IntentId id, String owner);
 }
 
 /** System read for RecoveryWorker (7.6): intents still in AWAITING_APPROVAL whose pending approval has expired. */

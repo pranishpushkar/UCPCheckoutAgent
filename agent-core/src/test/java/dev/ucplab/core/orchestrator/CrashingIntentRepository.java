@@ -22,7 +22,7 @@ final class CrashingIntentRepository implements IntentRepository {
 
     enum Op {
         FIND, FIND_FOR_SYSTEM, FIND_ACTIVE_BY_DEDUPE_KEY, INSERT, UPDATE, APPEND_EVENT, RECORD_ATTEMPT,
-        RESOLVE_ATTEMPT_UNFENCED, ATTEMPTS, RESOLVE_ATTEMPT, RESOLVE_ATTEMPTS, CLAIM, CLAIM_RECOVERABLE, RENEW_LEASE
+        RESOLVE_ATTEMPT_UNFENCED, ATTEMPTS, RESOLVE_ATTEMPT, RESOLVE_ATTEMPTS, CLAIM, CLAIM_RECOVERABLE, RENEW_LEASE, RELEASE_LEASE
     }
 
     private final IntentRepository delegate;
@@ -123,5 +123,10 @@ final class CrashingIntentRepository implements IntentRepository {
     @Override
     public boolean renewLease(IntentId id, String owner, Duration lease) {
         return call(Op.RENEW_LEASE, () -> delegate.renewLease(id, owner, lease));
+    }
+
+    @Override
+    public boolean releaseLease(IntentId id, String owner) {
+        return call(Op.RELEASE_LEASE, () -> delegate.releaseLease(id, owner));
     }
 }

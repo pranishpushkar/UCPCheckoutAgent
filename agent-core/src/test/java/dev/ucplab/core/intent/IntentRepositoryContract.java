@@ -573,6 +573,71 @@ public abstract class IntentRepositoryContract {
         assertThat(repo.renewLease(claimed.id(), W1, LEASE)).isFalse();
     }
 
+    // Covers: 7.6, 9.2 (a release by the owner frees the lease: another worker's claim succeeds at once, with no wait)
+    @Test
+    void releaseLease_byTheOwner_freesTheLeaseAtOnce() {
+        PurchaseIntent claimed = insertAndClaim("i1", ALICE, "d1", W1);
+        assertThat(repo.claim(claimed.id(), W2, LEASE)).as("held: another worker is refused").isEmpty();
+
+        assertThat(repo.releaseLease(claimed.id(), W1)).isTrue();
+
+        assertThat(repo.findForSystem(claimed.id()).orElseThrow().leaseOwner()).as("the lease is cleared").isEmpty();
+        Optional<PurchaseIntent> taken = repo.claim(claimed.id(), W2, LEASE);
+        assertThat(taken).as("an immediate claim by another worker").isPresent();
+        assertThat(taken.get().leaseOwner()).contains(W2);
+        assertThat(taken.get().leaseUntil()).contains(clock.instant().plus(LEASE));
+    }
+
+    // Covers: 7.6, 9.2 (a release by a worker that does not hold the lease changes nothing, whether it is held live,
+    // expired and taken over, or never held)
+    @Test
+    void releaseLease_byANonOwner_changesNothing() {
+        PurchaseIntent claimed = insertAndClaim("i1", ALICE, "d1", W1);
+        PurchaseIntent before = repo.findForSystem(claimed.id()).orElseThrow();
+
+        assertThat(repo.releaseLease(claimed.id(), W2)).isFalse();
+
+        assertThat(repo.findForSystem(claimed.id())).contains(before);
+        assertThat(repo.claim(claimed.id(), W2, LEASE)).as("still held by the first worker").isEmpty();
+        assertThat(repo.renewLease(claimed.id(), W1, LEASE)).isTrue();
+
+        // an expired lease that another worker took over: the first worker's late release does not undo the takeover
+        clock.advance(LEASE.plusSeconds(1));
+        assertThat(repo.claim(claimed.id(), W2, LEASE)).isPresent();
+        assertThat(repo.releaseLease(claimed.id(), W1)).isFalse();
+        assertThat(repo.findForSystem(claimed.id()).orElseThrow().leaseOwner()).contains(W2);
+
+        assertThat(repo.releaseLease(new IntentId("missing"), W1)).as("unknown intent").isFalse();
+    }
+
+    // Covers: 7.6, 9.2 (releasing an intent that has no lease is a no-op)
+    @Test
+    void releaseLease_withNoLease_isANoOp() {
+        repo.insert(proposed("i0", ALICE, "d0"));
+        PurchaseIntent before = repo.findForSystem(new IntentId("i0")).orElseThrow();
+
+        assertThat(repo.releaseLease(before.id(), W1)).isFalse();
+
+        assertThat(repo.findForSystem(before.id())).contains(before);
+
+        PurchaseIntent claimed = insertAndClaim("i1", ALICE, "d1", W1);
+        assertThat(repo.releaseLease(claimed.id(), W1)).isTrue();
+        assertThat(repo.releaseLease(claimed.id(), W1)).as("the second release finds no lease").isFalse();
+    }
+
+    // Covers: 7.6, 9.2 (a release leaves the intent's version and fields alone: it is not a fenced write of the intent)
+    @Test
+    void releaseLease_doesNotChangeTheIntentOrItsVersion() {
+        PurchaseIntent claimed = insertAndClaim("i1", ALICE, "d1", W1);
+
+        repo.releaseLease(claimed.id(), W1);
+
+        PurchaseIntent stored = repo.findForSystem(claimed.id()).orElseThrow();
+        assertThat(stored.version()).isEqualTo(claimed.version());
+        assertThat(stored.state()).isEqualTo(claimed.state());
+        assertThat(stored.updatedAt()).isEqualTo(claimed.updatedAt());
+    }
+
     // Covers: 7.6 (only QUOTING, APPROVED, COMPLETING and RECONCILING with no live lease are claimable)
     @Test
     void claimRecoverable_claimsOnlyRecoverableStatesWithoutLiveLease() {

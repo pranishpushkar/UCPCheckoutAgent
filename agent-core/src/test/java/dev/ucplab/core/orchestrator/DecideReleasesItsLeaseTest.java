@@ -95,6 +95,22 @@ class DecideReleasesItsLeaseTest {
         assertAnotherWorkerCanTakeTheIntent();
     }
 
+    // Covers: 9.2, 7.6, 7.3 (an adapter that stores a version other than the caller's arithmetic, 7.3: the release does not
+    // depend on the version, so the lease is still freed at once after a skewed write)
+    @Test
+    void approved_underASkewedWrite_stillReleasesTheLeaseAtOnce() {
+        PendingApproval p = pendingWithTheProposeLeaseGone();
+        SkewingIntentRepository skewing = new SkewingIntentRepository(lab.intents);
+        Lab.Worker skewed = lab.worker("worker-a", lab.merchant, lab.approvals, skewing);
+        skewing.skewNextWrite();
+
+        ApprovalDecision d = skewed.approvalService().decide(lab.alice(), id, p.token(), true);
+
+        assertThat(d).isInstanceOf(ApprovalDecision.Approved.class);
+        assertThat(lab.intents.findForSystem(id).orElseThrow().version()).as("the write was skewed").isGreaterThan(2);
+        assertAnotherWorkerCanTakeTheIntent();
+    }
+
     // Covers: 9.2, 7.6, 23.5 (a rejection: the same)
     @Test
     void rejected_releasesTheLease() {
