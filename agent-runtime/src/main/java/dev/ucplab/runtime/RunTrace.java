@@ -63,6 +63,33 @@ public final class RunTrace {
         lines.add(CanonicalJson.write(span));
     }
 
+    /**
+     * A tool that threw (the run ends {@code tool_error}): its index, name and duration, the code {@code error}, the
+     * exception's simple class name, and the first frame of our own code it passed through ({@code Class.method}), so a
+     * {@code tool_error} can be explained. Never the exception's message, which may carry merchant or user text (I8).
+     */
+    void toolCallFailed(int index, String tool, Duration took, RuntimeException failure) {
+        Map<String, Object> span = span("tool.call");
+        span.put("index", index);
+        span.put("name", tool);
+        span.put("duration_ms", took.toMillis());
+        span.put("code", "error");
+        span.put("exception", failure.getClass().getSimpleName());
+        span.put("at", ownFrame(failure));
+        lines.add(CanonicalJson.write(span));
+    }
+
+    /** The first stack frame in {@code dev.ucplab}, as the class's simple name and the method, or "unknown". */
+    private static String ownFrame(Throwable failure) {
+        for (StackTraceElement frame : failure.getStackTrace()) {
+            String cls = frame.getClassName();
+            if (cls.startsWith("dev.ucplab.")) {
+                return cls.substring(cls.lastIndexOf('.') + 1) + "." + frame.getMethodName() + ":" + frame.getLineNumber();
+            }
+        }
+        return UNKNOWN_FAILURE;
+    }
+
     void run(String outcome, String detail, int modelCalls, int toolCalls, long inputTokens, long outputTokens,
              Duration took) {
         Map<String, Object> span = span("agent.run");

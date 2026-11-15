@@ -161,6 +161,13 @@ public final class DefaultOrchestrator implements Orchestrator {
     private final RandomGenerator jitter;
     private final ReentrantLock jitterLock = new ReentrantLock();
     /**
+     * The intents a step of this process is driving now (7.3, 7.6). Every thread here claims with the same worker id, and
+     * a lease held by that id counts as free to it, so the lease alone cannot keep a recovery pass from claiming an
+     * intent that {@link #propose} is still quoting on the request thread. A second step of an intent in this set is
+     * idle instead. A marker, not a lock: nothing waits on it, and nothing is held across a merchant call.
+     */
+    private final Set<IntentId> stepping = ConcurrentHashMap.newKeySet();
+    /**
      * Resends this process approved after a {@code get} showed ready_for_complete (7.5), by intent: the version the
      * intent has once the approving write is stored. Only the process that observed the status continues to the resend;
      * after a restart or a takeover the map is empty, so the new worker reads again first (7.6).
@@ -363,11 +370,24 @@ public final class DefaultOrchestrator implements Orchestrator {
     private record Move(PurchaseIntent next, Transition transition) {}
 
     private Step step(IntentId id) {
+        if (!stepping.add(id)) {
+            return idle(current(id));
+        }
+        try {
+            return stepClaimed(id);
+        } finally {
+            stepping.remove(id);
+        }
+    }
+
+    private PurchaseIntent current(IntentId id) {
+        return intents.findForSystem(id).orElseThrow(() -> new IntentNotFoundException("no such intent: " + id));
+    }
+
+    private Step stepClaimed(IntentId id) {
         Optional<PurchaseIntent> claimed = intents.claim(id, workerId, config.lease());
         if (claimed.isEmpty()) {
-            PurchaseIntent current = intents.findForSystem(id)
-                    .orElseThrow(() -> new IntentNotFoundException("no such intent: " + id));
-            return idle(current);
+            return idle(current(id));
         }
         PurchaseIntent intent = claimed.get();
         List<MerchantAttempt> attempts = intents.attempts(id);

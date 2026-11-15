@@ -289,6 +289,30 @@ class AgentRuntimeTest {
         assertThat(runtime.run(Stubs.ALICE, RUN, "m", SILENT)).isEqualTo(new RunOutcome.Failed("tool_error"));
     }
 
+    // Covers: 11, I8 (a tool that throws leaves a tool.call line with its name, the exception's class and the code
+    // location that threw, so a tool_error can be explained; never the exception's message)
+    @Test
+    void run_toolError_leavesAToolCallLineNamingTheExceptionButNotItsMessage() {
+        ModelClient model = script("{\"call\":[{\"tool\":\"get_purchase_status\",\"args\":{\"intent_id\":\"i-1\"}}]},"
+                + "{\"text\":\"never\"}");
+        AgentRuntime runtime = new AgentRuntime(model, "scripted", Stubs.ports(catalog, new Stubs.RecordingOrchestrator() {
+            @Override
+            public IntentStatus status(dev.ucplab.core.identity.AuthContext auth, IntentId id) {
+                throw new IllegalStateException("SECRET tok_live_canary from the database");
+            }
+        }), runs, AgentBudget.DEFAULT, Duration.ofMinutes(5), clock);
+        RunTrace trace = new RunTrace(RUN);
+
+        assertThat(runtime.run(Stubs.ALICE, RUN, "m", SILENT, trace)).isEqualTo(new RunOutcome.Failed("tool_error"));
+
+        String toolLine = trace.lines().stream().filter(l -> l.contains("\"span\":\"tool.call\"")).findFirst()
+                .orElseThrow(() -> new AssertionError("no tool.call line: " + trace.lines()));
+        assertThat(toolLine).contains("\"name\":\"get_purchase_status\"").contains("\"code\":\"error\"")
+                .contains("\"exception\":\"IllegalStateException\"")
+                .contains("\"at\":\"AgentRuntimeTest$");
+        assertThat(trace.jsonl()).doesNotContain("SECRET").doesNotContain("tok_live_canary");
+    }
+
     // Covers: 6.2, I6 (a tool name outside the five gets an error result, is recorded as unknown, and the run goes on)
     @Test
     void run_unknownTool_isAnErrorResultAndTheRunGoesOn() {

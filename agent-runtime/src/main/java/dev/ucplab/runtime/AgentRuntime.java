@@ -224,6 +224,8 @@ public final class AgentRuntime {
                         outcome = tool.isPresent() ? tool.get().run(context, call.arguments())
                                 : ToolOutcome.error("unknown_tool");
                     } catch (RuntimeException e) {
+                        // 11: the line names the tool, the exception's class and where it was thrown; never its message.
+                        trace.toolCallFailed(meter.toolCalls(), name, Duration.between(called, clock.instant()), e);
                         return new RunOutcome.Failed("tool_error");
                     }
                     Duration took = Duration.between(called, clock.instant());
