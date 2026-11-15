@@ -4,6 +4,8 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -37,6 +39,7 @@ public final class SelfTest {
             catalogCapabilities();
             catalogSearch();
             catalogLookupAndProduct();
+            catalogFile();
         } finally {
             server.stop();
         }
@@ -355,6 +358,131 @@ public final class SelfTest {
                 && "unrecoverable".equals(m.get("severity"))), "the unknown product message is unrecoverable not_found");
         check(catalogCall("product", "{}").status == 400, "product without an id is rejected with 400");
         reset();
+    }
+
+    // ------------------------------------------------------------------ --catalog (M6a, added after the M2 checks)
+    // Covers: DESIGN 19 (the --catalog option, /_lab/reset restores the file's items) and A.2 (the default catalog is unchanged).
+
+    /** A merchant started the way an operator starts it: a child JVM running MerchantServer.main with these arguments. */
+    record Child(Process process, String output) {}
+
+    static Child runMerchant(String... args) throws Exception {
+        List<String> cmd = new ArrayList<>(List.of(System.getProperty("java.home") + "/bin/java", "-cp",
+                System.getProperty("java.class.path"), "dev.ucplab.merchant.MerchantServer"));
+        cmd.addAll(List.of(args));
+        Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
+        var out = new java.io.BufferedReader(new java.io.InputStreamReader(p.getInputStream()));
+        StringBuilder seen = new StringBuilder();
+        String line;
+        while ((line = out.readLine()) != null) {
+            seen.append(line).append('\n');
+            if (line.startsWith("UCP merchant listening on ")) break;
+        }
+        return new Child(p, seen.toString());
+    }
+
+    /** Starts the merchant expecting it to refuse: its exit code and output, or exit -1 (and "listening") if it kept serving. */
+    static Child runRefused(String... args) throws Exception {
+        List<String> cmd = new ArrayList<>(List.of(System.getProperty("java.home") + "/bin/java", "-cp",
+                System.getProperty("java.class.path"), "dev.ucplab.merchant.MerchantServer"));
+        cmd.addAll(List.of(args));
+        Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
+        boolean exited = p.waitFor(15, TimeUnit.SECONDS);
+        if (!exited) {
+            p.destroy();
+            return new Child(p, "UCP merchant listening (it did not refuse)\n");
+        }
+        return new Child(p, new String(p.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    static boolean refusedStartup(Child c) { return !c.output.contains("listening") && c.process.exitValue() != 0; }
+
+    static String childBase(Child c) {
+        return c.output.lines().filter(l -> l.startsWith("UCP merchant listening on ")).findFirst()
+                .map(l -> l.substring("UCP merchant listening on ".length()).trim()).orElse("http://127.0.0.1:1");
+    }
+
+    static void catalogFile() throws Exception {
+        section("--catalog file");
+        Path dir = Files.createTempDirectory("selftest-catalog");
+        Path good = dir.resolve("good.json");
+        Files.writeString(good, "{\"items\":[{\"id\":\"b_mug_01\",\"title\":\"Green Mug\",\"price_minor\":900,\"stock\":7},"
+                + "{\"id\":\"b_cap_02\",\"title\":\"Wool Cap\",\"price_minor\":1900,\"stock\":1}]}");
+        String savedBase = base;
+        Child child = runMerchant("0", "--catalog", good.toString());
+        try {
+            base = childBase(child);
+            Res all = catalogCall("search", "{}");
+            List<String> ids = products(all).stream().map(p -> String.valueOf(p.get("id"))).toList();
+            check(ids.equals(List.of("b_mug_01", "b_cap_02")), "--catalog <file> serves the file's items and no others");
+            check(stock("b_mug_01") == 7 && stock("b_cap_02") == 1 && stock("item_123") == -1, "the file's stock is served");
+            Res cap = catalogCall("search", "{\"query\":\"cap\"}");
+            check(products(cap).size() == 1 && ((Number) obj(variant(products(cap).get(0)).get("price")).get("amount")).longValue() == 1900,
+                    "the file's price is served");
+            lab("/_lab/stock", "{\"item_id\":\"b_mug_01\",\"stock\":0}");
+            lab("/_lab/price", "{\"item_id\":\"b_cap_02\",\"price\":5}");
+            lab("/_lab/reset", "{}");
+            check(stock("b_mug_01") == 7 && stock("b_cap_02") == 1 && stock("item_123") == -1,
+                    "/_lab/reset restores the file's items, not the built-in ones");
+        } finally {
+            base = savedBase;
+            child.process.destroy();
+        }
+
+        Path bad = dir.resolve("bad.json");
+        String secretText = "SECRET-TEXT-IN-THE-FILE";
+        Files.writeString(bad, "{\"items\":[{\"id\":\"" + secretText + " with spaces\",\"title\":\"x\",\"price_minor\":1,\"stock\":1}]}");
+        Child refused = runRefused("0", "--catalog", bad.toString());
+        check(refusedStartup(refused), "a bad catalog file stops startup");
+        check(!refused.output.contains(secretText) && !refused.output.contains(bad.toString()), "the startup message does not echo the file");
+        Child missing = runRefused("0", "--catalog", dir.resolve("absent.json").toString());
+        check(refusedStartup(missing), "a missing catalog file stops startup");
+        Child dangling = runRefused("0", "--catalog");
+        check(refusedStartup(dangling), "--catalog without a file stops startup");
+
+        String secret = "SECRET-TEXT-IN-THE-FILE";
+        String ok = "{\"id\":\"a\",\"title\":\"T\",\"price_minor\":1,\"stock\":0}";
+        Map<String, String> badFiles = new LinkedHashMap<>();
+        badFiles.put("not JSON", "{" + secret);
+        badFiles.put("not an object", "[\"" + secret + "\"]");
+        badFiles.put("no items key", "{\"things\":[" + ok + "]}");
+        badFiles.put("an extra top-level key", "{\"items\":[" + ok + "],\"" + secret + "\":1}");
+        badFiles.put("an empty list", "{\"items\":[]}");
+        badFiles.put("an unknown item key", "{\"items\":[{\"id\":\"a\",\"title\":\"T\",\"price_minor\":1,\"stock\":0,\"" + secret + "\":1}]}");
+        badFiles.put("a missing item key", "{\"items\":[{\"id\":\"a\",\"title\":\"T\",\"price_minor\":1}]}");
+        badFiles.put("a blank title", "{\"items\":[{\"id\":\"a\",\"title\":\"  \",\"price_minor\":1,\"stock\":0}]}");
+        badFiles.put("a price of 0", "{\"items\":[{\"id\":\"a\",\"title\":\"T\",\"price_minor\":0,\"stock\":0}]}");
+        badFiles.put("a fractional price", "{\"items\":[{\"id\":\"a\",\"title\":\"T\",\"price_minor\":1.5,\"stock\":0}]}");
+        badFiles.put("a negative stock", "{\"items\":[{\"id\":\"a\",\"title\":\"T\",\"price_minor\":1,\"stock\":-1}]}");
+        badFiles.put("a repeated id", "{\"items\":[" + ok + "," + ok + "]}");
+        badFiles.put("51 items", "{\"items\":[" + java.util.stream.IntStream.range(0, 51)
+                .mapToObj(i -> "{\"id\":\"i" + i + "\",\"title\":\"T\",\"price_minor\":1,\"stock\":0}")
+                .collect(java.util.stream.Collectors.joining(",")) + "]}");
+        for (var e : badFiles.entrySet()) {
+            Path f = dir.resolve("table.json");
+            Files.writeString(f, e.getValue());
+            String message = null;
+            try {
+                CatalogFile.load(f);
+            } catch (IllegalArgumentException ex) {
+                message = ex.getMessage();
+            }
+            check(message != null && !message.contains(secret) && !message.contains(f.toString()),
+                    "the loader refuses " + e.getKey() + ", with a message that does not echo the file");
+        }
+        check(CatalogFile.load(good).size() == 2, "the loader accepts a well-formed file");
+
+        List<Catalog.Item> builtIn = List.of(new Catalog.Item("item_123", "Red T-Shirt", 2500, 100),
+                new Catalog.Item("item_456", "Blue Mug", 1200, 50), new Catalog.Item("item_789", "Limited Sneakers", 12000, 3));
+        check(new Catalog().all().equals(builtIn), "new Catalog() is the built-in list, item by item (DESIGN A.2)");
+        Child plain = runMerchant("0");
+        try {
+            base = childBase(plain);
+            check(products(catalogCall("search", "{}")).size() == 3 && stock("item_789") == 3, "no --catalog serves the built-in catalog");
+        } finally {
+            base = savedBase;
+            plain.process.destroy();
+        }
     }
 
     static boolean hasMessage(Res r, String code) {

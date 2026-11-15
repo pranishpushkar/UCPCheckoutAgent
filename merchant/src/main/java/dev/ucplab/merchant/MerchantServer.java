@@ -180,9 +180,26 @@ final class MerchantServer {
 
     // ------------------------------------------------------------------ entry point
 
+    static final String USAGE = "usage: MerchantServer [port [--catalog <file.json>]]";
+
+    /** {@code [port [--catalog <file>]]}. No file means the built-in catalog. A refusal never echoes an argument or the file. */
+    static Catalog catalogFor(String[] args) {
+        if (args.length <= 1) return new Catalog();
+        if (args.length != 3 || !args[1].equals("--catalog")) throw new IllegalArgumentException(USAGE);
+        return new Catalog(CatalogFile.load(java.nio.file.Path.of(args[2])));
+    }
+
     public static void main(String[] args) throws Exception {
+        Catalog catalog;
+        try {
+            catalog = catalogFor(args);
+        } catch (IllegalArgumentException e) {
+            System.err.println(e.getMessage());
+            System.exit(2);
+            return;
+        }
         int port = args.length > 0 ? Integer.parseInt(args[0]) : 8080;
-        MerchantServer s = new MerchantServer(new MerchantCore(new Catalog(), new Payments(0)), port);
+        MerchantServer s = new MerchantServer(new MerchantCore(catalog, new Payments(0)), port);
         s.start();
         System.out.println("UCP merchant listening on http://127.0.0.1:" + s.port());
         System.out.println("Discovery: http://127.0.0.1:" + s.port() + "/.well-known/ucp");

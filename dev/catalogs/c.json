@@ -1,0 +1,5 @@
+{"items":[
+  {"id":"c_mug_01","title":"Blue Mug","price_minor":1350,"stock":25},
+  {"id":"c_bag_02","title":"Canvas Tote Bag","price_minor":1800,"stock":30},
+  {"id":"c_shoe_03","title":"Trail Sneakers","price_minor":9500,"stock":5}
+]}

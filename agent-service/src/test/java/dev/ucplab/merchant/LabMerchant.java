@@ -31,6 +31,14 @@ public final class LabMerchant implements AutoCloseable {
         return new LabMerchant(server);
     }
 
+    /** A fresh merchant serving the items of a {@code --catalog} file (M6a), so a lane's merchants can differ. */
+    public static LabMerchant start(java.nio.file.Path catalogFile) throws IOException {
+        MerchantServer server = new MerchantServer(
+                new MerchantCore(new Catalog(CatalogFile.load(catalogFile)), new Payments(0)), 0);
+        server.start();
+        return new LabMerchant(server);
+    }
+
     public URI baseUrl() {
         return URI.create("http://127.0.0.1:" + server.port());
     }

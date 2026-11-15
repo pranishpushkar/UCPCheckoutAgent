@@ -1,0 +1,5 @@
+{"items":[
+  {"id":"b_mug_01","title":"Blue Mug","price_minor":1100,"stock":40},
+  {"id":"b_tee_02","title":"Green T-Shirt","price_minor":2300,"stock":60},
+  {"id":"b_cap_03","title":"Wool Cap","price_minor":1900,"stock":1}
+]}
