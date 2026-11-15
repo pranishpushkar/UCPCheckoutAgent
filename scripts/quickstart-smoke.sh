@@ -52,14 +52,17 @@ echo "ok: not found for bob"
 # An intent awaiting approval, not yet decided. $2 is "mug" (the scripted model's first hit is merchant-a's Blue Mug) or
 # "cap" (only merchant-b's catalog, dev/catalogs/b.json, has a Wool Cap).
 propose() {
-  local user=$1 what=$2 run intent
+  local user=$1 what=$2 run out intent
   if [ "$what" = mug ]; then
     run=$(cli --user "$user" run hi | awk '/^run /{print $2}')
-    intent=$(cli --user "$user" answer "$run" "a blue mug please" | intent_of)
+    out=$(cli --user "$user" answer "$run" "a blue mug please")
   else
-    intent=$(cli --user "$user" run "wool cap" | intent_of)
+    out=$(cli --user "$user" run "wool cap")
   fi
-  [ -n "$intent" ] || fail "the run for '$what' proposed no purchase"
+  intent=$(echo "$out" | intent_of)
+  # The CLI's own lines say how the run ended (its status and reason); the agent's trace in the stack's logs says which
+  # tool failed and why.
+  [ -n "$intent" ] || fail "the run for '$what' proposed no purchase; the CLI said: $out"
   echo "$intent"
 }
 
