@@ -167,8 +167,11 @@ class LabApiTest {
         List<String> sent = new CopyOnWriteArrayList<>();
         stub = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
         stub.createContext("/", ex -> {
-            sent.add(ex.getRequestMethod() + " " + ex.getRequestURI().getPath() + " "
-                    + new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            // The registry's startup discovery (m6a C6) reads the profile here too; only the proxy's admin calls matter.
+            if (ex.getRequestURI().getPath().startsWith("/_proxy/")) {
+                sent.add(ex.getRequestMethod() + " " + ex.getRequestURI().getPath() + " "
+                        + new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            }
             ex.sendResponseHeaders(204, -1);
             ex.close();
         });

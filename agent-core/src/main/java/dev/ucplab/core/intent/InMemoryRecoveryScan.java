@@ -2,13 +2,16 @@ package dev.ucplab.core.intent;
 
 import dev.ucplab.core.approval.ApprovalRepository;
 import dev.ucplab.core.approval.ApprovalStatus;
+import dev.ucplab.core.merchant.MerchantId;
 import java.time.Instant;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
-/** {@link RecoveryScan} over the in-memory repositories. */
-public final class InMemoryRecoveryScan implements RecoveryScan {
+/** {@link RecoveryScan} and {@link InFlightMerchants} over the in-memory repositories. */
+public final class InMemoryRecoveryScan implements RecoveryScan, InFlightMerchants {
 
     private final InMemoryIntentRepository intents;
     private final ApprovalRepository approvals;
@@ -35,6 +38,17 @@ public final class InMemoryRecoveryScan implements RecoveryScan {
                 .limit(limit)
                 .map(Due::id)
                 .toList();
+    }
+
+    @Override
+    public Set<MerchantId> merchantsInFlight() {
+        Set<MerchantId> out = new HashSet<>();
+        for (IntentState state : IntentState.values()) {
+            if (!state.isTerminal()) {
+                intents.inState(state).forEach(i -> out.add(i.merchantId()));
+            }
+        }
+        return Set.copyOf(out);
     }
 
     private record Due(IntentId id, Instant expiresAt) {

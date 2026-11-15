@@ -6,6 +6,8 @@ import dev.ucplab.core.crypto.HmacSha256;
 import dev.ucplab.core.id.IdGenerator;
 import dev.ucplab.core.id.UuidV7IdGenerator;
 import dev.ucplab.core.intent.IntentCursorCodec;
+import dev.ucplab.core.merchant.MerchantGateways;
+import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantInstruments;
 import dev.ucplab.core.merchant.PaymentInstrument;
 import dev.ucplab.core.orchestrator.DefaultOrchestrator;
@@ -40,6 +42,8 @@ import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.time.Clock;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -178,16 +182,43 @@ public class StackConfiguration {
         return new CircuitBreakers(ucp, clock);
     }
 
+    /**
+     * The instrument the agent pays each configured merchant with (19): the file's {@code payment_handler}, with the token
+     * its {@code token_ref} names, or the default instrument. The handler the merchant's gateway requires and the
+     * instrument's must be equal, or the stack does not build (8.5).
+     */
     @Bean
-    UcpHttpGateway merchantGateway(ServiceProperties properties, UcpConfig ucp, CircuitBreakers breakers, Clock clock,
-                                   RandomGenerator random, IdGenerator ids) {
-        return new UcpHttpGateway(properties.merchant(), ucp, new JdkHttpTransport(ucp), breakers, clock,
-                Sleeper.THREAD, random, ids);
+    MerchantInstrumentMap merchantInstruments(ServiceProperties properties, PaymentInstrument paymentInstrument,
+                                              Environment environment) {
+        Map<MerchantId, PaymentInstrument> byId = new LinkedHashMap<>();
+        for (MerchantSettings s : properties.merchants()) {
+            PaymentInstrument instrument = MerchantWiring.instrument(s, paymentInstrument, environment);
+            MerchantWiring.requireMatchingInstrument(s, instrument);
+            byId.put(s.id(), instrument);
+        }
+        return new MerchantInstrumentMap(Map.copyOf(byId));
     }
 
+    /**
+     * One gateway per configured merchant, SUSPENDED ones included (19: an in-flight intent at a merchant that is failing
+     * discovery still reconciles), each with its own endpoint hosts, handler and versions from the file, over the one
+     * {@link CircuitBreakers}.
+     */
     @Bean
-    StaticMerchantRegistry merchantRegistry(ServiceProperties properties, UcpHttpGateway merchantGateway) {
-        return new StaticMerchantRegistry(properties.merchant(), merchantGateway);
+    ConfiguredGateways merchantGateways(ServiceProperties properties, UcpConfig ucp, CircuitBreakers breakers,
+                                        Clock clock, RandomGenerator random, IdGenerator ids) {
+        Map<MerchantId, UcpHttpGateway> byId = new LinkedHashMap<>();
+        for (MerchantSettings s : properties.merchants()) {
+            byId.put(s.id(), new UcpHttpGateway(s.entry(s.fileStatus()), ucp, new JdkHttpTransport(ucp), breakers, clock,
+                    Sleeper.THREAD, random, ids, s.endpointHosts(), MerchantWiring.requiredHandler(s), s.ucpVersions()));
+        }
+        return new ConfiguredGateways(Map.copyOf(byId));
+    }
+
+    /** Status from discovery (19): the startup check asks every merchant at once, and a failing one starts SUSPENDED. */
+    @Bean
+    ConfiguredMerchantRegistry merchantRegistry(ServiceProperties properties, ConfiguredGateways gateways, Clock clock) {
+        return ConfiguredMerchantRegistry.start(properties.merchants(), gateways.byId()::get, clock);
     }
 
     @Bean
@@ -208,19 +239,33 @@ public class StackConfiguration {
 
     @Bean
     DefaultOrchestrator orchestrator(SqlIntentRepository intents, SqlApprovalRepository approvals,
-                                     DefaultApprovalService approvalService, UcpHttpGateway merchantGateway,
-                                     StaticMerchantRegistry merchantRegistry, Database db,
+                                     DefaultApprovalService approvalService, ConfiguredGateways merchantGateways,
+                                     ConfiguredMerchantRegistry merchantRegistry, Database db,
                                      ServiceProperties properties, OrchestratorConfig orchestratorConfig, Clock clock,
                                      IdGenerator ids, WorkerId workerId, RandomGenerator random,
-                                     PaymentInstrument paymentInstrument) {
+                                     MerchantInstrumentMap merchantInstruments) {
+        // DESIGN 19: a merchant dropped from the file while an intent at it is in flight could never reconcile.
+        MerchantWiring.requireInFlightMerchantsConfigured(new SqlRecoveryScan(db).merchantsInFlight(),
+                properties.merchants());
         RuleBasedPolicyEngine policy = new RuleBasedPolicyEngine(properties.policy(), merchantRegistry::find,
                 new SqlPolicyUsage(db), clock);
-        // 8.5: the gateway above requires the lab handler, so the instrument must be for it, or the stack does not build.
-        MerchantInstruments.requireMatchingHandler(properties.merchant().id(), UcpHttpGateway.PAYMENT_HANDLER,
-                paymentInstrument);
-        return new DefaultOrchestrator(intents, approvals, approvalService, merchantGateway, policy,
-                new RequotePolicy(properties.policy()), paymentInstrument,
+        return new DefaultOrchestrator(intents, approvals, approvalService, MerchantGateways.of(merchantGateways.byId()), policy,
+                new RequotePolicy(properties.policy()), MerchantInstruments.of(merchantInstruments.byId()),
                 orchestratorConfig, clock, ids, workerId.value(), random);
+    }
+
+    /** The instrument of each configured merchant (19, 8.5). */
+    public record MerchantInstrumentMap(Map<MerchantId, PaymentInstrument> byId) {
+        public MerchantInstrumentMap {
+            byId = Map.copyOf(Objects.requireNonNull(byId, "byId"));
+        }
+    }
+
+    /** The gateway of each configured merchant, SUSPENDED ones included (19). */
+    public record ConfiguredGateways(Map<MerchantId, UcpHttpGateway> byId) {
+        public ConfiguredGateways {
+            byId = Map.copyOf(Objects.requireNonNull(byId, "byId"));
+        }
     }
 
     /** The drivers {@code driveNow} and the recovery passes hand intents to; drained on shutdown. */

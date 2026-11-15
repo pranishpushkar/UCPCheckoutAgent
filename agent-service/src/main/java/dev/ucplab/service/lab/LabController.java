@@ -1,7 +1,7 @@
 package dev.ucplab.service.lab;
 
 import dev.ucplab.core.identity.AuthContext;
-import dev.ucplab.service.config.ServiceProperties;
+import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.service.web.ApiException;
 import dev.ucplab.service.web.ErrorCode;
 import java.util.LinkedHashMap;
@@ -41,14 +41,15 @@ public class LabController {
     Map<String, Object> putFaults(AuthContext auth, @RequestBody Map<String, Object> body) {
         try {
             java.util.List<String> ids;
+            MerchantId merchant = merchant(body.get("merchant_id"));
             if (body.get("preset") instanceof String name) {
                 LabControls.Preset preset = LabControls.Preset.parse(name)
                         .orElseThrow(() -> ApiException.of(ErrorCode.VALIDATION_FAILED, BAD_FAULTS));
-                ids = controls.preset(auth, preset);
+                ids = controls.preset(auth, merchant, preset);
             } else if (body.get("rules") instanceof Map<?, ?> rules) {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> ruleSet = (Map<String, Object>) rules;
-                ids = controls.replaceRules(ruleSet);
+                ids = controls.replaceRules(merchant, ruleSet);
             } else {
                 throw ApiException.of(ErrorCode.VALIDATION_FAILED, BAD_FAULTS);
             }
@@ -63,20 +64,36 @@ public class LabController {
     }
 
     @DeleteMapping("/api/lab/faults")
-    ResponseEntity<Void> deleteFaults(AuthContext auth) {
-        controls.clearRules();
+    ResponseEntity<Void> deleteFaults(AuthContext auth,
+                                      @RequestParam(name = "merchant_id", required = false) String merchantId) {
+        try {
+            controls.clearRules(merchant(merchantId));
+        } catch (LabControls.Refused e) {
+            throw ApiException.of(ErrorCode.VALIDATION_FAILED, e.getMessage());
+        }
         return ResponseEntity.noContent().build();
     }
 
     @GetMapping("/api/lab/orders")
     Map<String, Object> orders(AuthContext auth, @RequestParam(name = "merchant_id", required = false) String merchantId) {
-        if (!ServiceProperties.MERCHANT.value().equals(merchantId)) {
+        if (merchantId == null || !controls.controls(new MerchantId(merchantId))) {
             throw ApiException.of(ErrorCode.VALIDATION_FAILED, UNKNOWN_MERCHANT);
         }
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("merchant_id", merchantId);
-        out.put("orders", controls.orders());
+        out.put("orders", controls.orders(new MerchantId(merchantId)));
         return out;
+    }
+
+    /** The merchant a request names, or the default one (the first of the file) when it names none. */
+    private MerchantId merchant(Object value) {
+        if (value == null) {
+            return controls.defaultMerchant();
+        }
+        if (!(value instanceof String id) || id.isBlank() || !controls.controls(new MerchantId(id))) {
+            throw ApiException.of(ErrorCode.VALIDATION_FAILED, UNKNOWN_MERCHANT);
+        }
+        return new MerchantId(id);
     }
 
     @PostMapping("/api/lab/reset")

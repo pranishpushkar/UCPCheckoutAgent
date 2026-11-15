@@ -1,8 +1,11 @@
 package dev.ucplab.service.config;
 
+import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantInstruments;
 import dev.ucplab.core.merchant.PaymentInstrument;
 import dev.ucplab.ucp.UcpHttpGateway;
+import java.util.List;
+import java.util.Set;
 
 /**
  * What one merchant's settings mean when the stack is built (DESIGN 19, 8.5): the instrument the agent pays it with, the
@@ -41,5 +44,20 @@ final class MerchantWiring {
     /** 8.5: the gateway's required handler and the instrument's must be equal, or the stack does not build. */
     static void requireMatchingInstrument(MerchantSettings settings, PaymentInstrument instrument) {
         MerchantInstruments.requireMatchingHandler(settings.id(), requiredHandler(settings), instrument);
+    }
+
+    static final String IN_FLIGHT_MERCHANT_REMOVED =
+            "an intent in flight names a merchant that MERCHANTS_FILE does not list; restore the merchant or finish its intents";
+
+    /**
+     * DESIGN 19: every merchant that has an intent in flight must be configured, or startup refuses, because those intents
+     * could never reconcile. The message is fixed: it names neither the merchant nor the file.
+     */
+    static void requireInFlightMerchantsConfigured(Set<MerchantId> inFlight, List<MerchantSettings> configured) {
+        for (MerchantId id : inFlight) {
+            if (configured.stream().noneMatch(s -> s.id().equals(id))) {
+                throw new IllegalStateException(IN_FLIGHT_MERCHANT_REMOVED);
+            }
+        }
     }
 }

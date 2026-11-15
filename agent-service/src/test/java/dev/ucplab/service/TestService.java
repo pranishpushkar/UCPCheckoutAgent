@@ -35,11 +35,21 @@ final class TestService implements AutoCloseable {
     final FaultProxy proxy;
     final ConfigurableApplicationContext context;
     final Map<String, String> env;
+    /** Merchant B and its proxy, when started with {@link #startMerchants}; otherwise null. */
+    final LabMerchant merchantB;
+    final FaultProxy proxyB;
 
     private TestService(LabMerchant merchant, FaultProxy proxy, ConfigurableApplicationContext context,
                         Map<String, String> env) {
+        this(merchant, proxy, null, null, context, env);
+    }
+
+    private TestService(LabMerchant merchant, FaultProxy proxy, LabMerchant merchantB, FaultProxy proxyB,
+                        ConfigurableApplicationContext context, Map<String, String> env) {
         this.merchant = merchant;
         this.proxy = proxy;
+        this.merchantB = merchantB;
+        this.proxyB = proxyB;
         this.context = context;
         this.env = env;
     }
@@ -112,6 +122,66 @@ final class TestService implements AutoCloseable {
         }
     }
 
+    /**
+     * Two merchants (m6a C7): merchant-a on the built-in catalog and merchant-b on {@code dev/catalogs/b.json}, each in
+     * this JVM behind its own fault proxy, listed in a generated {@code merchants.yaml} ({@code MERCHANTS_FILE}).
+     *
+     * @param bStatus {@code active} or {@code suspended}, as the file says it
+     * @param withB false lists merchant-a only (a merchant dropped from the file)
+     */
+    static TestService startMerchants(Path dir, Map<String, String> extra, Optional<Clock> clock, String bStatus,
+                                      boolean withB) throws IOException {
+        LabMerchant a = LabMerchant.start();
+        LabMerchant b = LabMerchant.start(Path.of("..", "dev", "catalogs", "b.json"));
+        byte[] hmac = new byte[32];
+        new SecureRandom().nextBytes(hmac);
+        return startOn(dir, extra, clock, bStatus, withB, a, b, FaultProxy.start(a.baseUrl(), 0, hmac),
+                FaultProxy.start(b.baseUrl(), 0, hmac));
+    }
+
+    /**
+     * A restart of the service against the merchants and proxies of {@code previous}, which keep running: their sessions
+     * and orders survive, as a real merchant's do when the agent restarts. Closes only the previous service's context.
+     */
+    static TestService restartMerchants(TestService previous, Path dir, Map<String, String> extra, Optional<Clock> clock,
+                                        String bStatus, boolean withB) throws IOException {
+        previous.context.close();
+        return startOn(dir, extra, clock, bStatus, withB, previous.merchant, previous.merchantB, previous.proxy,
+                previous.proxyB);
+    }
+
+    private static TestService startOn(Path dir, Map<String, String> extra, Optional<Clock> clock, String bStatus,
+                                       boolean withB, LabMerchant a, LabMerchant b, FaultProxy proxyA, FaultProxy proxyB)
+            throws IOException {
+        try {
+            StringBuilder yaml = new StringBuilder("merchants:\n")
+                    .append("  - id: merchant-a\n    name: Merchant A\n    url: ").append(proxyA.baseUrl())
+                    .append("\n    lab_url: ").append(a.baseUrl()).append("\n");
+            if (withB) {
+                yaml.append("  - id: merchant-b\n    name: Merchant B\n    status: ").append(bStatus)
+                        .append("\n    url: ").append(proxyB.baseUrl()).append("\n    lab_url: ").append(b.baseUrl())
+                        .append("\n");
+            }
+            Path file = java.nio.file.Files.writeString(dir.resolve("merchants.yaml"), yaml);
+            Map<String, String> env = baseEnv(dir);
+            env.put("MERCHANTS_FILE", file.toString());
+            env.putAll(extra);
+            ApplicationContextInitializer<ConfigurableApplicationContext> overrides = context -> {
+                context.getBeanFactory().registerSingleton("testRecoveryConfig", NO_PASSES);
+                clock.ifPresent(c -> context.getBeanFactory().registerSingleton("testClock", c));
+            };
+            ConfigurableApplicationContext context = ServiceApplication.start(Environment.of(env), List.of(overrides),
+                    "--server.port=0", "--server.address=127.0.0.1");
+            return new TestService(a, proxyA, b, proxyB, context, env);
+        } catch (RuntimeException e) {
+            proxyA.close();
+            proxyB.close();
+            a.close();
+            b.close();
+            throw e;
+        }
+    }
+
     <T> T bean(Class<T> type) {
         return context.getBean(type);
     }
@@ -128,6 +198,10 @@ final class TestService implements AutoCloseable {
         } finally {
             proxy.close();
             merchant.close();
+            if (proxyB != null) {
+                proxyB.close();
+                merchantB.close();
+            }
         }
     }
 }
