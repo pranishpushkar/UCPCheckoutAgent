@@ -41,8 +41,10 @@ import org.junit.jupiter.api.Test;
 class SearchFanOutHungHttpTest {
 
     private static final MerchantId HUNG = new MerchantId("shop-hung");
-    private static final String HOLD_CATALOG = "{\"seed\":0,\"rules\":[{\"id\":\"hold\",\"match\":{\"method\":\"POST\","
-            + "\"pathPattern\":\"/ucp/v1/catalog/search\"},\"action\":{\"type\":\"delay\",\"ms\":60000}}]}";
+    private static String hold(String path) {
+        return "{\"seed\":0,\"rules\":[{\"id\":\"hold\",\"match\":{\"method\":\"POST\",\"pathPattern\":\"" + path
+                + "\"},\"action\":{\"type\":\"delay\",\"ms\":60000}}]}";
+    }
 
     /**
      * The live platform threads by name, without the JDK's own virtual-thread machinery (its carrier pool and its timed-park
@@ -76,6 +78,17 @@ class SearchFanOutHungHttpTest {
     // merchant's items come first in a fixed order)
     @Test
     void aMerchantThatNeverAnswers_isCancelledOnce_countedOnce_andLeavesNoThread() throws Exception {
+        neverAnswers(false);
+    }
+
+    // Covers: 6.2, 8.2, 8.3, 19, decision 5 (the same for get_product: the held /catalog/product call is cancelled once and
+    // counted once, no thread is left, and the item comes from the merchant that answered; no unavailable field)
+    @Test
+    void getProduct_aMerchantThatNeverAnswers_isCancelledOnce_countedOnce_andLeavesNoThread() throws Exception {
+        neverAnswers(true);
+    }
+
+    private void neverAnswers(boolean product) throws Exception {
         UcpConfig base = UcpConfig.defaults("profile=\"https://runtime.ucplab.dev/agent\"").withRate(1000, 1000);
         UcpConfig ucp = new UcpConfig(base.ucpAgent(), base.connectTimeout(), base.requestTimeout(), base.completeTimeout(),
                 base.maxRetries(), base.backoffInitial(), base.backoffCap(), 2, base.breakerOpenFor(),
@@ -97,28 +110,32 @@ class SearchFanOutHungHttpTest {
                 catalogs.put(HUNG, hungCatalog);
                 ToolPorts ports = new ToolPorts(new InMemoryMerchantRegistry(List.of(healthy.shop, hungEntry)), catalogs,
                         healthy.ports().orchestrator());
-                SearchCatalogTool tool = new SearchCatalogTool(ports);
-                java.util.function.Supplier<ToolOutcome.Result> search = () -> (ToolOutcome.Result) tool.run(Stubs.CONTEXT,
-                        Map.of("query", "mug", "max_results", 5L));
+                java.util.function.Function<ToolPorts, ToolOutcome.Result> search = p -> product
+                        ? (ToolOutcome.Result) new GetProductTool(p).run(Stubs.CONTEXT, Map.of("item_id", "item_456"))
+                        : (ToolOutcome.Result) new SearchCatalogTool(p).run(Stubs.CONTEXT,
+                                Map.of("query", "mug", "max_results", 5L));
 
                 // Warm up with nothing held: the HTTP client's own threads exist before the baseline is taken.
-                ToolOutcome.Result warm = search.get();
+                ToolOutcome.Result warm = search.apply(ports);
                 assertThat(warm.json()).doesNotContain("unavailable");
                 install(hungProxy, "{\"seed\":0,\"rules\":[]}");
                 settle(200);
                 List<String> before = platformThreadNames();
-                install(hungProxy, HOLD_CATALOG);
+                install(hungProxy, hold(product ? "/ucp/v1/catalog/product" : "/ucp/v1/catalog/search"));
                 ToolPorts quick = ports.withPerMerchant(Duration.ofMillis(50));
-                SearchCatalogTool quickTool = new SearchCatalogTool(quick);
 
                 long started = System.nanoTime();
-                ToolOutcome.Result first = (ToolOutcome.Result) quickTool.run(Stubs.CONTEXT, Map.of("query", "mug", "max_results", 5L));
+                ToolOutcome.Result first = search.apply(quick);
                 long ms = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
 
                 assertThat(ms).as("returns at about the 50 ms limit").isBetween(45L, 1500L);
-                assertThat(first.json()).contains("\"unavailable\":[\"shop-hung\"]").contains("\"merchant_id\":\"shop-1\"")
-                        .doesNotContain("\"merchant_id\":\"shop-hung\"");
-                assertThat(first.json().indexOf("shop-1")).isLessThan(first.json().indexOf("shop-hung"));
+                assertThat(first.json()).contains("\"merchant_id\":\"shop-1\"").doesNotContain("\"merchant_id\":\"shop-hung\"");
+                if (product) {
+                    assertThat(first.json()).doesNotContain("unavailable");
+                } else {
+                    assertThat(first.json()).contains("\"unavailable\":[\"shop-hung\"]");
+                    assertThat(first.json().indexOf("shop-1")).isLessThan(first.json().indexOf("shop-hung"));
+                }
                 settle(500);
                 List<String> extra = new java.util.ArrayList<>(platformThreadNames());
                 before.forEach(extra::remove);
@@ -126,7 +143,7 @@ class SearchFanOutHungHttpTest {
                 assertThat(breakers.forMerchant(HUNG).state()).as("one cancelled call is one failure, not two")
                         .isEqualTo(CircuitBreaker.State.CLOSED);
 
-                quickTool.run(Stubs.CONTEXT, Map.of("query", "mug", "max_results", 5L));
+                search.apply(quick);
                 long deadline = System.nanoTime() + Duration.ofSeconds(3).toNanos();
                 while (breakers.forMerchant(HUNG).state() != CircuitBreaker.State.OPEN && System.nanoTime() < deadline) {
                     settle(20);

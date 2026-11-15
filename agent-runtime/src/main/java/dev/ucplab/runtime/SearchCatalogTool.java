@@ -3,7 +3,6 @@ package dev.ucplab.runtime;
 import dev.ucplab.core.agent.ToolSpec;
 import dev.ucplab.core.json.CanonicalJson;
 import dev.ucplab.core.merchant.CallOutcome;
-import dev.ucplab.core.merchant.CatalogGateway;
 import dev.ucplab.core.merchant.CatalogPage;
 import dev.ucplab.core.merchant.CatalogProduct;
 import dev.ucplab.core.merchant.CatalogSearch;
@@ -16,12 +15,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 /**
  * {@code search_catalog} (6.2): {@code query} (1 to 200 characters) and {@code max_results} (1 to 10). Searches each
@@ -100,55 +93,12 @@ final class SearchCatalogTool implements Tool {
         return ToolOutcome.ok(result);
     }
 
-    /**
-     * Asks every merchant at once, each on a virtual thread, and waits for all of them until one limit has passed (the
-     * deadline is shared, so the search takes at most {@code perMerchant}, never the sum). A merchant that is not done by
-     * then is cancelled with an interrupt, which ends its HTTP call (the transport turns it into one failed attempt, and
-     * the retry loop does not try again), and counts as failed, like one that answered with anything but a page. A catalog
-     * that throws (a bug: failures are outcomes) fails the tool, as before.
-     * The answer for each merchant is in {@code active}'s order, whatever order they finished in. Nothing here holds a
-     * lock; the pool is shut down without waiting, so a call that ignores the interrupt cannot hold the search.
-     */
+    /** The page of each merchant in {@code active}'s order; empty if it timed out, failed or answered with anything but a page. */
     private List<Optional<CatalogPage>> askAll(List<MerchantEntry> active, CatalogSearch request) {
-        ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
-        try {
-            List<Future<CallOutcome<CatalogPage>>> futures = new ArrayList<>();
-            for (MerchantEntry merchant : active) {
-                CatalogGateway catalog = ports.catalogs().get(merchant.id());
-                futures.add(catalog == null ? null : pool.submit(() -> catalog.search(request)));
-            }
-            long deadline = System.nanoTime() + ports.perMerchant().toNanos();
-            List<Optional<CatalogPage>> pages = new ArrayList<>();
-            for (Future<CallOutcome<CatalogPage>> future : futures) {
-                pages.add(future == null ? Optional.empty() : await(future, deadline));
-            }
-            return pages;
-        } finally {
-            pool.shutdownNow();
-        }
-    }
-
-    private static Optional<CatalogPage> await(Future<CallOutcome<CatalogPage>> future, long deadline) {
-        try {
-            CallOutcome<CatalogPage> outcome = future.get(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
-            return outcome instanceof CallOutcome.Ok<CatalogPage> ok ? Optional.of(ok.value()) : Optional.empty();
-        } catch (TimeoutException e) {
-            future.cancel(true);
-            return Optional.empty();
-        } catch (ExecutionException e) {
-            // A catalog reports failure as an outcome; an exception is a bug, and it fails the tool as it always did.
-            if (e.getCause() instanceof RuntimeException r) {
-                throw r;
-            }
-            if (e.getCause() instanceof Error err) {
-                throw err;
-            }
-            throw new IllegalStateException(e.getCause());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            future.cancel(true);
-            return Optional.empty();
-        }
+        return FanOut.ask(ports, active, c -> c.search(request)).stream()
+                .map(answer -> answer.flatMap(o -> o instanceof CallOutcome.Ok<CatalogPage> ok
+                        ? Optional.of(ok.value()) : Optional.<CatalogPage>empty()))
+                .toList();
     }
 
     /** One item from each merchant in turn, in registry order, each merchant's own order kept, up to {@code max}. */

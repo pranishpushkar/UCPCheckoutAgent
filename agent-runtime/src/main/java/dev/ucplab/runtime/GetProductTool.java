@@ -3,7 +3,6 @@ package dev.ucplab.runtime;
 import dev.ucplab.core.agent.ToolSpec;
 import dev.ucplab.core.json.CanonicalJson;
 import dev.ucplab.core.merchant.CallOutcome;
-import dev.ucplab.core.merchant.CatalogGateway;
 import dev.ucplab.core.merchant.CatalogProduct;
 import dev.ucplab.core.merchant.CatalogVariant;
 import dev.ucplab.core.merchant.MerchantEntry;
@@ -15,7 +14,8 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * {@code get_product} (6.2): {@code item_id}. Asks each active merchant's catalog for the item and returns
+ * {@code get_product} (6.2): {@code item_id}. Asks every active merchant's catalog at once, through the same limit as
+ * {@code search_catalog} ({@link FanOut}), and returns the item of the lowest registry index that has it:
  * {@code {merchant_id, item_id, title, description, price_minor, currency, in_stock}} for the variant with that id (the
  * featured variant when the id is a product's). {@code title} and {@code description} are wrapped; a product without a
  * description has an empty one. No merchant knows the id: {@code {"error":"not_found"}}; a merchant could not be
@@ -53,14 +53,16 @@ final class GetProductTool implements Tool {
         } catch (Args.Invalid e) {
             return ToolOutcome.invalid(e.getMessage());
         }
+        List<MerchantEntry> active = ports.merchants().active();
+        List<Optional<CallOutcome<CatalogProduct>>> answers = FanOut.ask(ports, active, c -> c.product(itemId));
         boolean unavailable = false;
-        for (MerchantEntry merchant : ports.merchants().active()) {
-            CatalogGateway catalog = ports.catalogs().get(merchant.id());
-            CallOutcome<CatalogProduct> outcome = catalog == null ? null : catalog.product(itemId);
+        // Registry order: the first merchant that has the item answers, whatever order they finished in (decision 5).
+        for (int i = 0; i < active.size(); i++) {
+            CallOutcome<CatalogProduct> outcome = answers.get(i).orElse(null);
             if (outcome instanceof CallOutcome.Ok<CatalogProduct> ok) {
                 Optional<CatalogVariant> variant = variant(ok.value(), itemId);
                 if (variant.isPresent()) {
-                    return ToolOutcome.ok(result(merchant, ok.value(), variant.get()));
+                    return ToolOutcome.ok(result(active.get(i), ok.value(), variant.get()));
                 }
             } else if (!(outcome instanceof CallOutcome.ProtocolError<CatalogProduct> e && e.code().equals("not_found"))) {
                 unavailable = true;
