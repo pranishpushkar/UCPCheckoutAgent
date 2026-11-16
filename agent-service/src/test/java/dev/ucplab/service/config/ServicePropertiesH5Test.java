@@ -34,6 +34,9 @@ class ServicePropertiesH5Test {
         return env;
     }
 
+    /** An agent profile the operator hosts (19, 26.2). */
+    static final String OUR_PROFILE = "https://agent.example/.well-known/ucp/agent.json";
+
     private Map<String, String> withStore(String profile, boolean buyerIp) throws IOException {
         Path file = Files.writeString(dir.resolve("merchants.yaml"), """
                 merchants:
@@ -49,6 +52,7 @@ class ServicePropertiesH5Test {
         Map<String, String> env = env(profile);
         env.put("MERCHANTS_FILE", file.toString());
         env.put("SHOPIFY_CLIENT", "client-1:" + CANARY);   // 26.4: client_id:client_secret
+        env.put("UCP_AGENT_PROFILE", OUR_PROFILE);   // 19: the default never reaches a real store
         return env;
     }
 
@@ -161,11 +165,11 @@ class ServicePropertiesH5Test {
         }
     }
 
-    // Covers: 26.2, 8.4, H5 C10 (the agent profile and its version are settings: by default the hosted profile at
-    // 2026-08-25; set, Shopify's 2026-04-08 sample at 2026-04-08)
+    // Covers: 26.2, 8.4, H5 C10 (the agent profile and its version are settings: by default, for the loopback lab, the
+    // default profile at 2026-08-25; set, Shopify's 2026-04-08 sample at 2026-04-08)
     @Test
-    void agentProfileAndVersion_defaultToTheHostedProfile_andCanBeSet() throws IOException {
-        ServiceProperties defaults = ServiceProperties.from(Environment.of(withStore("local", false)));
+    void agentProfileAndVersion_defaultForTheLab_andCanBeSet() throws IOException {
+        ServiceProperties defaults = ServiceProperties.from(Environment.of(env("local")));
         assertThat(defaults.ucpAgent()).isEqualTo("profile=\"https://ucplab.dev/agent\"");
         assertThat(defaults.ucpAgentVersion()).isEqualTo("2026-08-25");
 
@@ -198,5 +202,52 @@ class ServicePropertiesH5Test {
         Map<String, String> query = withStore("local", false);
         query.put("UCP_AGENT_PROFILE", "https://agent.example/profile.json?v=2026-04-08");
         assertThat(ServiceProperties.from(Environment.of(query)).ucpAgent()).contains("?v=2026-04-08");
+    }
+
+    // Covers: 19, 26.2, I12 (the default agent profile is not ours: startup refuses an MCP merchant, or a merchant off
+    // loopback, while UCP_AGENT_PROFILE is unset or set to the default; the reason is fixed)
+    @Test
+    void theDefaultAgentProfile_neverReachesARealStore() throws IOException {
+        Map<String, String> unset = withStore("local", false);
+        unset.remove("UCP_AGENT_PROFILE");
+        assertThatThrownBy(() -> ServiceProperties.from(Environment.of(unset)))
+                .hasMessage(ServiceProperties.AGENT_PROFILE_DEFAULT);
+
+        Map<String, String> asDefault = withStore("local", false);
+        asDefault.put("UCP_AGENT_PROFILE", "https://ucplab.dev/agent");
+        assertThatThrownBy(() -> ServiceProperties.from(Environment.of(asDefault)))
+                .hasMessage(ServiceProperties.AGENT_PROFILE_DEFAULT);
+
+        Map<String, String> restOffLoopback = env("local");
+        restOffLoopback.put("MERCHANTS_FILE", Files.writeString(dir.resolve("rest.yaml"), """
+                merchants:
+                  - id: shop
+                    name: Shop
+                    url: https://shop.example
+                    owned: true
+                """).toString());
+        assertThatThrownBy(() -> ServiceProperties.from(Environment.of(restOffLoopback)))
+                .hasMessage(ServiceProperties.AGENT_PROFILE_DEFAULT);
+        Map<String, String> mcpOnLoopback = env("local");
+        mcpOnLoopback.put("MERCHANTS_FILE", Files.writeString(dir.resolve("mcp-loopback.yaml"), """
+                merchants:
+                  - id: store
+                    name: Store
+                    url: http://127.0.0.1:8182
+                    transport: mcp
+                    completion: handoff
+                    shop_domain: example-dev.myshopify.com
+                    credential_ref: env:SHOPIFY_CLIENT
+                """).toString());
+        mcpOnLoopback.put("SHOPIFY_CLIENT", "client-1:secret-1");
+        assertThatThrownBy(() -> ServiceProperties.from(Environment.of(mcpOnLoopback)))
+                .hasMessage(ServiceProperties.AGENT_PROFILE_DEFAULT);
+    }
+
+    // Covers: 19, 26.2 (the default agent profile stays for the loopback lab merchants)
+    @Test
+    void theDefaultAgentProfile_servesTheLoopbackLab() {
+        ServiceProperties lab = ServiceProperties.from(Environment.of(env("local")));
+        assertThat(lab.ucpAgent()).isEqualTo("profile=\"https://ucplab.dev/agent\"");
     }
 }

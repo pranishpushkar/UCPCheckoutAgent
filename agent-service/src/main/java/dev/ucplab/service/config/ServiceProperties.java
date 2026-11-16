@@ -6,6 +6,7 @@ import dev.ucplab.core.config.AgentProfile;
 import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantStatus;
+import dev.ucplab.core.merchant.Transport;
 import dev.ucplab.core.policy.PolicyConfig;
 import dev.ucplab.ucp.UcpHttpGateway;
 import dev.ucplab.ucp.auth.ClientCredentials;
@@ -58,6 +59,8 @@ public final class ServiceProperties {
     static final String TOKEN_ENDPOINT_INVALID =
             "SHOPIFY_TOKEN_ENDPOINT must be an https URL with a host, and no user info or query";
     static final String AGENT_VERSION_UNSUPPORTED = "UCP_AGENT_VERSION is not a version the agent supports";
+    static final String AGENT_PROFILE_DEFAULT =
+            "UCP_AGENT_PROFILE must be set, and not to its default, for an MCP merchant or one off loopback";
     static final String AGENT_PROFILE_INVALID = "UCP_AGENT_PROFILE must be an https URL with a host, and no user info";
     /** The agent profile's URL (26.2, 8.4) unless UCP_AGENT_PROFILE says otherwise. */
     static final URI DEFAULT_AGENT_PROFILE = URI.create("https://ucplab.dev/agent");
@@ -238,6 +241,12 @@ public final class ServiceProperties {
         }
         URI tokenEndpoint = tokenEndpoint(env);
         URI agentProfile = agentProfile(env);
+        // 19, 26.2: the default's host is not ours, so it serves the loopback lab merchants only.
+        boolean realStore = merchants.stream()
+                .anyMatch(m -> m.transport() == Transport.MCP || !MerchantEntry.isLoopback(m.url()));
+        if (realStore && agentProfile.equals(DEFAULT_AGENT_PROFILE)) {
+            throw new IllegalStateException(AGENT_PROFILE_DEFAULT);
+        }
         String agentVersion = env.get("UCP_AGENT_VERSION").orElse(DEFAULT_AGENT_VERSION);
         if (!UcpHttpGateway.SUPPORTED_VERSIONS.contains(agentVersion)) {
             throw new IllegalStateException(AGENT_VERSION_UNSUPPORTED);

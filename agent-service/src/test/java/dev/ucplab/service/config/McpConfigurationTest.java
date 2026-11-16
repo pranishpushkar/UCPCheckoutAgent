@@ -38,6 +38,8 @@ import org.junit.jupiter.api.io.TempDir;
  */
 class McpConfigurationTest {
 
+    /** A 2026-08-25 agent profile the operator hosts (26.2). */
+    static final String OUR_PROFILE = "https://agent.example/.well-known/ucp/agent.json";
     static final String SAMPLE_PROFILE = "https://shopify.dev/ucp/agent-profiles/2026-04-08/valid-with-capabilities.json";
     static final SessionId RECORDED = new SessionId("gid://shopify/Checkout/fakeCheckoutToken0000001?key=<redacted>");
     static final CreateCheckout ONE_BOARD = new CreateCheckout(
@@ -67,6 +69,7 @@ class McpConfigurationTest {
         env.put("DATABASE_URL", "jdbc:sqlite:" + dir.resolve("x.db"));
         env.put("MERCHANTS_FILE", file.toString());
         env.put("SHOPIFY_CLIENT", "client-1:secret-1");
+        env.put("UCP_AGENT_PROFILE", OUR_PROFILE);   // 19: the default never reaches a real store
         return env;
     }
 
@@ -121,16 +124,16 @@ class McpConfigurationTest {
                 .get("ucp-agent")).isEqualTo(Map.of("profile", SAMPLE_PROFILE)));
     }
 
-    // Covers: 26.2, 8.1, H5 C10 (with the defaults, the hosted profile at 2026-08-25, the store's 2026-04-08 answer is
-    // not read as if it were at 2026-08-25: the create is Uncertain, and its retries (8.2) are the same bytes)
+    // Covers: 26.2, 8.1, H5 C10 (with the default version, 2026-08-25, and a profile of ours at it, the store's
+    // 2026-04-08 answer is not read as if it were at 2026-08-25: the create is Uncertain, its retries (8.2) the same)
     @Test
-    void theDefaults_doNotReadA20260408Answer() throws IOException {
+    void theDefaultVersion_doesNotReadA20260408Answer() throws IOException {
         store.answer("create_checkout", "create_checkout.json");
 
         assertThat(gateway(env("2026-08-25")).create(ONE_BOARD, key(MutatingOp.CREATE)))
                 .isInstanceOf(CallOutcome.Uncertain.class);
         assertThat(store.toolCalls()).isNotEmpty().allSatisfy(s -> assertThat(((Map<?, ?>) s.arguments().get("meta"))
-                .get("ucp-agent")).isEqualTo(Map.of("profile", "https://ucplab.dev/agent")));
+                .get("ucp-agent")).isEqualTo(Map.of("profile", OUR_PROFILE)));
         assertThat(store.toolCalls()).extracting(McpStore.Sent::body).containsOnly(store.toolCalls().getFirst().body());
     }
 }
