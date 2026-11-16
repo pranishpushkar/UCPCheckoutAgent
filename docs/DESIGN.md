@@ -123,7 +123,7 @@ These are the properties the evaluation checks. Each must be enforced in code an
 | I9 | Tenant isolation: a user can read, approve or act on only their own intents, approvals and runs |
 | I10 | Only the intent's owner, with a sign-in no older than maxApprovalAuthAge, can approve it, and the approval records decided\_by |
 | I11 | An intent belongs to exactly one merchant for its whole life; merchant\_id never changes |
-| I12 | A create, update, complete or cancel is sent only to a merchant whose registry entry says `owned: true`, and for an MCP merchant only to the endpoint whose host equals the entry's `shop_domain`. A `continue_url` is accepted only if it is `https` on that host. The orchestrator checks this before the first write of the step. `owned` defaults to `true` only for a merchant on a loopback host (the lab merchants); any other entry without `owned: true` refuses startup (19, 26.5) |
+| I12 | A create, update, complete or cancel is sent only to a merchant whose registry entry says `owned: true`, and for an MCP merchant only to the endpoint whose host equals the entry's `shop_domain`. A `continue_url` is accepted only if it is `https` on that host. The check is split, and neither part does I/O: the orchestrator checks the registry entry (`owned: true`, and a `shop_domain` for an MCP merchant) at propose before it calls the PolicyEngine, reporting a failure through `policy_denied` with rule id `I12` (7.2), and at every later step checks the entry, its fingerprint against the one the intent stored (10), and every `continue_url`, before the attempt row is written; the gateway checks its endpoint's host against `shop_domain` at discovery (8.5) and again before every mutating call. `owned` defaults to `true` only for a merchant on a loopback host (the lab merchants); any other entry without `owned: true` refuses startup (19, 26.5) |
 
 ## 5. Architecture
 
@@ -275,7 +275,7 @@ Any event that is not in this table for the current state is a programming error
 | From | Event | Guard | To | Side effect |
 | --- | --- | --- | --- | --- |
 | PROPOSED | policy\_ok | PolicyEngine allows | QUOTING | none |
-| PROPOSED | policy\_denied | none | REJECTED | event with the rule id |
+| PROPOSED | policy\_denied | none | REJECTED | event with the rule id. A merchant whose entry fails I12 is denied here with rule id `I12`: the orchestrator checks it before it calls the PolicyEngine, so I12 stays in one class, and reports it through this row as P1 denies a merchant that is not ACTIVE |
 | QUOTING | quote\_ready | policy allows the quoted items and total | AWAITING\_APPROVAL | create approval and snapshot hash |
 | QUOTING | item\_unavailable or out\_of\_stock | none | FAILED\_NOT\_CHARGED | cancel session, best effort |
 | QUOTING | not\_sent or uncertain | retries left | QUOTING | resend with the same key (safe) |
@@ -294,6 +294,7 @@ Any event that is not in this table for the current state is a programming error
 | RECONCILING | observed incomplete | none | QUOTING | re-quote on the same session, requote\_count + 1. Only while requote\_count is below the P8 cap |
 | RECONCILING | deadline reached | none | ESCALATED | event listing all attempts |
 | APPROVED | approval\_invalid | the newest approval is not PENDING, APPROVED or CONSUMED, or its snapshot hash differs from the intent's approved snapshot (I3) | ESCALATED | failure\_reason approval\_invalid; send nothing and write no attempt. Checked before the write-ahead of `complete` |
+| any non-terminal state | merchant\_not\_owned or merchant\_changed | `merchant_not_owned`: the step would send a create, update, complete or cancel, and the merchant's registry entry fails I12. `merchant_changed`: at the start of any step, the entry's fingerprint differs from the intent's stored `merchant_fingerprint` (10) | ESCALATED | failure\_reason and event are the event's name; send nothing and write no attempt. Checked before any merchant call of the step, so before the attempt row is written. Not FAILED\_NOT\_CHARGED: the cancel it would owe may itself be blocked by I12, and a `complete` may already have reached the store |
 | COMPLETING or RECONCILING | price\_changed, checkout incomplete or observed incomplete | requote\_count has reached the P8 cap | REJECTED | failure\_reason price\_unstable, cancel session. Not ESCALATED: no money has moved and the outcome is known |
 | RECONCILING | observed ready\_for\_complete | quiet period (7.5) not yet elapsed | RECONCILING | poll again; do not resend |
 | QUOTING | an update or GET shows the session completed or complete_in_progress | none | RECONCILING | send nothing new; reconciliation records the order. Defensive: a correct orchestrator should never reach this, but it must never throw here |
@@ -377,7 +378,7 @@ A `RecoveryWorker` runs every 5 s and once at startup. It selects intents in `QU
 
 - `APPROVED`: calls `advance`, which sends `complete`. Without this, a crash between approval and the first `complete` would leave the intent stuck. An `APPROVED` intent whose approval is still `PENDING` (a crash inside `ApprovalService.decide`, after the intent write and before the approval write) has its approval moved to `APPROVED` by a fenced write before `complete` is sent. At a handoff merchant `advance` makes the GET of the `hand_off` rows (7.2) instead, and never sends `complete`. An `APPROVED` handoff intent still there at its deadline (the liveness bounds below) moves to `REJECTED` with reason `handoff_timeout` and `cancel_pending` set, in one fenced write.
 - `AWAITING_APPROVAL` past the approval's `expires_at`: moves the intent to `REJECTED` with reason `approval_expired` in a fenced write, then marks the approval `EXPIRED`. The intent is written first, so a crash between the two writes leaves a terminal intent, never an `AWAITING_APPROVAL` intent with an expired approval. Expiry acts only on intents still in `AWAITING_APPROVAL` (`RecoveryScan.approvalsDue`, Appendix B).
-- Any intent with `cancel_pending` set, which happens when `REJECTED` or `FAILED_NOT_CHARGED` owes a best-effort cancel: sends `cancel` under the key `cancel/0` (7.4), clears the flag on any definitive answer, and gives up after 3 attempts. `cancel_pending` is a persisted field of the intent, set in the same write as the move to the terminal state. A failed cancel never changes the intent's state.
+- Any intent with `cancel_pending` set, which happens when `REJECTED` or `FAILED_NOT_CHARGED` owes a best-effort cancel: sends `cancel` under the key `cancel/0` (7.4), clears the flag on any definitive answer, and gives up after 3 attempts. `cancel_pending` is a persisted field of the intent, set in the same write as the move to the terminal state. A failed cancel never changes the intent's state. If the merchant's entry fails I12, or its fingerprint differs from the intent's (10), the cancel is not sent: the flag is cleared in a fenced write with the event `cancel_blocked_i12`, and the state does not change. Startup refuses that case (19), so this is defence in depth.
 - `COMPLETING` with a `complete` attempt left `SENT` or `UNCERTAIN` goes to `RECONCILING` and sends nothing. `complete` is resent only after a `get` shows `ready_for_complete` and the quiet period (7.5) has elapsed. A resend that reconciliation approved is continued only by the process that made that `get`; a worker that takes over or restarts reads again first.
 
 **Liveness bounds for I5 \[CONTRACT\].**
@@ -493,7 +494,7 @@ One circuit breaker and one rate limiter per merchant (by `MerchantId`, shared b
 - `discover` retries like `get` (8.2) and is cached per gateway. The profile must show a version the merchant is pinned to and the agent supports (26.2), the capability `dev.ucp.shopping.checkout`, and the payment handler the registry entry names for that merchant (`handler_missing` otherwise). If discovery fails or the check fails, no create is sent to that merchant.
 - The checkout endpoint a profile declares must be on the merchant's base host and port or on a host and port the registry lists for that merchant (`endpoint_hosts`, section 19), with the base URL's scheme. The operator, not the profile, decides which hosts may carry checkout traffic, so a profile cannot point the client at another server. A profile that names any other host fails discovery with `endpoint_not_allowed`.
 - Discovery also confirms the payment handler the agent's instrument uses for this merchant (`mock_pay_1` for the lab merchants; a profile without it fails with `handler_missing`). The gateway's required handler id and the `handlerId` of the merchant's instrument must be equal, and a mismatch refuses to build the stack. Discovery also refreshes the cached profile on a 4xx of a create (section 20).
-- An MCP merchant's gateway reads its endpoint from the profile's `ucp.services["dev.ucp.shopping"]` entry whose `transport` is `mcp`. That endpoint must pass I12 (its host equals `shop_domain`) as well as the `endpoint_hosts` rule above. A handoff merchant's profile need not name a payment handler the agent holds (`payment_handlers` may be empty); `handler_missing` applies only to `completion: agent`.
+- An MCP merchant's gateway reads its endpoint from the profile's `ucp.services["dev.ucp.shopping"]` entry whose `transport` is `mcp`. That endpoint must pass I12 (its host equals `shop_domain`) as well as the `endpoint_hosts` rule above, at discovery and again before every mutating call, as a local check with no I/O. A handoff merchant's profile need not name a payment handler the agent holds (`payment_handlers` may be empty); `handler_missing` applies only to `completion: agent`.
 
 ## 9. Policy and approval
 
@@ -552,6 +553,7 @@ CREATE TABLE purchase_intent (
   id TEXT PRIMARY KEY,                  -- UUIDv7
   user_id TEXT NOT NULL,
   merchant_id TEXT NOT NULL,
+  merchant_fingerprint TEXT NOT NULL,  -- the entry's completion, owned, shop_domain and transport as CanonicalJson, written once at insert and never changed (19, I12; migration V8)
   dedupe_key TEXT NOT NULL,
   lines_json TEXT NOT NULL,             -- the proposal's lines, fixed at creation; a create or update resent after a crash is rebuilt byte for byte from them
   buyer_email TEXT NOT NULL,            -- from AuthContext, never from the model (18.1)
@@ -574,6 +576,7 @@ CREATE UNIQUE INDEX ux_intent_active_dedupe ON purchase_intent(dedupe_key)
   WHERE state NOT IN ('COMPLETED','REJECTED','FAILED_NOT_CHARGED','ESCALATED');
 -- I11: a trigger (migration V7) refuses any update of purchase_intent.merchant_id.
 -- V8 adds handoff_url and rebuilds ux_intent_active_dedupe with HANDED_OFF among the terminal states.
+-- V8 also adds merchant_fingerprint, filling existing rows with {"completion":"agent","owned":true,"transport":"rest"}: the only entry an intent from before H5 can still run under, since an entry off loopback without owned: true refuses startup.
 
 CREATE TABLE intent_event (
   intent_id TEXT NOT NULL,
@@ -1052,7 +1055,7 @@ Only `sub`, `email` and `auth_time` are kept. The ID token itself is not stored.
 
 In production the agent talks to many independent merchants, each with its own inventory, prices and rules. The lab models this with several merchant instances.
 
-**Registry.** Merchants are listed in `merchants.yaml` (id, name, URL, status, and optionally `endpoint_hosts`, `ucp_versions`, `payment_handler` with the instrument shape (`type`, `credential_type`, `token_ref`: the token itself never in the file), `lab_url`, `transport` (`rest`, or `mcp` from H5) and `completion` (`agent`, or `handoff` from H5)) and held in memory; there is no `merchant` table before M7. A merchant is ACTIVE when its file status is `active` and its last discovery check passed; otherwise the registry reports it SUSPENDED with a fixed reason. Only ACTIVE merchants are used for new intents. This replaces the plain allowlist in P1. A SUSPENDED merchant is re-checked on demand, at most every 30 s, by a single caller (one wins a compare-and-set and no lock is held across the network call); every other caller gets the last known status without waiting. A merchant removed from the file while any intent is in flight refuses startup.
+**Registry.** Merchants are listed in `merchants.yaml` (id, name, URL, status, and optionally `endpoint_hosts`, `ucp_versions`, `payment_handler` with the instrument shape (`type`, `credential_type`, `token_ref`: the token itself never in the file), `lab_url`, `transport` (`rest`, or `mcp` from H5) and `completion` (`agent`, or `handoff` from H5)) and held in memory; there is no `merchant` table before M7. A merchant is ACTIVE when its file status is `active` and its last discovery check passed; otherwise the registry reports it SUSPENDED with a fixed reason. Only ACTIVE merchants are used for new intents. This replaces the plain allowlist in P1. A SUSPENDED merchant is re-checked on demand, at most every 30 s, by a single caller (one wins a compare-and-set and no lock is held across the network call); every other caller gets the last known status without waiting. A merchant removed from the file while any intent is in flight refuses startup, and so does an entry whose fingerprint (its `completion`, `owned`, `shop_domain` and `transport`, 10) differs from the one stored by any intent in flight (H5): those intents finish under the entry they started with. For both rules an intent is in flight when its state is not terminal or it has `cancel_pending` set; startup reads the stored fingerprints through the in-flight merchants port that serves the removed-merchant rule. A change of `completion` matters most: from `handoff` to `agent` it would let an APPROVED intent send `complete` to a store (N1).
 
 **Real merchants (H5) \[CONTRACT\].** An entry may also carry `owned`, `shop_domain`, `credential_ref` and `requires_buyer_ip`. `owned: true` states that the operator owns the store (26.5); it is required for any merchant that is not on a loopback host (I12). `shop_domain` is the store's host, which the MCP endpoint and every `continue_url` must match (I12). `credential_ref` names the client credentials as `env:NAME` (26.4). `requires_buyer_ip: true` makes every call carry the buyer IP (8.4). Startup refuses: a merchant with `transport: mcp` and no `credential_ref` or no `shop_domain`; a non-loopback merchant without `owned: true`; and `requires_buyer_ip: true` in any profile but `local`, or with no `BUYER_IP` set. In `local` the lab has one user, the owner, so `BUYER_IP` is the owner's own address, given knowingly. The per-user path is production work (22).
 
@@ -1443,7 +1446,7 @@ public interface IntentRepository {
   Optional<PurchaseIntent> find(UserId owner, IntentId id);          // empty when not owned (T6)
   Optional<PurchaseIntent> findForSystem(IntentId id);               // RecoveryWorker and eval harness only
   Optional<PurchaseIntent> findActiveByDedupeKey(String dedupeKey);
-  void insert(PurchaseIntent intent);                              // fails on an active dedupe conflict
+  void insert(PurchaseIntent intent);                              // fails on an active dedupe conflict; stores merchant_fingerprint, which update never changes (10)
   void update(PurchaseIntent intent, long expectedVersion, String leaseOwner); // throws StaleVersionException or LeaseLostException; writes handoff_url in the same fenced write as the move to HANDED_OFF (7.2 hand_off, 10)
   void appendEvent(IntentId id, IntentEvent event);
   void recordAttempt(MerchantAttempt attempt, PurchaseIntent intent, long expectedVersion, String leaseOwner); // one transaction (7.3 step 3)
@@ -1521,6 +1524,7 @@ public interface MerchantRegistry {
 public record MerchantEntry(MerchantId id, URI baseUrl, String displayName, MerchantStatus status,
     Transport transport, Completion completion, boolean owned, Optional<String> shopDomain) {}
     // owned: the resolved value (I12: true by default only on a loopback host); shopDomain: present for every MCP merchant (19). H5
+    // String fingerprint(): CanonicalJson of completion, owned, shop_domain (left out when empty) and transport, lower-case values (10, 19)
 
 public enum Transport { REST, MCP }
 
