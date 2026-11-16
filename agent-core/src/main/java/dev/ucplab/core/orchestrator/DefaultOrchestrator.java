@@ -895,6 +895,11 @@ public final class DefaultOrchestrator implements Orchestrator {
             return escalateInvalidApproval(intent, attempts, latest, hash);
         }
         ApprovalRecord approval = usable.get();
+        if (approval.status() != ApprovalStatus.PENDING && approval.decidedAt().isEmpty()) {
+            // 7.2 approval_invalid, 9.2: every decision persists its time; one without it was not written by
+            // ApprovalService. Escalate, never throw: a step that throws is retried every pass (I5).
+            return escalateInvalidApproval(intent, attempts, latest, hash);
+        }
         // Handoff merchants [CONTRACT] (7.2): send_complete is never taken; approval_invalid applied just above.
         if (handoff(intent)) {
             return handOff(intent, attempts, approval);
@@ -1235,7 +1240,7 @@ public final class DefaultOrchestrator implements Orchestrator {
 
     /**
      * I3: the newest approval is missing, decided against, expired, or for another snapshot or another session than the
-     * intent was approved with. Nothing is sent and no attempt is written; the intent goes to ESCALATED with a reason, so a human
+     * intent was approved with, or it has no decision time (7.2). Nothing is sent and no attempt is written; the intent goes to ESCALATED with a reason, so a human
      * looks at it instead of the worker retrying forever.
      */
     private Step escalateInvalidApproval(
@@ -1674,8 +1679,8 @@ public final class DefaultOrchestrator implements Orchestrator {
         // Checked before the GET, so a store that keeps failing cannot keep the intent alive. The time is the persisted
         // decision, never the intent's updated_at, so a restart does not reset it.
         if (decided.decidedAt().isEmpty()) {
-            // 9.2: every decision persists its time; an approval without one was not written by ApprovalService.
-            throw new IllegalStateException("7.2: approval " + approval.id() + " has no decision time");
+            // 7.2 approval_invalid: the recovery left no decision time (its write was lost), so there is no deadline.
+            return escalateInvalidApproval(intent, attempts, Optional.of(decided), intent.approvedSnapshotHash());
         }
         if (!clock.instant().isBefore(decided.decidedAt().get().plus(HANDOFF_DEADLINE))) {
             return handOffTimeout(intent);

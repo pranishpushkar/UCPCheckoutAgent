@@ -340,6 +340,43 @@ public abstract class IntentRepositoryContract {
         assertThat(repo.findForSystem(claimed.id()).orElseThrow().handoffUrl()).isEmpty();
     }
 
+    // Covers: 7.2, 10, port parity (handoff_url only in HANDED_OFF: an insert, an update or a recorded attempt that
+    // carries one in any other state is refused and stores nothing, as V9's CHECK refuses it in SQL; the exception type
+    // is the adapter's own, so only a refusal is asserted)
+    @Test
+    void aHandoffUrl_isRefused_inEveryStateButHandedOff() {
+        dev.ucplab.core.merchant.ContinueUrl url = new dev.ucplab.core.merchant.ContinueUrl(
+                java.net.URI.create("https://shop.example/cart/c/abc?key=k-secret-1"));
+        int n = 0;
+        for (IntentState state : IntentState.values()) {
+            if (state == IntentState.HANDED_OFF) {
+                continue;
+            }
+            PurchaseIntent withUrl = inState(proposed("i" + n, ALICE, "d" + n), state).withHandoffUrl(url);
+            assertThatThrownBy(() -> repo.insert(withUrl)).as(state.name()).isInstanceOf(RuntimeException.class);
+            assertThat(repo.findForSystem(withUrl.id())).as(state.name()).isEmpty();
+            n++;
+        }
+
+        PurchaseIntent claimed = insertAndClaim("moved", ALICE, "dm", W1);
+        PurchaseIntent rejected = claimed.withState(IntentState.REJECTED, clock.instant()).withHandoffUrl(url);
+        assertThatThrownBy(() -> repo.update(rejected, 0, W1)).isInstanceOf(RuntimeException.class);
+        PurchaseIntent stored = repo.findForSystem(claimed.id()).orElseThrow();
+        assertThat(stored.version()).isZero();
+        assertThat(stored.state()).isEqualTo(claimed.state());
+        assertThat(stored.handoffUrl()).isEmpty();
+
+        PurchaseIntent quoting = claimed.withState(IntentState.QUOTING, clock.instant()).withHandoffUrl(url);
+        assertThatThrownBy(() -> repo.recordAttempt(attempt("a1", claimed), quoting, 0, W1))
+                .isInstanceOf(RuntimeException.class);
+        assertThat(repo.attempts(claimed.id())).isEmpty();
+        assertThat(repo.findForSystem(claimed.id()).orElseThrow().version()).isZero();
+
+        PurchaseIntent handedOff = claimed.withState(IntentState.HANDED_OFF, clock.instant()).withHandoffUrl(url);
+        repo.update(handedOff, 0, W1);
+        assertThat(repo.findForSystem(claimed.id()).orElseThrow().handoffUrl()).contains(url);
+    }
+
     private List<MerchantAttempt> twoSentAttempts(PurchaseIntent claimed) {
         MerchantAttempt first = attempt("a1", claimed);
         MerchantAttempt second = attempt("a2", claimed);

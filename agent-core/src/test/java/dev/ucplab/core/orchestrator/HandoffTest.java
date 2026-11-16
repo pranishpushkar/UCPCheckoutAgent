@@ -643,10 +643,11 @@ class HandoffTest {
         assertThat(events(id, "approval_decision_recovered")).as("recovered once").hasSize(1);
     }
 
-    // Covers: 7.2 handoff_timeout, 9.2 (an APPROVED approval with no persisted decision time was not written by
-    // ApprovalService: the step refuses to guess a deadline and sends nothing)
+    // Covers: 7.2 approval_invalid, I3, I5, 9.2 (an APPROVED approval with no persisted decision time was not written
+    // by ApprovalService: the step does not guess a deadline and does not throw, which would retry it every pass
+    // forever; it escalates with approval_invalid, sends nothing and writes no attempt)
     @Test
-    void anApprovalWithNoDecisionTime_isRefused_andNothingIsSent() {
+    void anApprovalWithNoDecisionTime_isApprovalInvalid_andNothingIsSent() {
         CrashingApprovalRepository crashing = new CrashingApprovalRepository(lab.approvals);
         RecordingGateway recording = new RecordingGateway(
                 new RewritingGateway(lab.merchant).rewrite(MerchantCall.GET, withUrl(URL)));
@@ -664,10 +665,65 @@ class HandoffTest {
         Lab.Worker worker = lab.worker("worker-y", recording);
         int before = recording.calls().size();
 
-        assertThatThrownBy(() -> worker.orchestrator().advance(id)).isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("no decision time");
+        int attempts = lab.intents.attempts(id).size();
+
+        assertThat(worker.orchestrator().advance(id).after()).isEqualTo(IntentState.ESCALATED);
+        assertThat(lab.intent(id).failureReason()).contains("approval_invalid");
         assertThat(recording.calls().subList(before, recording.calls().size())).as("no GET").isEmpty();
-        assertThat(lab.intent(id).state()).isEqualTo(IntentState.APPROVED);
+        assertThat(lab.intents.attempts(id)).hasSize(attempts);
+        assertThat(lab.events(id)).anyMatch(e -> e.type().equals("approval_invalid"));
+    }
+
+    // Covers: 7.2 approval_invalid, I5, 9.2 (a PENDING approval whose recovery write is lost, so it still has no
+    // decision time: approval_invalid before the deadline and the GET, never a throw)
+    @Test
+    void aPendingRecoveryThatLeavesNoDecisionTime_isApprovalInvalid_andNothingIsSent() {
+        CrashingApprovalRepository crashing = new CrashingApprovalRepository(lab.approvals);
+        RecordingGateway recording = new RecordingGateway(
+                new RewritingGateway(lab.merchant).rewrite(MerchantCall.GET, withUrl(URL)));
+        Lab.Worker dying = lab.worker("worker-x", recording, crashing);
+        IntentId id = dying.orchestrator().propose(lab.alice(), SHOP, TWO_SHIRTS, "buy").intentId();
+        assertThat(lab.drive(dying, id)).isEqualTo(IntentState.AWAITING_APPROVAL);
+        crashing.crashBeforeNext(CrashingApprovalRepository.Op.TRANSITION);
+        assertThatThrownBy(() -> lab.decide(dying, id, true)).isInstanceOf(InterceptingGateway.SimulatedCrash.class);
+        lab.clock.advance(lab.config.lease().plusSeconds(1));
+        Lab.Worker worker = lab.worker("worker-y", recording, new LostTransitions(lab.approvals));
+        int before = recording.calls().size();
+
+        assertThat(worker.orchestrator().advance(id).after()).isEqualTo(IntentState.ESCALATED);
+        assertThat(lab.intent(id).failureReason()).contains("approval_invalid");
+        assertThat(recording.calls().subList(before, recording.calls().size())).as("no GET").isEmpty();
+    }
+
+    /** An approval store whose transitions are lost: each answers false and writes nothing (another writer won). */
+    private record LostTransitions(dev.ucplab.core.approval.ApprovalRepository delegate)
+            implements dev.ucplab.core.approval.ApprovalRepository {
+        @Override
+        public void insert(dev.ucplab.core.approval.ApprovalRecord approval) {
+            delegate.insert(approval);
+        }
+
+        @Override
+        public Optional<dev.ucplab.core.approval.ApprovalRecord> findLatest(dev.ucplab.core.identity.UserId owner,
+                IntentId intentId) {
+            return delegate.findLatest(owner, intentId);
+        }
+
+        @Override
+        public Optional<dev.ucplab.core.approval.ApprovalRecord> findLatestForSystem(IntentId intentId) {
+            return delegate.findLatestForSystem(intentId);
+        }
+
+        @Override
+        public List<dev.ucplab.core.approval.ApprovalRecord> listForSystem(IntentId intentId) {
+            return delegate.listForSystem(intentId);
+        }
+
+        @Override
+        public boolean transition(String approvalId, ApprovalStatus expected, ApprovalStatus next, Instant at,
+                Optional<dev.ucplab.core.identity.UserId> decidedBy) {
+            return false;
+        }
     }
 
     // Covers: 7.2 handoff_timeout (a re-quote's new approval starts a new 5 minutes)
