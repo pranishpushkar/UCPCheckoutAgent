@@ -24,8 +24,8 @@ import java.util.Optional;
  * @param intentsBySlot the intent created for each slot's basket
  * @param aborts reasons the run could not finish (the orchestrator threw, or the run did not settle)
  * @param config the orchestrator settings the run used (deadlines, lease, timeouts for I5)
- * @param attemptOps for each intent proposed at a handoff entry (its fingerprint), its attempt rows' ops at the end, in
- *     order (7.2 Handoff merchants); empty outside the handoff runs
+ * @param attemptOps for each intent proposed at an entry whose completion is handoff (its fingerprint), its attempt
+ *     rows' ops at the end, in order (7.2 Handoff merchants)
  */
 record Observations(
         Map<Integer, IntentId> intentsBySlot,

@@ -256,10 +256,16 @@ final class Lab {
                 .ifPresent(t -> clock.advance(Duration.between(clock.instant(), t)));
     }
 
-    /** The intent's event log: only the in-memory repository exposes it. */
+    /** The event log of a store whose repository is not in memory (the SQL tests set it); the port does not expose it. */
+    java.util.function.Function<IntentId, List<dev.ucplab.core.intent.IntentEvent>> eventLog = null;
+
+    /** The intent's event log: the in-memory repository's, or {@link #eventLog}'s. */
     List<dev.ucplab.core.intent.IntentEvent> events(IntentId id) {
         if (intents instanceof InMemoryIntentRepository memory) {
             return memory.events(id);
+        }
+        if (eventLog != null) {
+            return eventLog.apply(id);
         }
         throw new UnsupportedOperationException("events are read through the in-memory repository only");
     }

@@ -44,5 +44,7 @@ public enum TransitionEvent {
     /** 7.2 hand_off_refused. */
     HAND_OFF_REFUSED,
     /** 7.2 hand_off_unexpected. */
-    HAND_OFF_UNEXPECTED
+    HAND_OFF_UNEXPECTED,
+    /** 7.2 handoff_timeout: 5 minutes since the approval's persisted decision time (7.6). */
+    HANDOFF_TIMEOUT
 }

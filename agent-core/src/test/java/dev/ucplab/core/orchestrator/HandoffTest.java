@@ -26,6 +26,8 @@ import dev.ucplab.core.merchant.MerchantStatus;
 import dev.ucplab.core.merchant.Transport;
 import dev.ucplab.core.merchant.fake.MerchantCall;
 import java.net.URI;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.UnaryOperator;
@@ -37,11 +39,21 @@ import org.junit.jupiter.api.Test;
  */
 class HandoffTest {
 
+    static final Duration FIVE_MINUTES = Duration.ofMinutes(5);
+
     static final MerchantEntry HANDOFF = new MerchantEntry(SHOP, URI.create("https://shop.example"), "Shop",
             MerchantStatus.ACTIVE, Transport.MCP, Completion.HANDOFF, true, Optional.of("shop.example"));
     static final String URL = "https://shop.example/cart/c/abc?key=k-secret-1";
 
-    private final Lab lab = new Lab();
+    protected final Lab lab = newLab();
+
+    /**
+     * A lab over the store under test: the in-memory adapters here, SQLite in agent-persistence's
+     * {@code SqlHandoffTest} (port parity, H5 C7b).
+     */
+    protected Lab newLab() {
+        return new Lab();
+    }
 
     HandoffTest() {
         lab.entries = id -> id.equals(SHOP) ? Optional.of(HANDOFF) : Optional.empty();
@@ -223,7 +235,7 @@ class HandoffTest {
     void handOff_acceptsEachBuyerStatus() {
         for (CheckoutStatus s : List.of(CheckoutStatus.INCOMPLETE, CheckoutStatus.READY_FOR_COMPLETE,
                 CheckoutStatus.REQUIRES_ESCALATION)) {
-            Lab one = new Lab();
+            Lab one = newLab();
             one.entries = lab.entries;
             Lab.Worker worker = one.worker("w", new RewritingGateway(one.merchant).rewrite(MerchantCall.GET,
                     view(Optional.of(URL), v -> status(v, s))));
@@ -334,7 +346,7 @@ class HandoffTest {
         for (UnaryOperator<CallOutcome<CheckoutView>> gone : List.of(
                 view(Optional.of(URL), v -> status(v, CheckoutStatus.CANCELED)),
                 always(new CallOutcome.ProtocolError<>(404, "not_found", "", Optional.empty())))) {
-            Lab one = new Lab();
+            Lab one = newLab();
             one.entries = lab.entries;
             Lab.Worker worker = one.worker("w", new RewritingGateway(one.merchant).rewrite(MerchantCall.GET, gone));
             IntentId id = worker.orchestrator().propose(one.alice(), SHOP, TWO_SHIRTS, "buy").intentId();
@@ -360,7 +372,7 @@ class HandoffTest {
                 new CallOutcome.ProtocolError<>(500, "internal_error", "", Optional.empty()),
                 new CallOutcome.Rejected<>(400, List.of()));
         for (CallOutcome<CheckoutView> failure : failures) {
-            Lab one = new Lab();
+            Lab one = newLab();
             one.entries = lab.entries;
             RewritingGateway gateway = new RewritingGateway(one.merchant).rewrite(MerchantCall.GET, always(failure));
             Lab.Worker worker = one.worker("w", gateway);
@@ -392,7 +404,7 @@ class HandoffTest {
                 new Case(Optional.of("https://evil.example/c?key=k-secret-1"), "{\"host\":\"evil.example\"}"),
                 new Case(Optional.of("http://shop.example/c"), "{\"host\":\"shop.example\"}"),
                 new Case(Optional.of("/cart/c/abc?key=k-secret-1"), "{}"))) {
-            Lab one = new Lab();
+            Lab one = newLab();
             one.entries = lab.entries;
             Lab.Worker worker = one.worker("w", new RewritingGateway(one.merchant).rewrite(MerchantCall.GET,
                     view(c.url(), v -> v)));
@@ -419,7 +431,7 @@ class HandoffTest {
     @Test
     void handOffUnexpected_escalates() {
         for (CheckoutStatus s : List.of(CheckoutStatus.COMPLETED, CheckoutStatus.COMPLETE_IN_PROGRESS)) {
-            Lab one = new Lab();
+            Lab one = newLab();
             one.entries = lab.entries;
             Lab.Worker worker = one.worker("w", new RewritingGateway(one.merchant).rewrite(MerchantCall.GET,
                     view(Optional.of(URL), v -> status(v, s))));
@@ -463,7 +475,7 @@ class HandoffTest {
                         l.unitPriceMinor(), l.lineId())).toList()),
                 v -> withLines(v, List.of(v.lines().getFirst(), v.lines().getFirst())));
         for (UnaryOperator<CheckoutView> change : changes) {
-            Lab one = new Lab();
+            Lab one = newLab();
             one.entries = lab.entries;
             Lab.Worker worker = one.worker("w", new RewritingGateway(one.merchant).rewrite(MerchantCall.GET,
                     view(Optional.of(URL), change)));
@@ -508,6 +520,229 @@ class HandoffTest {
         assertThat(approval.decidedBy()).contains(Lab.ALICE);
         assertThat(events(id, "approval_decision_recovered")).singleElement()
                 .satisfies(e -> assertThat(e).contains("\"approval_id\":\"" + approval.id() + "\""));
+        neverCompleted(id);
+    }
+
+    // ---------------------------------------------------------------- the handoff deadline (7.2 handoff_timeout, 7.6)
+
+    /** The approval's persisted decision time. */
+    private Instant decidedAt(IntentId id) {
+        return lab.approvals.findLatestForSystem(id).orElseThrow().decidedAt().orElseThrow();
+    }
+
+    private static UnaryOperator<CallOutcome<CheckoutView>> uncertain() {
+        return always(new CallOutcome.Uncertain<>("timeout"));
+    }
+
+    // Covers: 7.2 handoff_timeout, 7.6, I5 (a store whose reads keep failing keeps the intent APPROVED until 5 minutes
+    // after the persisted decision, then the intent ends REJECTED with handoff_timeout and cancel_pending set in one
+    // write; the owed cancel is then sent)
+    @Test
+    void aReadThatKeepsFailing_endsRejected_fiveMinutesAfterTheDecision() {
+        RecordingGateway recording = new RecordingGateway(
+                new RewritingGateway(lab.merchant).rewrite(MerchantCall.GET, uncertain()));
+        Lab.Worker worker = lab.worker("w", recording);
+        IntentId id = approved(worker);
+        Instant decided = decidedAt(id);
+
+        lab.clock.advance(Duration.between(lab.clock.instant(), decided.plus(FIVE_MINUTES).minusMillis(1)));
+        worker.orchestrator().advance(id);
+        assertThat(lab.intent(id).state()).isEqualTo(IntentState.APPROVED);
+
+        lab.clock.advance(Duration.ofMillis(1));
+        int before = recording.calls().size();
+        worker.orchestrator().advance(id);
+
+        PurchaseIntent rejected = lab.intent(id);
+        assertThat(rejected.state()).isEqualTo(IntentState.REJECTED);
+        assertThat(rejected.failureReason()).contains("handoff_timeout");
+        assertThat(rejected.cancelPending()).isTrue();
+        assertThat(recording.calls().subList(before, recording.calls().size())).as("the timeout step sends nothing")
+                .isEmpty();
+        assertThat(transitions(id)).contains(
+                "{\"event\":\"HANDOFF_TIMEOUT\",\"from\":\"APPROVED\",\"guard\":\"NONE\",\"to\":\"REJECTED\"}");
+        lab.drive(worker, id);
+        assertThat(lab.intents.attempts(id)).filteredOn(a -> a.op() == AttemptOp.CANCEL).hasSize(1);
+        assertThat(lab.intent(id).cancelPending()).isFalse();
+        neverCompleted(id);
+    }
+
+    // Covers: 7.2 handoff_timeout (checked at the start of the APPROVED step, before the GET: past the deadline no GET
+    // is sent, even to a store that would hand off)
+    @Test
+    void theDeadline_isCheckedBeforeTheGet() {
+        RecordingGateway recording = new RecordingGateway(
+                new RewritingGateway(lab.merchant).rewrite(MerchantCall.GET, withUrl(URL)));
+        Lab.Worker worker = lab.worker("w", recording);
+        IntentId id = approved(worker);
+        lab.clock.advance(FIVE_MINUTES);
+        int before = recording.calls().size();
+
+        worker.orchestrator().advance(id);
+
+        assertThat(lab.intent(id).state()).isEqualTo(IntentState.REJECTED);
+        assertThat(lab.intent(id).handoffUrl()).isEmpty();
+        assertThat(recording.calls().subList(before, recording.calls().size())).as("no GET").isEmpty();
+    }
+
+    // Covers: 7.2 handoff_timeout, 7.6, S9 (a worker restart does not reset the deadline: it runs from the persisted
+    // decision, not from when a worker took the intent over)
+    @Test
+    void aWorkerRestart_doesNotResetTheDeadline() {
+        RewritingGateway failing = new RewritingGateway(lab.merchant);
+        failing.rewrite(MerchantCall.GET, uncertain());
+        Lab.Worker first = lab.worker("worker-a", failing);
+        IntentId id = approved(first);
+        Instant decided = decidedAt(id);
+        lab.clock.advance(Duration.ofMinutes(3));
+        first.orchestrator().advance(id);
+        assertThat(lab.intent(id).state()).isEqualTo(IntentState.APPROVED);
+
+        // worker-a is gone; its lease runs out and worker-b takes the intent over.
+        lab.clock.advance(lab.config.lease().plusSeconds(1));
+        Lab.Worker second = lab.worker("worker-b", failing);
+        second.orchestrator().advance(id);
+        assertThat(lab.intent(id).state()).isEqualTo(IntentState.APPROVED);
+
+        lab.clock.advance(Duration.between(lab.clock.instant(), decided.plus(FIVE_MINUTES)));
+        second.orchestrator().advance(id);
+
+        assertThat(lab.intent(id).state()).isEqualTo(IntentState.REJECTED);
+        assertThat(lab.intent(id).failureReason()).contains("handoff_timeout");
+    }
+
+    // Covers: 7.2 handoff_timeout, 7.6 (an approval left PENDING by a crash inside decide is first recovered, which
+    // persists decided_at; its 5 minutes run from that write, and the recovery happens before the GET)
+    @Test
+    void aPendingApproval_isRecoveredFirst_andItsFiveMinutesRunFromThatWrite() {
+        CrashingApprovalRepository crashing = new CrashingApprovalRepository(lab.approvals);
+        RecordingGateway recording = new RecordingGateway(
+                new RewritingGateway(lab.merchant).rewrite(MerchantCall.GET, uncertain()));
+        Lab.Worker dying = lab.worker("worker-x", recording, crashing);
+        IntentId id = dying.orchestrator().propose(lab.alice(), SHOP, TWO_SHIRTS, "buy").intentId();
+        assertThat(lab.drive(dying, id)).isEqualTo(IntentState.AWAITING_APPROVAL);
+        crashing.crashBeforeNext(CrashingApprovalRepository.Op.TRANSITION);
+        assertThatThrownBy(() -> lab.decide(dying, id, true)).isInstanceOf(InterceptingGateway.SimulatedCrash.class);
+        assertThat(lab.approvals.findLatestForSystem(id).orElseThrow().decidedAt()).isEmpty();
+        lab.clock.advance(Duration.ofMinutes(4));
+        Instant recoveredAt = lab.clock.instant();
+        Lab.Worker worker = lab.worker("worker-y", recording);
+
+        worker.orchestrator().advance(id);
+
+        assertThat(lab.intent(id).state()).isEqualTo(IntentState.APPROVED);
+        assertThat(lab.approvals.findLatestForSystem(id).orElseThrow().status()).isEqualTo(ApprovalStatus.APPROVED);
+        assertThat(decidedAt(id)).isEqualTo(recoveredAt);
+        assertThat(events(id, "approval_decision_recovered")).hasSize(1);
+        lab.clock.advance(FIVE_MINUTES.minusMillis(1));
+        worker.orchestrator().advance(id);
+        assertThat(lab.intent(id).state()).isEqualTo(IntentState.APPROVED);
+        lab.clock.advance(Duration.ofMillis(1));
+        worker.orchestrator().advance(id);
+        assertThat(lab.intent(id).state()).isEqualTo(IntentState.REJECTED);
+        assertThat(events(id, "approval_decision_recovered")).as("recovered once").hasSize(1);
+    }
+
+    // Covers: 7.2 handoff_timeout, 9.2 (an APPROVED approval with no persisted decision time was not written by
+    // ApprovalService: the step refuses to guess a deadline and sends nothing)
+    @Test
+    void anApprovalWithNoDecisionTime_isRefused_andNothingIsSent() {
+        CrashingApprovalRepository crashing = new CrashingApprovalRepository(lab.approvals);
+        RecordingGateway recording = new RecordingGateway(
+                new RewritingGateway(lab.merchant).rewrite(MerchantCall.GET, withUrl(URL)));
+        Lab.Worker dying = lab.worker("worker-x", recording, crashing);
+        IntentId id = dying.orchestrator().propose(lab.alice(), SHOP, TWO_SHIRTS, "buy").intentId();
+        assertThat(lab.drive(dying, id)).isEqualTo(IntentState.AWAITING_APPROVAL);
+        crashing.crashBeforeNext(CrashingApprovalRepository.Op.TRANSITION);
+        assertThatThrownBy(() -> lab.decide(dying, id, true)).isInstanceOf(InterceptingGateway.SimulatedCrash.class);
+        // A forged decision: PENDING to APPROVED with no decider, so no decision time is kept.
+        var pending = lab.approvals.findLatestForSystem(id).orElseThrow();
+        lab.approvals.transition(pending.id(), ApprovalStatus.PENDING, ApprovalStatus.APPROVED, lab.clock.instant(),
+                Optional.empty());
+        assertThat(lab.approvals.findLatestForSystem(id).orElseThrow().decidedAt()).isEmpty();
+        lab.clock.advance(lab.config.lease().plusSeconds(1));
+        Lab.Worker worker = lab.worker("worker-y", recording);
+        int before = recording.calls().size();
+
+        assertThatThrownBy(() -> worker.orchestrator().advance(id)).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("no decision time");
+        assertThat(recording.calls().subList(before, recording.calls().size())).as("no GET").isEmpty();
+        assertThat(lab.intent(id).state()).isEqualTo(IntentState.APPROVED);
+    }
+
+    // Covers: 7.2 handoff_timeout (a re-quote's new approval starts a new 5 minutes)
+    @Test
+    void aRequotesNewApproval_startsANewFiveMinutes() {
+        java.util.concurrent.atomic.AtomicInteger gets = new java.util.concurrent.atomic.AtomicInteger();
+        UnaryOperator<CallOutcome<CheckoutView>> changedOnce = view(Optional.of(URL), v -> total(v, v.totalMinor() + 1));
+        Lab.Worker worker = lab.worker("w", new RewritingGateway(lab.merchant).rewrite(MerchantCall.GET,
+                o -> gets.getAndIncrement() == 0 ? changedOnce.apply(o) : new CallOutcome.Uncertain<>("timeout")));
+        IntentId id = approved(worker);
+        Instant first = decidedAt(id);
+        lab.clock.advance(Duration.ofMinutes(1));
+        worker.orchestrator().advance(id);
+        assertThat(lab.intent(id).state()).isEqualTo(IntentState.QUOTING);
+        assertThat(lab.drive(worker, id)).isEqualTo(IntentState.AWAITING_APPROVAL);
+        lab.clock.advance(Duration.ofMinutes(2));
+        lab.decide(worker, id, true);
+        Instant second = decidedAt(id);
+        assertThat(second).isAfter(first);
+
+        lab.clock.advance(Duration.between(lab.clock.instant(), first.plus(FIVE_MINUTES).plusSeconds(1)));
+        worker.orchestrator().advance(id);
+        assertThat(lab.intent(id).state()).as("5 minutes from the first approval do not apply").isEqualTo(
+                IntentState.APPROVED);
+        lab.clock.advance(Duration.between(lab.clock.instant(), second.plus(FIVE_MINUTES)));
+        worker.orchestrator().advance(id);
+        assertThat(lab.intent(id).state()).isEqualTo(IntentState.REJECTED);
+        assertThat(lab.intent(id).failureReason()).contains("handoff_timeout");
+    }
+
+    /** Runs recovery passes, one worker period apart, until {@code id} is terminal or {@code passes} have run. */
+    private void recoverUntilTerminal(Lab.Worker worker, IntentId id, int passes) {
+        dev.ucplab.core.recovery.RecoveryConfig config = dev.ucplab.core.recovery.RecoveryConfig.defaults();
+        dev.ucplab.core.recovery.RecoveryWorker recovery = new dev.ucplab.core.recovery.RecoveryWorker(lab.intents,
+                lab.scan, worker.orchestrator(), lab.clock, lab.clock::advance, Runnable::run, config, worker.id());
+        for (int i = 0; i < passes && !lab.intent(id).state().isTerminal(); i++) {
+            recovery.runOnce();
+            lab.clock.advance(config.period());
+        }
+    }
+
+    // Covers: 7.6 (the recovery worker picks up an APPROVED intent at a handoff merchant and drives it: the GET of the
+    // hand_off rows, never a complete)
+    @Test
+    void theRecoveryWorker_drivesApprovedAtAHandoffMerchant() {
+        Lab.Worker worker = lab.worker("w", new RewritingGateway(lab.merchant).rewrite(MerchantCall.GET, withUrl(URL)));
+        IntentId id = approved(worker);
+
+        recoverUntilTerminal(worker, id, 5);
+
+        assertThat(lab.intent(id).state()).isEqualTo(IntentState.HANDED_OFF);
+        neverCompleted(id);
+    }
+
+    // Covers: 7.6, 7.2 handoff_timeout, I5 (the recovery worker enforces the deadline: with reads that keep failing,
+    // its passes end the intent REJECTED with handoff_timeout within one pass of the 5 minutes, then send the owed cancel)
+    @Test
+    void theRecoveryWorker_enforcesTheDeadline() {
+        Lab.Worker worker = lab.worker("w", new RewritingGateway(lab.merchant).rewrite(MerchantCall.GET, uncertain()));
+        IntentId id = approved(worker);
+        Instant decided = decidedAt(id);
+
+        recoverUntilTerminal(worker, id, 200);
+
+        assertThat(lab.intent(id).state()).isEqualTo(IntentState.REJECTED);
+        assertThat(lab.intent(id).failureReason()).contains("handoff_timeout");
+        assertThat(lab.clock.instant()).isBefore(decided.plus(FIVE_MINUTES).plus(
+                dev.ucplab.core.recovery.RecoveryConfig.defaults().period().multipliedBy(2)));
+        recoverUntilTerminal(worker, id, 5);
+        lab.clock.advance(Duration.ofSeconds(5));
+        new dev.ucplab.core.recovery.RecoveryWorker(lab.intents, lab.scan, worker.orchestrator(), lab.clock,
+                lab.clock::advance, Runnable::run, dev.ucplab.core.recovery.RecoveryConfig.defaults(), worker.id())
+                .runOnce();
+        assertThat(lab.intents.attempts(id)).filteredOn(a -> a.op() == AttemptOp.CANCEL).hasSize(1);
+        assertThat(lab.intent(id).cancelPending()).isFalse();
         neverCompleted(id);
     }
 

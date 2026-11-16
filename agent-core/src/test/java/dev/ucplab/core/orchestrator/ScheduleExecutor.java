@@ -112,9 +112,23 @@ final class ScheduleExecutor {
      * flip to any other kind changes the fingerprint (merchant_changed).
      */
     static ScheduleExecutor atHandoff(FaultyMerchantModel.Mode mode) {
-        ScheduleExecutor e = new ScheduleExecutor(DEFAULT_ORCHESTRATOR, mode);
+        return atHandoff(mode, Lab::inMemoryStores);
+    }
+
+    /** The same over the store {@code storeFactory} builds (the SQL adapter, port parity, H5 C7b). */
+    static ScheduleExecutor atHandoff(FaultyMerchantModel.Mode mode,
+            java.util.function.Function<dev.ucplab.core.MutableClock, CrashHarness.Stores> storeFactory) {
+        ScheduleExecutor e = new ScheduleExecutor(DEFAULT_ORCHESTRATOR, mode, storeFactory);
         e.handoff = true;
         return e;
+    }
+
+    /**
+     * Whether the intent was proposed under an entry whose completion is handoff (its fingerprint, written once at
+     * insert): the handoff MCP store of {@link #atHandoff} or a FlipEntry's HANDOFF kind, in any run.
+     */
+    static boolean atHandoffEntry(PurchaseIntent intent) {
+        return intent.merchantFingerprint().contains("\"completion\":\"handoff\"");
     }
 
     static MerchantEntry handoffEntry(MerchantId id) {
@@ -261,10 +275,8 @@ final class ScheduleExecutor {
                 return List.of(view(false, ownStore), view(true, ownStore));
             }
             Map<IntentId, List<dev.ucplab.core.intent.AttemptOp>> ops = new HashMap<>();
-            String handoffPrint = handoffEntry(Lab.SHOP).fingerprint();
             for (IntentId id : slots.values()) {
-                if (handoff && lab.intents.findForSystem(id).map(PurchaseIntent::merchantFingerprint)
-                        .equals(Optional.of(handoffPrint))) {
+                if (lab.intents.findForSystem(id).filter(ScheduleExecutor::atHandoffEntry).isPresent()) {
                     ops.put(id, lab.intents.attempts(id).stream().map(dev.ucplab.core.intent.MerchantAttempt::op)
                             .toList());
                 }
@@ -424,6 +436,9 @@ final class ScheduleExecutor {
                     due.put(id, leasedUntil.get().plus(CLAIM_GRANULARITY));
                 } else if (expiry.isPresent()) {
                     due.put(id, expiry.get());
+                } else if (atHandoffEntry(intent) && intent.state() == dev.ucplab.core.intent.IntentState.APPROVED) {
+                    // 7.2: a failed hand_off read waits for the recovery worker's next pass (7.6), one period later.
+                    due.put(id, now.plus(Invariants.WORKER_PASS));
                 } else {
                     due.remove(id); // terminal, or stuck: I5 reports a stuck intent at the end
                 }

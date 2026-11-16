@@ -87,7 +87,8 @@ public final class TransitionTable {
             row(APPROVED, TransitionEvent.NOT_SENT, TransitionGuard.NONE, APPROVED, SideEffect.NONE),
             row(APPROVED, TransitionEvent.UNCERTAIN, TransitionGuard.NONE, APPROVED, SideEffect.NONE),
             row(APPROVED, TransitionEvent.HAND_OFF_REFUSED, TransitionGuard.NONE, FAILED_NOT_CHARGED, SideEffect.CANCEL_SESSION),
-            row(APPROVED, TransitionEvent.HAND_OFF_UNEXPECTED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT));
+            row(APPROVED, TransitionEvent.HAND_OFF_UNEXPECTED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
+            row(APPROVED, TransitionEvent.HANDOFF_TIMEOUT, TransitionGuard.NONE, IntentState.REJECTED, SideEffect.CANCEL_SESSION));
 
     private TransitionTable() {
     }

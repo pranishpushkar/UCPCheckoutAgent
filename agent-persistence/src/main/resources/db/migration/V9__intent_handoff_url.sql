@@ -2,7 +2,7 @@
 -- keeps the merchant's continue_url once it is handed off.
 --
 -- handoff_url: set once, in the same fenced write as the move to HANDED_OFF (7.2 hand_off); returned only to the owner
--- (23.2), never logged, never in an event. NULL in every other state.
+-- (23.2), never logged, never in an event. NULL in every other state, which a CHECK enforces.
 --
 -- SQLite cannot change a CHECK on an existing table, so, as V4 did, the four tables are rebuilt with standard
 -- statements: the new tables are created and filled first, the old children and then the old parent are dropped, and
@@ -33,7 +33,8 @@ CREATE TABLE purchase_intent_new (
   updated_at TEXT NOT NULL,
   merchant_fingerprint TEXT NOT NULL DEFAULT '{"completion":"agent","owned":true,"transport":"rest"}',
   handoff_url TEXT,
-  CHECK (state <> 'COMPLETED' OR order_id IS NOT NULL)
+  CHECK (state <> 'COMPLETED' OR order_id IS NOT NULL),
+  CHECK (state = 'HANDED_OFF' OR handoff_url IS NULL)
 );
 
 CREATE TABLE intent_event_new (

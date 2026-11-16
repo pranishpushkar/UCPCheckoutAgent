@@ -418,6 +418,39 @@ class MigrationsTest {
         }
     }
 
+    // Covers: 10, 7.2 hand_off, H5 C7b (the schema keeps a handoff_url only on a HANDED_OFF intent: a raw insert or
+    // update that writes one in any other state is refused; HANDED_OFF takes it, and NULL is taken in every state)
+    @Test
+    void v9_handoffUrl_isRefusedInEveryStateButHandedOff() {
+        Path file = dir.resolve("v9-handoff.db");
+        Migrations.migrate(file);
+        try (Database db = Database.open(file, 1)) {
+            int n = 0;
+            for (IntentState state : IntentState.values()) {
+                String id = "i" + n++;
+                String order = state == IntentState.COMPLETED ? "'o-" + id + "'" : "NULL";
+                String insert = "INSERT INTO purchase_intent (id, user_id, merchant_id, dedupe_key, lines_json,"
+                        + " buyer_email, state, version, order_id, created_at, updated_at, handoff_url) VALUES ('" + id
+                        + "', 'u', 'm', 'k-" + id + "', '[]', 'e', '" + state.name() + "', 0, " + order
+                        + ", 't', 't', %s)";
+                if (state == IntentState.HANDED_OFF) {
+                    exec(db, String.format(insert, "'https://shop.example/c'"));
+                    continue;
+                }
+                org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> exec(db, String.format(insert, "'https://shop.example/c'")))
+                        .as(state.name()).isInstanceOf(DatabaseException.class)
+                        .hasStackTraceContaining("CHECK");
+                exec(db, String.format(insert, "NULL"));
+                org.assertj.core.api.Assertions.assertThatThrownBy(() -> exec(db,
+                        "UPDATE purchase_intent SET handoff_url = 'https://shop.example/c' WHERE id = '" + id + "'"))
+                        .as(state.name() + " update").isInstanceOf(DatabaseException.class);
+            }
+            assertThat(column(db, "SELECT count(*) FROM purchase_intent WHERE handoff_url IS NOT NULL"))
+                    .containsExactly("1");
+        }
+    }
+
     // Covers: 10, I12 (merchant_fingerprint is NOT NULL: a raw insert that sets it to NULL is refused)
     @Test
     void v8_merchantFingerprint_isNotNull() {

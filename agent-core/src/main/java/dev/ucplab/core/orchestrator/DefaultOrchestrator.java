@@ -141,6 +141,9 @@ public final class DefaultOrchestrator implements Orchestrator {
     static final String REQUIRES_ESCALATION = "requires_escalation";
     /** 7.2 hand_off_gone: the session was canceled or is not found. */
     static final String SESSION_GONE = "session_gone";
+    /** 7.2 handoff_timeout: the reason, and how long after the approval's persisted decision an APPROVED intent waits. */
+    static final String HANDOFF_TIMEOUT = "handoff_timeout";
+    static final Duration HANDOFF_DEADLINE = Duration.ofMinutes(5);
     /** 7.2 hand_off_refused: no continue_url, or one that fails I12. */
     static final String CONTINUE_URL_NOT_ALLOWED = "continue_url_not_allowed";
     /** 7.2 hand_off_unexpected: the session shows completed or complete_in_progress. */
@@ -1659,16 +1662,34 @@ public final class DefaultOrchestrator implements Orchestrator {
      * ({@link #handOffChanged}); every other read writes no row.
      */
     private Step handOff(PurchaseIntent intent, List<MerchantAttempt> attempts, ApprovalRecord approval) {
+        // 7.2 handoff_timeout, 7.6: an approval left PENDING by a crash inside decide is recovered first, before the
+        // deadline and the GET; that write persists decided_at, from which its 5 minutes run.
+        ApprovalRecord decided = approval;
+        if (approval.status() == ApprovalStatus.PENDING) {
+            approvals.transition(approval.id(), ApprovalStatus.PENDING, ApprovalStatus.APPROVED, clock.instant(),
+                    Optional.of(intent.owner()));
+            event(intent.id(), "approval_decision_recovered", Map.of("approval_id", approval.id()));
+            decided = approvals.findLatestForSystem(intent.id()).orElseThrow();
+        }
+        // Checked before the GET, so a store that keeps failing cannot keep the intent alive. The time is the persisted
+        // decision, never the intent's updated_at, so a restart does not reset it.
+        if (decided.decidedAt().isEmpty()) {
+            // 9.2: every decision persists its time; an approval without one was not written by ApprovalService.
+            throw new IllegalStateException("7.2: approval " + approval.id() + " has no decision time");
+        }
+        if (!clock.instant().isBefore(decided.decidedAt().get().plus(HANDOFF_DEADLINE))) {
+            return handOffTimeout(intent);
+        }
         CallOutcome<CheckoutView> read = gateway(intent).get(requireSession(intent));
         if (read instanceof CallOutcome.ProtocolError<CheckoutView> e && e.httpStatus() == 404) {
             return handOffGone(intent);
         }
         if (read instanceof CallOutcome.NotSent<CheckoutView>) {
-            return pollAgain(intent, TransitionEvent.NOT_SENT);
+            return readAgainNextPass(intent, TransitionEvent.NOT_SENT);
         }
         if (!(read instanceof CallOutcome.Ok<CheckoutView> ok)) {
             // Uncertain, any other ProtocolError, or Rejected: no money can have moved; try again on the next pass.
-            return pollAgain(intent, TransitionEvent.UNCERTAIN);
+            return readAgainNextPass(intent, TransitionEvent.UNCERTAIN);
         }
         CheckoutView view = ok.value();
         if (view.status() == CheckoutStatus.COMPLETED || view.status() == CheckoutStatus.COMPLETE_IN_PROGRESS) {
@@ -1684,7 +1705,7 @@ public final class DefaultOrchestrator implements Orchestrator {
         if (url.isEmpty() || !OwnStoreGuard.continueUrlAllowed(entry(intent.merchantId()), url.get())) {
             return handOffRefused(intent, url);
         }
-        return handedOff(intent, approval, url.get());
+        return handedOff(intent, decided, url.get());
     }
 
     /** The GET shows the approved lines, currency and total, as the snapshot holds them (I2). */
@@ -1700,18 +1721,13 @@ public final class DefaultOrchestrator implements Orchestrator {
 
     /**
      * 7.2 hand_off: the fenced write stores the URL with the move; then the approval is consumed in send_complete's
-     * order (a PENDING one, left by a crash inside decide, is first recovered to APPROVED). A crash between the two
+     * order (a PENDING one was recovered to APPROVED at the start of the step, {@link #handOff}). A crash between the two
      * leaves a terminal intent with an APPROVED approval, which nothing can complete.
      */
     private Step handedOff(PurchaseIntent intent, ApprovalRecord approval, ContinueUrl url) {
         Move m = move(intent, TransitionEvent.HAND_OFF);
         PurchaseIntent next = m.next().withHandoffUrl(url);
         intents.update(next, intent.version(), workerId);
-        if (approval.status() == ApprovalStatus.PENDING) {
-            approvals.transition(approval.id(), ApprovalStatus.PENDING, ApprovalStatus.APPROVED, clock.instant(),
-                    Optional.of(intent.owner()));
-            event(intent.id(), "approval_decision_recovered", Map.of("approval_id", approval.id()));
-        }
         if (approval.status() != ApprovalStatus.CONSUMED) {
             approvals.transition(approval.id(), ApprovalStatus.APPROVED, ApprovalStatus.CONSUMED, clock.instant(),
                     Optional.empty());
@@ -1739,6 +1755,29 @@ public final class DefaultOrchestrator implements Orchestrator {
         intents.recordAttempt(read, m.next(), intent.version(), workerId);
         requoteEvents(intent, m);
         return moved(intent, m.next());
+    }
+
+    /**
+     * 7.2 handoff_timeout: REJECTED with handoff_timeout, and cancel_pending set by the row's cancel in the same fenced
+     * write. Nothing is sent in this step; the owed cancel goes on a later pass (7.6).
+     */
+    private Step handOffTimeout(PurchaseIntent intent) {
+        Move m = move(intent, TransitionEvent.HANDOFF_TIMEOUT);
+        PurchaseIntent next = m.next().withFailureReason(HANDOFF_TIMEOUT);
+        intents.update(next, intent.version(), workerId);
+        transitionEvent(intent.id(), m.transition());
+        return moved(intent, next);
+    }
+
+    /**
+     * 7.2 hand_off read not_sent or uncertain: try again on the next pass. The step is idle, so whoever drives the intent
+     * stops here and the recovery worker's next pass (7.6) reads again, where the deadline is checked first: a store
+     * that keeps failing is read once a pass, never in a tight loop, until handoff_timeout.
+     */
+    private Step readAgainNextPass(PurchaseIntent intent, TransitionEvent event) {
+        Move m = move(intent, event);
+        transitionEvent(intent.id(), m.transition());
+        return idle(intent);
     }
 
     /** 7.2 hand_off_gone: canceled or not found; nothing to cancel. */

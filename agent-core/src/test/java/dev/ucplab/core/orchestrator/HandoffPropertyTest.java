@@ -48,6 +48,14 @@ class HandoffPropertyTest {
         check("I7", mode, Invariants::i7);
     }
 
+    // Covers: I5, 7.6 (at a handoff merchant APPROVED ends within 5 minutes of the approval, plus one pass and one GET,
+    // whatever the store answers; each crash adds one lease and one pass), 14.1 Merchant strictness
+    @ParameterizedTest(name = "{0} merchant")
+    @EnumSource(FaultyMerchantModel.Mode.class)
+    void property_everyIntentTerminalOrEscalatedWithinItsBound_atAHandoffMerchant(FaultyMerchantModel.Mode mode) {
+        check("I5", mode, Invariants::i5);
+    }
+
     // Covers: I12, 7.2 hand_off_refused, 19, 14.1 Merchant strictness (with the entry flipped at random points, no
     // mutating call reaches a merchant failing I12 or changed under its intent)
     @ParameterizedTest(name = "{0} merchant")
@@ -66,21 +74,26 @@ class HandoffPropertyTest {
 
     // Covers: 14.1, 7.2 (the handoff runs reach the outcomes the properties are about, so they do not pass on
     // schedules that never hand off: an intent proposed at the handoff entry ends HANDED_OFF, REJECTED,
-    // FAILED_NOT_CHARGED or ESCALATED, never COMPLETED, and some are re-quoted with a get row)
+    // FAILED_NOT_CHARGED or ESCALATED, never COMPLETED, some are re-quoted with a get row, and the runs reach the
+    // handoff_timeout of a store whose reads keep failing, a refused continue_url and the re-quote cap)
     @Test
     void generator_defaultSeed_reachesHandOffAndARequote() {
         ScheduleExecutor executor = ScheduleExecutor.atHandoff(FaultyMerchantModel.Mode.LAB);
         Set<IntentState> ends = EnumSet.noneOf(IntentState.class);
         int requotes = 0;
+        java.util.Map<String, Integer> reasons = new java.util.TreeMap<>();
         long seed = PropertySettings.DEFAULT_SEED;
         for (int n = 0; n < 2_000; n++, seed = PropertySettings.next(seed)) {
             Observations o = executor.run(new ScheduleGenerator(seed).generate());
             o.samples().stream().filter(s -> s.phase() == Observations.Phase.END && o.attemptOps().containsKey(s.intent()))
                     .forEach(s -> ends.add(s.state()));
             requotes += (int) o.attemptOps().values().stream().filter(ops -> ops.contains(AttemptOp.GET)).count();
+            o.ownStore().endReasons().forEach(r -> reasons.merge(r, 1, Integer::sum));
         }
         assertThat(ends).contains(IntentState.HANDED_OFF, IntentState.REJECTED, IntentState.FAILED_NOT_CHARGED,
                 IntentState.ESCALATED).doesNotContain(IntentState.COMPLETED);
         assertThat(requotes).as("intents re-quoted after a hand_off_changed").isPositive();
+        assertThat(reasons).as("end reasons of the handoff runs").containsKeys("handoff_timeout",
+                "continue_url_not_allowed", "price_unstable");
     }
 }

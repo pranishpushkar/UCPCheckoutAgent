@@ -78,7 +78,8 @@ class TransitionTableTest {
             row(32, "APPROVED", "NOT_SENT", "NONE", "APPROVED", "NONE"),
             row(32, "APPROVED", "UNCERTAIN", "NONE", "APPROVED", "NONE"),
             row(33, "APPROVED", "HAND_OFF_REFUSED", "NONE", "FAILED_NOT_CHARGED", "CANCEL_SESSION"),
-            row(34, "APPROVED", "HAND_OFF_UNEXPECTED", "NONE", "ESCALATED", "ESCALATION_EVENT"));
+            row(34, "APPROVED", "HAND_OFF_UNEXPECTED", "NONE", "ESCALATED", "ESCALATION_EVENT"),
+            row(35, "APPROVED", "HANDOFF_TIMEOUT", "NONE", "REJECTED", "CANCEL_SESSION"));
 
     static Stream<Arguments> expectedRows() {
         return EXPECTED.stream();

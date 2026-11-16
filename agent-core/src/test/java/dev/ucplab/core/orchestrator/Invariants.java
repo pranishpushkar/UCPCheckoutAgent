@@ -271,11 +271,26 @@ final class Invariants {
             case PROPOSED -> s.at().plus(WORKER_PASS);
             case QUOTING -> s.at().plus(WORKER_PASS).plus(REQUEST_TIMEOUT.multipliedBy(GATEWAY_RETRIES + 1L))
                     .plus(worstBackoff(GATEWAY_RETRIES));
-            case APPROVED -> s.at().plus(WORKER_PASS).plus(c.completeRequestTimeout());
+            case APPROVED -> o.attemptOps().containsKey(s.intent())
+                    // 7.6: at a handoff merchant, 5 minutes from the approval in all, then one pass and one GET.
+                    ? lastDecision(s, o).plus(DefaultOrchestrator.HANDOFF_DEADLINE).plus(WORKER_PASS)
+                            .plus(REQUEST_TIMEOUT.multipliedBy(GATEWAY_RETRIES + 1L)).plus(worstBackoff(GATEWAY_RETRIES))
+                    : s.at().plus(WORKER_PASS).plus(c.completeRequestTimeout());
             case AWAITING_APPROVAL -> s.approvalExpiresAt().orElse(s.at().plus(DefaultApprovalService.DEFAULT_TTL));
             case COMPLETING, RECONCILING -> s.at().plus(c.reconcileDeadline());
             case COMPLETED, HANDED_OFF, REJECTED, FAILED_NOT_CHARGED, ESCALATED -> Instant.MAX;
         };
+    }
+
+    /** The time of the user's last accepted approval of the sample's intent, at or before the sample. */
+    private static Instant lastDecision(Observations.Sample s, Observations o) {
+        Instant last = s.at();
+        for (Observations.Decision d : o.decisions()) {
+            if (d.intent().equals(s.intent()) && d.approve() && !d.at().isAfter(s.at())) {
+                last = d.at();
+            }
+        }
+        return last;
     }
 
     private static Instant extendForCrashes(Instant bound, Instant start, List<Instant> crashes, Duration lease) {

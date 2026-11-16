@@ -21,8 +21,9 @@ import java.util.function.ToLongFunction;
 /**
  * Passes every call to the merchant and adds a continue_url on {@code shopDomain} to every answer, as a handoff store
  * does (7.2 hand_off, H5 C7a). A GET answer shows each line at the store's price now ({@code priceNow}), as a live
- * cart does, with the subtotal, tax and total to match, so a price change after the quote is a hand_off_changed. Only
- * what the orchestrator is told changes.
+ * cart does, with the subtotal, tax and total to match, so a price change after the quote is a hand_off_changed. The
+ * store of every even-numbered session (the second of a run) keeps failing its reads: each GET reaches the merchant and
+ * its answer is lost (Uncertain), so those intents meet the 7.2 handoff_timeout. Only what the orchestrator is told changes.
  */
 final class ContinueUrlGateway implements MerchantGateway {
 
@@ -90,6 +91,21 @@ final class ContinueUrlGateway implements MerchantGateway {
 
     @Override
     public CallOutcome<CheckoutView> get(SessionId id) {
-        return withUrl(repriced(delegate.get(id)));
+        CallOutcome<CheckoutView> read = delegate.get(id);
+        return keepsFailing(id) ? new CallOutcome.Uncertain<>("read lost") : withUrl(repriced(read));
+    }
+
+    /** Whether the session's store keeps failing its reads: its number, after the last '-', is even. */
+    static boolean keepsFailing(SessionId id) {
+        String v = id.value();
+        int dash = v.lastIndexOf('-');
+        if (dash < 0) {
+            return false;
+        }
+        try {
+            return Integer.parseInt(v.substring(dash + 1)) % 2 == 0;
+        } catch (NumberFormatException e) {
+            return false;
+        }
     }
 }
