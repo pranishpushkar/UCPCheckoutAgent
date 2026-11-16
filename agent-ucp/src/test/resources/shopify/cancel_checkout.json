@@ -1,0 +1,195 @@
+{
+  "id": 3,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"continue_url\": \"https://example-dev.myshopify.com/...\", \"currency\": \"USD\", \"discounts\": {\"applied\": [], \"codes\": []}, \"expires_at\": \"2026-11-16T04:40:46Z\", \"fulfillment\": {\"methods\": []}, \"id\": \"gid://shopify/Checkout/fakeCheckoutToken0000001?key=<redacted>\", \"line_items\": [{\"id\": \"gid://shopify/CartLine/00000000-0000-4000-8000-000000000001?cart=fakeCheckoutToken0000001\", \"item\": {\"id\": \"gid://shopify/ProductVariant/51192065753174\", \"price\": 69995, \"title\": \"The Complete Snowboard - Ice\"}, \"quantity\": 1, \"totals\": [{\"amount\": 69995, \"display_text\": \"Subtotal\", \"type\": \"subtotal\"}, {\"amount\": 69995, \"display_text\": \"Total\", \"type\": \"total\"}]}], \"links\": [{\"title\": \"Privacy Policy\", \"type\": \"privacy_policy\", \"url\": \"https://checkout.shopify.com/1000000001/policies/1000000002.html?locale=en\"}], \"messages\": [], \"payment\": {\"instruments\": []}, \"status\": \"canceled\", \"totals\": [{\"amount\": 69995, \"display_text\": \"Subtotal\", \"type\": \"subtotal\"}, {\"amount\": 69995, \"display_text\": \"Total\", \"type\": \"total\"}], \"ucp\": {\"capabilities\": {\"dev.shopify.catalog\": [{\"extends\": [\"dev.ucp.shopping.catalog.search\", \"dev.ucp.shopping.catalog.lookup\"], \"requires\": {\"protocol\": {\"min\": \"2026-04-08\"}}, \"schema\": \"https://shopify.dev/ucp/schemas/2026-04-08/shopify_catalog.json\", \"spec\": \"https://shopify.dev/docs/agents/catalog/storefront-catalog\", \"version\": \"2026-04-08\"}], \"dev.ucp.shopping.cart\": [{\"schema\": \"https://ucp.dev/2026-04-08/schemas/shopping/cart.json\", \"spec\": \"https://ucp.dev/2026-04-08/specification/cart\", \"version\": \"2026-04-08\"}], \"dev.ucp.shopping.catalog.lookup\": [{\"schema\": \"https://ucp.dev/2026-04-08/schemas/shopping/catalog_lookup.json\", \"spec\": \"https://ucp.dev/2026-04-08/specification/catalog\", \"version\": \"2026-04-08\"}], \"dev.ucp.shopping.catalog.search\": [{\"schema\": \"https://ucp.dev/2026-04-08/schemas/shopping/catalog_search.json\", \"spec\": \"https://ucp.dev/2026-04-08/specification/catalog\", \"version\": \"2026-04-08\"}], \"dev.ucp.shopping.checkout\": [{\"schema\": \"https://ucp.dev/2026-04-08/schemas/shopping/checkout.json\", \"spec\": \"https://ucp.dev/2026-04-08/specification/checkout\", \"version\": \"2026-04-08\"}], \"dev.ucp.shopping.discount\": [{\"extends\": [\"dev.ucp.shopping.checkout\", \"dev.ucp.shopping.cart\"], \"requires\": {\"protocol\": {\"min\": \"2026-04-08\"}}, \"schema\": \"https://ucp.dev/2026-04-08/schemas/shopping/discount.json\", \"spec\": \"https://ucp.dev/2026-04-08/specification/discount\", \"version\": \"2026-04-08\"}], \"dev.ucp.shopping.fulfillment\": [{\"config\": {\"allows_method_combinations\": [[\"shipping\"]], \"allows_multi_destination\": {\"shipping\": false}}, \"extends\": [\"dev.ucp.shopping.checkout\", \"dev.ucp.shopping.cart\"], \"requires\": {\"protocol\": {\"min\": \"2026-04-08\"}}, \"schema\": \"https://ucp.dev/2026-04-08/schemas/shopping/fulfillment.json\", \"spec\": \"https://ucp.dev/2026-04-08/specification/fulfillment\", \"version\": \"2026-04-08\"}], \"dev.ucp.shopping.order\": [{\"schema\": \"https://ucp.dev/2026-04-08/schemas/shopping/order.json\", \"spec\": \"https://ucp.dev/2026-04-08/specification/order/\", \"version\": \"2026-04-08\"}]}, \"payment_handlers\": {\"dev.shopify.card\": [{\"config\": {\"payment_methods\": [{\"enabled_card_brands\": [\"bogus\"], \"type\": \"card\"}]}, \"id\": \"shopify.card\", \"schema\": \"https://shopify.dev/ucp/card-payment-handler/2026-01-15/schema.json\", \"spec\": \"https://shopify.dev/ucp/card-payment-handler/2026-01-15/spec.md\", \"version\": \"2026-01-15\"}]}, \"services\": {\"dev.ucp.shopping\": []}, \"status\": \"success\", \"version\": \"2026-04-08\"}}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "continue_url": "https://example-dev.myshopify.com/...",
+      "currency": "USD",
+      "discounts": {
+        "applied": [],
+        "codes": []
+      },
+      "expires_at": "2026-11-16T04:40:46Z",
+      "fulfillment": {
+        "methods": []
+      },
+      "id": "gid://shopify/Checkout/fakeCheckoutToken0000001?key=<redacted>",
+      "line_items": [
+        {
+          "id": "gid://shopify/CartLine/00000000-0000-4000-8000-000000000001?cart=fakeCheckoutToken0000001",
+          "item": {
+            "id": "gid://shopify/ProductVariant/51192065753174",
+            "price": 69995,
+            "title": "The Complete Snowboard - Ice"
+          },
+          "quantity": 1,
+          "totals": [
+            {
+              "amount": 69995,
+              "display_text": "Subtotal",
+              "type": "subtotal"
+            },
+            {
+              "amount": 69995,
+              "display_text": "Total",
+              "type": "total"
+            }
+          ]
+        }
+      ],
+      "links": [
+        {
+          "title": "Privacy Policy",
+          "type": "privacy_policy",
+          "url": "https://checkout.shopify.com/1000000001/policies/1000000002.html?locale=en"
+        }
+      ],
+      "messages": [],
+      "payment": {
+        "instruments": []
+      },
+      "status": "canceled",
+      "totals": [
+        {
+          "amount": 69995,
+          "display_text": "Subtotal",
+          "type": "subtotal"
+        },
+        {
+          "amount": 69995,
+          "display_text": "Total",
+          "type": "total"
+        }
+      ],
+      "ucp": {
+        "capabilities": {
+          "dev.shopify.catalog": [
+            {
+              "extends": [
+                "dev.ucp.shopping.catalog.search",
+                "dev.ucp.shopping.catalog.lookup"
+              ],
+              "requires": {
+                "protocol": {
+                  "min": "2026-04-08"
+                }
+              },
+              "schema": "https://shopify.dev/ucp/schemas/2026-04-08/shopify_catalog.json",
+              "spec": "https://shopify.dev/docs/agents/catalog/storefront-catalog",
+              "version": "2026-04-08"
+            }
+          ],
+          "dev.ucp.shopping.cart": [
+            {
+              "schema": "https://ucp.dev/2026-04-08/schemas/shopping/cart.json",
+              "spec": "https://ucp.dev/2026-04-08/specification/cart",
+              "version": "2026-04-08"
+            }
+          ],
+          "dev.ucp.shopping.catalog.lookup": [
+            {
+              "schema": "https://ucp.dev/2026-04-08/schemas/shopping/catalog_lookup.json",
+              "spec": "https://ucp.dev/2026-04-08/specification/catalog",
+              "version": "2026-04-08"
+            }
+          ],
+          "dev.ucp.shopping.catalog.search": [
+            {
+              "schema": "https://ucp.dev/2026-04-08/schemas/shopping/catalog_search.json",
+              "spec": "https://ucp.dev/2026-04-08/specification/catalog",
+              "version": "2026-04-08"
+            }
+          ],
+          "dev.ucp.shopping.checkout": [
+            {
+              "schema": "https://ucp.dev/2026-04-08/schemas/shopping/checkout.json",
+              "spec": "https://ucp.dev/2026-04-08/specification/checkout",
+              "version": "2026-04-08"
+            }
+          ],
+          "dev.ucp.shopping.discount": [
+            {
+              "extends": [
+                "dev.ucp.shopping.checkout",
+                "dev.ucp.shopping.cart"
+              ],
+              "requires": {
+                "protocol": {
+                  "min": "2026-04-08"
+                }
+              },
+              "schema": "https://ucp.dev/2026-04-08/schemas/shopping/discount.json",
+              "spec": "https://ucp.dev/2026-04-08/specification/discount",
+              "version": "2026-04-08"
+            }
+          ],
+          "dev.ucp.shopping.fulfillment": [
+            {
+              "config": {
+                "allows_method_combinations": [
+                  [
+                    "shipping"
+                  ]
+                ],
+                "allows_multi_destination": {
+                  "shipping": false
+                }
+              },
+              "extends": [
+                "dev.ucp.shopping.checkout",
+                "dev.ucp.shopping.cart"
+              ],
+              "requires": {
+                "protocol": {
+                  "min": "2026-04-08"
+                }
+              },
+              "schema": "https://ucp.dev/2026-04-08/schemas/shopping/fulfillment.json",
+              "spec": "https://ucp.dev/2026-04-08/specification/fulfillment",
+              "version": "2026-04-08"
+            }
+          ],
+          "dev.ucp.shopping.order": [
+            {
+              "schema": "https://ucp.dev/2026-04-08/schemas/shopping/order.json",
+              "spec": "https://ucp.dev/2026-04-08/specification/order/",
+              "version": "2026-04-08"
+            }
+          ]
+        },
+        "payment_handlers": {
+          "dev.shopify.card": [
+            {
+              "config": {
+                "payment_methods": [
+                  {
+                    "enabled_card_brands": [
+                      "bogus"
+                    ],
+                    "type": "card"
+                  }
+                ]
+              },
+              "id": "shopify.card",
+              "schema": "https://shopify.dev/ucp/card-payment-handler/2026-01-15/schema.json",
+              "spec": "https://shopify.dev/ucp/card-payment-handler/2026-01-15/spec.md",
+              "version": "2026-01-15"
+            }
+          ]
+        },
+        "services": {
+          "dev.ucp.shopping": []
+        },
+        "status": "success",
+        "version": "2026-04-08"
+      }
+    }
+  }
+}

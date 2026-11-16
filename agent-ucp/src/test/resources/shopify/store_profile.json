@@ -1,0 +1,197 @@
+{
+  "ucp": {
+    "capabilities": {
+      "dev.shopify.catalog": [
+        {
+          "extends": [
+            "dev.ucp.shopping.catalog.search",
+            "dev.ucp.shopping.catalog.lookup"
+          ],
+          "requires": {
+            "protocol": {
+              "min": "2026-08-25"
+            }
+          },
+          "schema": "https://shopify.dev/ucp/schemas/2026-08-25/shopify_catalog.json",
+          "spec": "https://shopify.dev/docs/agents/catalog/storefront-catalog",
+          "version": "2026-08-25"
+        }
+      ],
+      "dev.shopify.shopping.declared_fields": [
+        {
+          "extends": [
+            "dev.ucp.shopping.cart",
+            "dev.ucp.shopping.checkout",
+            "dev.ucp.shopping.order"
+          ],
+          "requires": {
+            "protocol": {
+              "min": "2026-08-25"
+            }
+          },
+          "schema": "https://shopify.dev/ucp/schemas/2026-08-25/shopify_shopping_declared_fields.json",
+          "spec": "https://shopify.dev/docs/agents/carts-and-checkout/declared-fields",
+          "version": "2026-08-25"
+        }
+      ],
+      "dev.ucp.common.ask": [
+        {
+          "schema": "https://ucp.dev/2026-08-25/schemas/common/ask.json",
+          "spec": "https://ucp.dev/2026-08-25/specification/common/ask/",
+          "version": "2026-08-25"
+        }
+      ],
+      "dev.ucp.common.identity_linking": [
+        {
+          "config": {
+            "providers": {
+              "app.shop.accounts": [
+                {
+                  "auth_url": "https://accounts.shop.app",
+                  "type": "oauth2"
+                }
+              ]
+            },
+            "scopes": {}
+          },
+          "schema": "https://ucp.dev/2026-08-25/schemas/common/identity_linking.json",
+          "spec": "https://ucp.dev/2026-08-25/specification/common/identity-linking/",
+          "version": "2026-08-25"
+        }
+      ],
+      "dev.ucp.shopping.buyer_consent": [
+        {
+          "extends": [
+            "dev.ucp.shopping.cart",
+            "dev.ucp.shopping.checkout"
+          ],
+          "requires": {
+            "protocol": {
+              "min": "2026-08-25"
+            }
+          },
+          "schema": "https://ucp.dev/2026-08-25/schemas/shopping/buyer_consent.json",
+          "spec": "https://ucp.dev/2026-08-25/specification/shopping/extensions/buyer-consent/",
+          "version": "2026-08-25"
+        }
+      ],
+      "dev.ucp.shopping.cart": [
+        {
+          "schema": "https://ucp.dev/2026-08-25/schemas/shopping/cart.json",
+          "spec": "https://ucp.dev/2026-08-25/specification/shopping/cart/",
+          "version": "2026-08-25"
+        }
+      ],
+      "dev.ucp.shopping.catalog.lookup": [
+        {
+          "schema": "https://ucp.dev/2026-08-25/schemas/shopping/catalog_lookup.json",
+          "spec": "https://ucp.dev/2026-08-25/specification/shopping/catalog/",
+          "version": "2026-08-25"
+        }
+      ],
+      "dev.ucp.shopping.catalog.search": [
+        {
+          "schema": "https://ucp.dev/2026-08-25/schemas/shopping/catalog_search.json",
+          "spec": "https://ucp.dev/2026-08-25/specification/shopping/catalog/",
+          "version": "2026-08-25"
+        }
+      ],
+      "dev.ucp.shopping.checkout": [
+        {
+          "schema": "https://ucp.dev/2026-08-25/schemas/shopping/checkout.json",
+          "spec": "https://ucp.dev/2026-08-25/specification/shopping/checkout/",
+          "version": "2026-08-25"
+        }
+      ],
+      "dev.ucp.shopping.discount": [
+        {
+          "extends": [
+            "dev.ucp.shopping.checkout",
+            "dev.ucp.shopping.cart"
+          ],
+          "requires": {
+            "protocol": {
+              "min": "2026-08-25"
+            }
+          },
+          "schema": "https://ucp.dev/2026-08-25/schemas/shopping/discount.json",
+          "spec": "https://ucp.dev/2026-08-25/specification/shopping/extensions/discount/",
+          "version": "2026-08-25"
+        }
+      ],
+      "dev.ucp.shopping.fulfillment": [
+        {
+          "config": {
+            "method_combinations": [
+              [
+                "shipping"
+              ]
+            ],
+            "multi_destination": []
+          },
+          "extends": [
+            "dev.ucp.shopping.checkout",
+            "dev.ucp.shopping.cart"
+          ],
+          "requires": {
+            "protocol": {
+              "min": "2026-08-25"
+            }
+          },
+          "schema": "https://ucp.dev/2026-08-25/schemas/shopping/fulfillment.json",
+          "spec": "https://ucp.dev/2026-08-25/specification/shopping/extensions/fulfillment/",
+          "version": "2026-08-25"
+        }
+      ],
+      "dev.ucp.shopping.order": [
+        {
+          "schema": "https://ucp.dev/2026-08-25/schemas/shopping/order.json",
+          "spec": "https://ucp.dev/2026-08-25/specification/shopping/order/",
+          "version": "2026-08-25"
+        }
+      ],
+      "dev.ucp.shopping.permalink": [
+        {
+          "config": {
+            "endpoint": "https://example-dev.myshopify.com/buy"
+          },
+          "schema": "https://ucp.dev/2026-08-25/schemas/shopping/permalink.json",
+          "spec": "https://ucp.dev/2026-08-25/specification/permalink/",
+          "version": "2026-08-25"
+        }
+      ]
+    },
+    "payment_handlers": {},
+    "services": {
+      "dev.ucp.common": [
+        {
+          "endpoint": "https://example-dev.myshopify.com/api/ucp/mcp",
+          "schema": "https://ucp.dev/2026-08-25/services/common/mcp.openrpc.json",
+          "spec": "https://ucp.dev/2026-08-25/specification/overview/",
+          "transport": "mcp",
+          "version": "2026-08-25"
+        }
+      ],
+      "dev.ucp.shopping": [
+        {
+          "endpoint": "https://example-dev.myshopify.com/api/ucp/mcp",
+          "schema": "https://ucp.dev/2026-08-25/services/shopping/mcp.openrpc.json",
+          "spec": "https://ucp.dev/2026-08-25/specification/overview/",
+          "transport": "mcp",
+          "version": "2026-08-25"
+        },
+        {
+          "schema": "https://ucp.dev/2026-08-25/services/shopping/embedded.openrpc.json",
+          "spec": "https://ucp.dev/2026-08-25/specification/overview/",
+          "transport": "embedded",
+          "version": "2026-08-25"
+        }
+      ]
+    },
+    "supported_versions": {
+      "2026-01-23": "https://example-dev.myshopify.com/.well-known/ucp/2026-01-23",
+      "2026-04-08": "https://example-dev.myshopify.com/.well-known/ucp/2026-04-08"
+    },
+    "version": "2026-08-25"
+  }
+}
