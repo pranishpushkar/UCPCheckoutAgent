@@ -114,8 +114,9 @@ class MerchantsFileTest {
         table.put("payment_handler with an unknown key", new String[] {"merchants:\n" + merchant("a", "    payment_handler:\n      id: h\n      type: card\n      credential_type: token\n      token_ref: env:X\n      " + CANARY + ": 1\n"), MerchantsFile.UNKNOWN_KEY});
         table.put("a token in place of a token_ref", new String[] {"merchants:\n" + merchant("a", "    payment_handler:\n      id: h\n      type: card\n      credential_type: token\n      token_ref: tok_" + CANARY + "\n"), MerchantsFile.BAD_TOKEN_REF});
         table.put("a token_ref for a lowercase variable", new String[] {"merchants:\n" + merchant("a", "    payment_handler:\n      id: h\n      type: card\n      credential_type: token\n      token_ref: env:lower\n"), MerchantsFile.BAD_TOKEN_REF});
-        table.put("transport: mcp", new String[] {"merchants:\n" + merchant("a", "    transport: mcp\n"), MerchantsFile.NOT_SUPPORTED});
-        table.put("completion: handoff", new String[] {"merchants:\n" + merchant("a", "    completion: handoff\n"), MerchantsFile.NOT_SUPPORTED});
+        // H5 C9: transport: mcp is read now; mcp alone lacks its credentials (MerchantsFileH5Test). completion: handoff is
+        // accepted by the file and refused by the stack: load_completionHandoff_isReadButTheStackRefusesIt.
+        table.put("transport: mcp", new String[] {"merchants:\n" + merchant("a", "    transport: mcp\n"), MerchantsFile.MCP_INCOMPLETE});
         table.put("transport of the wrong type", new String[] {"merchants:\n" + merchant("a", "    transport: 3\n"), MerchantsFile.WRONG_TYPE});
         table.put("unparsable yaml", new String[] {"merchants: [unclosed " + CANARY + "\n", MerchantsFile.UNREADABLE});
 
@@ -126,6 +127,18 @@ class MerchantsFileTest {
         });
         assertThatThrownBy(() -> MerchantsFile.load(dir.resolve("missing.yaml"), AgentProfile.LOCAL))
                 .hasMessage(MerchantsFile.UNREADABLE);
+    }
+
+    // Covers: 19, 7.2, H5 C9 (the completion: handoff row: the file accepts it, and the stack refuses it with the
+    // temporary reason until C7 adds the handoff path; C7 removes the refusal and changes this row in the same commit)
+    @Test
+    void load_completionHandoff_isReadButTheStackRefusesIt() throws IOException {
+        MerchantSettings m = load("merchants:\n" + merchant("a", "    completion: handoff\n"), AgentProfile.LOCAL)
+                .getFirst();
+
+        assertThat(m.completion()).isEqualTo(dev.ucplab.core.merchant.Completion.HANDOFF);
+        assertThatThrownBy(() -> MerchantWiring.requireBuildable(m)).isInstanceOf(IllegalStateException.class)
+                .hasMessage(MerchantWiring.HANDOFF_NOT_WIRED);
     }
 
     // Covers: 19, 23.3 (lab_url is a local-profile key: in demo and prod the lab routes do not exist, so the key is refused)

@@ -211,6 +211,7 @@ public class StackConfiguration {
                                         Clock clock, RandomGenerator random, IdGenerator ids) {
         Map<MerchantId, UcpHttpGateway> byId = new LinkedHashMap<>();
         for (MerchantSettings s : properties.merchants()) {
+            MerchantWiring.requireBuildable(s);
             byId.put(s.id(), new UcpHttpGateway(s.entry(s.fileStatus()), ucp, new JdkHttpTransport(ucp), breakers, clock,
                     Sleeper.THREAD, random, ids, s.endpointHosts(), MerchantWiring.requiredHandler(s), s.ucpVersions()));
         }

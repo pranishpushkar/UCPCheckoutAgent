@@ -175,6 +175,24 @@ class LoggingTest {
                 .allMatch(l -> l.contains("[redacted]"));
     }
 
+    // Covers: I8, 8.4, H5 C9 (the buyer IP given as BUYER_IP is in no log line: not at startup, and not when its holder
+    // or the settings are logged)
+    @Test
+    void buyerIp_isInNoLogLine() throws IOException {
+        String ip = "81.2.69.160";
+        logs = new LogCapture();
+        service = TestService.start(dir, Map.of("BUYER_IP", ip), Optional.empty());
+        Logger plant = LoggerFactory.getLogger("test.plant");
+
+        plant.warn("buyer ip is {}", dev.ucplab.ucp.registry.BuyerIp.parse(ip));
+        plant.warn("settings {}", dev.ucplab.service.config.ServiceProperties.from(
+                dev.ucplab.service.config.Environment.of(Map.of("APPROVAL_SECRET",
+                        "s3cr3t-value-0123456789abcdefghijklmnop", "DATABASE_URL",
+                        "jdbc:sqlite:" + dir.resolve("p.db"), "BUYER_IP", ip))));
+
+        assertThat(logs.text()).contains("BuyerIp[redacted]").doesNotContain(ip);
+    }
+
     // Covers: I8, 10, H5 C1 (the second layer masks a merchant access key, ?key= or &key=, in a checkout id or a
     // continue_url that a library or a careless line writes)
     @Test

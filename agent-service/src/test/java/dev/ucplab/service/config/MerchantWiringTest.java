@@ -83,4 +83,24 @@ class MerchantWiringTest {
         assertThatThrownBy(() -> MerchantWiring.requireMatchingInstrument(settings(Optional.empty()), sample))
                 .isInstanceOf(IllegalStateException.class).message().doesNotContain(TOKEN);
     }
+
+    // Covers: 19, 8.5, 7.2, H5 C9 (an MCP or a handoff merchant is read from the file but refuses to build a stack until
+    // its gateway (C6) and its orchestrator path (C7) exist: no REST discovery at a store, and never a complete at a
+    // handoff merchant)
+    @Test
+    void mcpOrHandoffMerchant_refusesToBuild_untilItsPathExists() {
+        MerchantSettings mcp = new MerchantSettings(A, "Store", URI.create("https://example-dev.myshopify.com"),
+                MerchantStatus.ACTIVE, Optional.empty(), Set.of(), MerchantSettings.DEFAULT_VERSIONS, Optional.empty(),
+                dev.ucplab.core.merchant.Transport.MCP, dev.ucplab.core.merchant.Completion.HANDOFF, true,
+                Optional.of("example-dev.myshopify.com"), Optional.of("env:SHOPIFY_CLIENT"), false);
+        MerchantSettings restHandoff = new MerchantSettings(A, "Shop", URI.create("http://127.0.0.1:9101"),
+                MerchantStatus.ACTIVE, Optional.empty(), Set.of(), MerchantSettings.DEFAULT_VERSIONS, Optional.empty(),
+                dev.ucplab.core.merchant.Transport.REST, dev.ucplab.core.merchant.Completion.HANDOFF, true,
+                Optional.empty(), Optional.empty(), false);
+
+        assertThatThrownBy(() -> MerchantWiring.requireBuildable(mcp)).hasMessage(MerchantWiring.MCP_NOT_WIRED);
+        assertThatThrownBy(() -> MerchantWiring.requireBuildable(restHandoff))
+                .hasMessage(MerchantWiring.HANDOFF_NOT_WIRED);
+        MerchantWiring.requireBuildable(settings(Optional.empty()));
+    }
 }

@@ -47,6 +47,24 @@ final class MerchantWiring {
         MerchantInstruments.requireMatchingHandler(settings.id(), requiredHandler(settings), instrument);
     }
 
+    // TODO(H5 C6): remove once McpMerchantGateway is wired by transport: mcp.
+    static final String MCP_NOT_WIRED = "a transport: mcp merchant has no gateway in this build";
+    // TODO(H5 C7): remove once the orchestrator takes the hand_off rows of 7.2.
+    static final String HANDOFF_NOT_WIRED = "a completion: handoff merchant has no handoff path in this build";
+
+    /**
+     * Refuses a merchant whose path does not exist yet, so the stack never falls back to behaviour it must not have: no
+     * REST discovery at an MCP store, and never a complete at a handoff merchant (19, 7.2).
+     */
+    static void requireBuildable(MerchantSettings settings) {
+        if (settings.transport() == dev.ucplab.core.merchant.Transport.MCP) {
+            throw new IllegalStateException(MCP_NOT_WIRED);
+        }
+        if (settings.completion() == dev.ucplab.core.merchant.Completion.HANDOFF) {
+            throw new IllegalStateException(HANDOFF_NOT_WIRED);
+        }
+    }
+
     static final String IN_FLIGHT_MERCHANT_REMOVED =
             "an intent in flight names a merchant that MERCHANTS_FILE does not list; restore the merchant or finish its intents";
 

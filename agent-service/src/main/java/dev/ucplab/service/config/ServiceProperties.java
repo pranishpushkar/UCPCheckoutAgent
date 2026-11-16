@@ -7,6 +7,7 @@ import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantStatus;
 import dev.ucplab.core.policy.PolicyConfig;
+import dev.ucplab.ucp.registry.BuyerIp;
 import dev.ucplab.ucp.registry.MerchantSettings;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -45,6 +46,11 @@ public final class ServiceProperties {
     static final String SECRET_PLACEHOLDER = "APPROVAL_SECRET is a placeholder, which the prod profile refuses";
     static final String APPROVAL_OFF = "POLICY_FILE turns approval off, which the prod profile refuses";
     static final String MERCHANT_INVALID = "MERCHANT_URL must be an http URL";
+    static final String MERCHANT_NOT_LOOPBACK =
+            "MERCHANT_URL must be on a loopback host (I12); list any other merchant in MERCHANTS_FILE with owned: true";
+    static final String BUYER_IP_REQUIRED = "BUYER_IP must be set for a merchant with requires_buyer_ip";
+    static final String BUYER_IP_NOT_LOCAL = "BUYER_IP is only accepted in the local profile";
+    static final String CREDENTIAL_UNSET = "a merchant's credential_ref names a variable that is not set";
     static final String USERS_INVALID = "LOCAL_USERS must be a comma-separated list of lowercase names";
     static final String LAB_URL_INVALID = "MERCHANT_LAB_URL must be an http URL";
     static final String MODEL_INVALID = "AGENT_MODEL must be scripted or gemini";
@@ -80,12 +86,13 @@ public final class ServiceProperties {
     private final Optional<ModelKey> modelKey;
     private final Optional<URI> modelBaseUrl;
     private final URI merchantLabUrl;
+    private final Optional<BuyerIp> buyerIp;
 
     private ServiceProperties(AgentProfile profile, Path databaseFile, byte[] approvalSecret, ApprovalSecret approvalKey,
                               PolicyConfig policy, MerchantEntry merchant, List<MerchantSettings> merchants,
                               List<String> localUsers,
                               List<String> publicOrigins, AgentModel agentModel, Optional<ModelKey> modelKey,
-                              Optional<URI> modelBaseUrl, URI merchantLabUrl) {
+                              Optional<URI> modelBaseUrl, URI merchantLabUrl, Optional<BuyerIp> buyerIp) {
         this.profile = profile;
         this.databaseFile = databaseFile;
         this.approvalSecret = approvalSecret;
@@ -98,6 +105,7 @@ public final class ServiceProperties {
         this.agentModel = agentModel;
         this.modelKey = modelKey;
         this.modelBaseUrl = modelBaseUrl;
+        this.buyerIp = buyerIp;
         this.merchantLabUrl = merchantLabUrl;
     }
 
@@ -189,11 +197,43 @@ public final class ServiceProperties {
         URI fallbackLab = labUrl;
         List<MerchantSettings> merchants = env.get("MERCHANTS_FILE").map(f -> MerchantsFile.load(Path.of(f), profile))
                 .orElseGet(() -> List.of(MerchantSettings.single(fallback, fallbackLab)));
+        if (env.get("MERCHANTS_FILE").isEmpty() && !MerchantEntry.isLoopback(merchantUrl)) {
+            // The fallback merchant cannot say owned: true, so off loopback it would be unowned (I12).
+            throw new IllegalStateException(MERCHANT_NOT_LOOPBACK);
+        }
+        Optional<BuyerIp> buyerIp = buyerIp(env, profile, merchants);
+        for (MerchantSettings m : merchants) {
+            if (m.credentialRef().isPresent()
+                    && env.get(m.credentialRef().get().substring("env:".length())).isEmpty()) {
+                throw new IllegalStateException(CREDENTIAL_UNSET);
+            }
+        }
         MerchantSettings first = merchants.getFirst();
 
         return new ServiceProperties(profile, databaseFile, secretBytes, approvalKey, policy, first.entry(first.fileStatus()), merchants, localUsers,
                 origins(env.get("PUBLIC_ORIGIN").orElse(DEFAULT_ORIGINS)), agentModel,
-                agentModel == AgentModel.GEMINI ? modelKey : Optional.empty(), modelBaseUrl, first.labUrl().orElse(fallbackLab));
+                agentModel == AgentModel.GEMINI ? modelKey : Optional.empty(), modelBaseUrl, first.labUrl().orElse(fallbackLab), buyerIp);
+    }
+
+    /**
+     * BUYER_IP (8.4, 19): from the environment only, in the local profile only, a public IP literal ({@link BuyerIp});
+     * required when a merchant has requires_buyer_ip. Every refusal is a fixed message without the value (I8).
+     */
+    private static Optional<BuyerIp> buyerIp(Environment env, AgentProfile profile, List<MerchantSettings> merchants) {
+        Optional<String> raw = env.get("BUYER_IP");
+        if (raw.isPresent() && profile != AgentProfile.LOCAL) {
+            throw new IllegalStateException(BUYER_IP_NOT_LOCAL);
+        }
+        Optional<BuyerIp> ip;
+        try {
+            ip = raw.map(BuyerIp::parse);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalStateException(e.getMessage()); // one of BuyerIp's fixed reasons
+        }
+        if (ip.isEmpty() && merchants.stream().anyMatch(MerchantSettings::requiresBuyerIp)) {
+            throw new IllegalStateException(BUYER_IP_REQUIRED);
+        }
+        return ip;
     }
 
     /** A test points the live client at a loopback stub; any other host could receive the key, so it is refused. */
@@ -254,6 +294,11 @@ public final class ServiceProperties {
     }
 
     /** Every configured merchant, in file order (DESIGN 19); one, from {@code MERCHANT_URL}, without a file. */
+    /** The operator's BUYER_IP, when set (local profile only, 8.4). Its toString is masked (I8). */
+    public Optional<BuyerIp> buyerIp() {
+        return buyerIp;
+    }
+
     public List<MerchantSettings> merchants() {
         return merchants;
     }

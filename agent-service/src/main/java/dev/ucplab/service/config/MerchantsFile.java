@@ -1,8 +1,11 @@
 package dev.ucplab.service.config;
 
 import dev.ucplab.core.config.AgentProfile;
+import dev.ucplab.core.merchant.Completion;
+import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantStatus;
+import dev.ucplab.core.merchant.Transport;
 import dev.ucplab.ucp.UcpHttpGateway;
 import dev.ucplab.ucp.registry.MerchantSettings;
 import java.io.IOException;
@@ -28,8 +31,9 @@ import org.yaml.snakeyaml.error.YAMLException;
 /**
  * Reads {@code MERCHANTS_FILE} ({@code merchants.yaml}, DESIGN 19) into {@link MerchantSettings}. Like
  * {@link PolicyFile}: SnakeYAML's safe constructor only, an unknown key refused, and every refusal one of the fixed
- * messages below, which name the rule and never echo a value or the file (I8). {@code transport: mcp} and
- * {@code completion: handoff} are refused as not supported yet; nothing reads them for behaviour.
+ * messages below, which name the rule and never echo a value or the file (I8). The real-merchant keys (19 "Real
+ * merchants (H5)"): {@code transport}, {@code completion}, {@code owned}, {@code shop_domain}, {@code credential_ref}
+ * and {@code requires_buyer_ip}. The buyer IP itself is never a file value: it is read from the environment only.
  */
 final class MerchantsFile {
 
@@ -48,18 +52,28 @@ final class MerchantsFile {
     static final String BAD_VERSION = "MERCHANTS_FILE has a ucp_versions pin the agent does not support";
     static final String BAD_HANDLER = "MERCHANTS_FILE has a payment_handler without a valid id, type, credential_type and token_ref";
     static final String BAD_TOKEN_REF = "MERCHANTS_FILE has a token_ref that is not env:NAME";
-    static final String NOT_SUPPORTED = "MERCHANTS_FILE transport or completion is not supported yet";
+    static final String BAD_TRANSPORT = "MERCHANTS_FILE has a transport other than rest or mcp";
+    static final String BAD_COMPLETION = "MERCHANTS_FILE has a completion other than agent or handoff";
+    static final String BAD_SHOP_DOMAIN = "MERCHANTS_FILE has a shop_domain that is not a host name without port or path";
+    static final String BAD_CREDENTIAL_REF = "MERCHANTS_FILE has a credential_ref that is not env:NAME";
+    static final String MCP_INCOMPLETE = "MERCHANTS_FILE has a transport: mcp merchant without credential_ref or shop_domain";
+    static final String NOT_OWNED = "MERCHANTS_FILE has a merchant off loopback without owned: true (I12)";
+    static final String BUYER_IP_NOT_LOCAL = "MERCHANTS_FILE requires_buyer_ip is only allowed in the local profile";
 
     static final int MAX_MERCHANTS = 20;
 
     private static final Set<String> KEYS = Set.of("id", "name", "url", "status", "lab_url", "endpoint_hosts",
-            "ucp_versions", "payment_handler", "transport", "completion");
+            "ucp_versions", "payment_handler", "transport", "completion", "owned", "shop_domain", "credential_ref",
+            "requires_buyer_ip");
     private static final Set<String> HANDLER_KEYS = Set.of("id", "type", "credential_type", "token_ref");
     private static final Pattern ID = Pattern.compile("[A-Za-z0-9_-]{1,100}");
     private static final Pattern HOST = Pattern.compile("(?:[A-Za-z0-9.-]{1,253}|\\[[0-9A-Fa-f:.]{2,45}\\])(?::[0-9]{1,5})?");
     private static final Pattern HANDLER_ID = Pattern.compile("[A-Za-z0-9_.-]{1,100}");
     private static final Pattern HANDLER_WORD = Pattern.compile("[A-Za-z0-9_-]{1,50}");
     private static final Pattern TOKEN_REF = Pattern.compile("env:[A-Z_][A-Z0-9_]{0,63}");
+    /** A DNS host name of two or more labels: no port, path, scheme, user info or IP literal form. */
+    private static final Pattern SHOP_DOMAIN = Pattern.compile(
+            "(?=.{1,253}$)([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+[A-Za-z]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?");
 
     private MerchantsFile() {
     }
@@ -127,9 +141,23 @@ final class MerchantsFile {
             throw refuse(LAB_URL_NOT_LOCAL);
         }
         Optional<URI> lab = m.containsKey("lab_url") ? Optional.of(uri(string(m.get("lab_url")))) : Optional.empty();
-        requireRestAgent(m);
+        Transport transport = transport(m);
+        Completion completion = completion(m);
+        boolean owned = m.containsKey("owned") ? bool(m.get("owned")) : MerchantEntry.isLoopback(url);
+        Optional<String> shopDomain = shopDomain(m);
+        Optional<String> credentialRef = credentialRef(m);
+        boolean buyerIp = m.containsKey("requires_buyer_ip") && bool(m.get("requires_buyer_ip"));
+        if (transport == Transport.MCP && (credentialRef.isEmpty() || shopDomain.isEmpty())) {
+            throw refuse(MCP_INCOMPLETE);
+        }
+        if (!owned && !MerchantEntry.isLoopback(url)) {
+            throw refuse(NOT_OWNED);
+        }
+        if (buyerIp && profile != AgentProfile.LOCAL) {
+            throw refuse(BUYER_IP_NOT_LOCAL);
+        }
         return new MerchantSettings(new MerchantId(id), name, url, status, lab, endpointHosts(m), versions(m),
-                handler(m));
+                handler(m), transport, completion, owned, shopDomain, credentialRef, buyerIp);
     }
 
     private static MerchantStatus status(Map<?, ?> m) {
@@ -143,13 +171,48 @@ final class MerchantsFile {
         };
     }
 
-    private static void requireRestAgent(Map<?, ?> m) {
-        if (m.containsKey("transport") && !"rest".equals(string(m.get("transport")))) {
-            throw refuse(NOT_SUPPORTED);
+    private static Transport transport(Map<?, ?> m) {
+        if (!m.containsKey("transport")) {
+            return Transport.REST;
         }
-        if (m.containsKey("completion") && !"agent".equals(string(m.get("completion")))) {
-            throw refuse(NOT_SUPPORTED);
+        return switch (string(m.get("transport"))) {
+            case "rest" -> Transport.REST;
+            case "mcp" -> Transport.MCP;
+            default -> throw refuse(BAD_TRANSPORT);
+        };
+    }
+
+    private static Completion completion(Map<?, ?> m) {
+        if (!m.containsKey("completion")) {
+            return Completion.AGENT;
         }
+        return switch (string(m.get("completion"))) {
+            case "agent" -> Completion.AGENT;
+            case "handoff" -> Completion.HANDOFF;
+            default -> throw refuse(BAD_COMPLETION);
+        };
+    }
+
+    private static Optional<String> shopDomain(Map<?, ?> m) {
+        if (!m.containsKey("shop_domain")) {
+            return Optional.empty();
+        }
+        String domain = string(m.get("shop_domain"));
+        if (!SHOP_DOMAIN.matcher(domain).matches()) {
+            throw refuse(BAD_SHOP_DOMAIN);
+        }
+        return Optional.of(domain.toLowerCase(java.util.Locale.ROOT));
+    }
+
+    private static Optional<String> credentialRef(Map<?, ?> m) {
+        if (!m.containsKey("credential_ref")) {
+            return Optional.empty();
+        }
+        String ref = string(m.get("credential_ref"));
+        if (!TOKEN_REF.matcher(ref).matches()) {
+            throw refuse(BAD_CREDENTIAL_REF);
+        }
+        return Optional.of(ref);
     }
 
     private static Set<String> endpointHosts(Map<?, ?> m) {
@@ -234,6 +297,13 @@ final class MerchantsFile {
     private static String string(Object value) {
         if (value instanceof String s && !s.isBlank()) {
             return s;
+        }
+        throw refuse(WRONG_TYPE);
+    }
+
+    private static boolean bool(Object value) {
+        if (value instanceof Boolean b) {
+            return b;
         }
         throw refuse(WRONG_TYPE);
     }
