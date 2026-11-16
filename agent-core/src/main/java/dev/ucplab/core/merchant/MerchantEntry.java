@@ -1,7 +1,10 @@
 package dev.ucplab.core.merchant;
 
+import dev.ucplab.core.json.CanonicalJson;
 import java.net.URI;
+import java.util.LinkedHashMap;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.regex.Pattern;
@@ -25,6 +28,12 @@ public record MerchantEntry(
     private static final Pattern LOOPBACK_V4 =
             Pattern.compile("127(\\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}");
 
+    /**
+     * The fingerprint of a lab entry (REST, completed by the agent, owned, no shop_domain): what V8 gives every intent
+     * from before H5 (10).
+     */
+    public static final String LAB_FINGERPRINT = "{\"completion\":\"agent\",\"owned\":true,\"transport\":\"rest\"}";
+
     public MerchantEntry {
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(baseUrl, "baseUrl");
@@ -41,6 +50,20 @@ public record MerchantEntry(
     /** A lab entry: REST, completed by the agent, no shop_domain, owned only on a loopback host (I12). */
     public MerchantEntry(MerchantId id, URI baseUrl, String displayName, MerchantStatus status) {
         this(id, baseUrl, displayName, status, Transport.REST, Completion.AGENT, isLoopback(baseUrl), Optional.empty());
+    }
+
+    /**
+     * The fields I12 depends on, as CanonicalJson with lower-case values: completion, owned, shop_domain (left out when
+     * empty) and transport (10, 19). An intent stores it once at insert; a different value now means the entry changed
+     * under the intent.
+     */
+    public String fingerprint() {
+        Map<String, Object> f = new LinkedHashMap<>();
+        f.put("completion", completion.name().toLowerCase(Locale.ROOT));
+        f.put("owned", owned);
+        shopDomain.ifPresent(d -> f.put("shop_domain", d));
+        f.put("transport", transport.name().toLowerCase(Locale.ROOT));
+        return CanonicalJson.write(f);
     }
 
     /**

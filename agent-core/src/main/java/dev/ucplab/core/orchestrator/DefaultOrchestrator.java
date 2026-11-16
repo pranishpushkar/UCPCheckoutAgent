@@ -43,9 +43,11 @@ import dev.ucplab.core.merchant.CheckoutWire;
 import dev.ucplab.core.merchant.CreateCheckout;
 import dev.ucplab.core.merchant.FrozenBody;
 import dev.ucplab.core.merchant.IdempotencyKey;
+import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantGateway;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantMessage;
+import dev.ucplab.core.merchant.MerchantStatus;
 import dev.ucplab.core.merchant.FulfillmentPolicy;
 import dev.ucplab.core.merchant.FulfillmentSelection;
 import dev.ucplab.core.merchant.FulfillmentSteps;
@@ -61,6 +63,7 @@ import dev.ucplab.core.policy.PolicyDecision;
 import dev.ucplab.core.policy.PolicyEngine;
 import dev.ucplab.core.policy.RequoteOutcome;
 import dev.ucplab.core.policy.RequotePolicy;
+import java.net.URI;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -150,6 +153,7 @@ public final class DefaultOrchestrator implements Orchestrator {
     private final ApprovalRepository approvals;
     private final ApprovalService approvalService;
     private final Function<MerchantId, MerchantGateway> gateways;
+    private final Function<MerchantId, Optional<MerchantEntry>> entries;
     private final PolicyEngine policy;
     private final RequotePolicy requotePolicy;
     private final Function<MerchantId, PaymentInstrument> instruments;
@@ -238,6 +242,27 @@ public final class DefaultOrchestrator implements Orchestrator {
             Function<MerchantId, MerchantGateway> gateways, PolicyEngine policy, RequotePolicy requotePolicy,
             Function<MerchantId, PaymentInstrument> instruments, FulfillmentPolicy fulfillmentPolicy,
             OrchestratorConfig config, Clock clock, IdGenerator ids, String workerId, RandomGenerator jitter) {
+        this(intents, approvals, approvalService, gateways, DefaultOrchestrator::labEntry, policy, requotePolicy,
+                instruments, fulfillmentPolicy, config, clock, ids, workerId, jitter);
+    }
+
+    /** Every merchant a lab entry: REST, completed by the agent, owned (I12). For the lab merchants and tests only. */
+    private static Optional<MerchantEntry> labEntry(MerchantId id) {
+        return Optional.of(new MerchantEntry(id, URI.create("http://127.0.0.1/"), id.value(), MerchantStatus.ACTIVE));
+    }
+
+    /**
+     * @param entries the registry entry of a merchant as configured, read with no I/O (I12: checked before the attempt
+     *     row, so it must not call the merchant), or empty for a merchant the registry does not list. Its {@code owned}
+     *     and fingerprint are what I12 compares; its status is not read here (P1 is the PolicyEngine's).
+     */
+    public DefaultOrchestrator(
+            IntentRepository intents, ApprovalRepository approvals, ApprovalService approvalService,
+            Function<MerchantId, MerchantGateway> gateways, Function<MerchantId, Optional<MerchantEntry>> entries,
+            PolicyEngine policy, RequotePolicy requotePolicy, Function<MerchantId, PaymentInstrument> instruments,
+            FulfillmentPolicy fulfillmentPolicy, OrchestratorConfig config, Clock clock, IdGenerator ids,
+            String workerId, RandomGenerator jitter) {
+        this.entries = Objects.requireNonNull(entries, "entries");
         this.fulfillmentPolicy = Objects.requireNonNull(fulfillmentPolicy, "fulfillmentPolicy");
         this.intents = Objects.requireNonNull(intents, "intents");
         this.approvals = Objects.requireNonNull(approvals, "approvals");
@@ -276,16 +301,23 @@ public final class DefaultOrchestrator implements Orchestrator {
         }
 
         Instant now = clock.instant();
-        PolicyDecision decision = policy.evaluateProposal(auth.user(), merchantId, lines);
-        Transition t = decision.allowed()
+        // I12 (4.3): an entry that is not owned is denied here, before the PolicyEngine, with rule id I12 (7.2). A
+        // merchant the registry does not list has no entry and is the PolicyEngine's (P1).
+        Optional<MerchantEntry> entry = entry(merchantId);
+        Optional<PolicyDecision> decision = entry.isPresent() && !OwnStoreGuard.entryAllows(entry) ? Optional.empty()
+                : Optional.of(policy.evaluateProposal(auth.user(), merchantId, lines));
+        boolean allowed = decision.map(PolicyDecision::allowed).orElse(false);
+        Transition t = allowed
                 ? TransitionTable.resolve(PROPOSED, TransitionEvent.POLICY_OK, Set.of(TransitionGuard.POLICY_ALLOWS))
                 : TransitionTable.resolve(PROPOSED, TransitionEvent.POLICY_DENIED, Set.of());
-        PurchaseIntent intent = PurchaseIntent.proposed(
-                        new IntentId(ids.next()), auth.user(), merchantId, dedupeKey, lines, auth.email(), now)
+        PurchaseIntent intent = PurchaseIntent.proposed(new IntentId(ids.next()), auth.user(), merchantId,
+                        entry.map(MerchantEntry::fingerprint).orElse(OwnStoreGuard.NO_ENTRY), dedupeKey, lines,
+                        auth.email(), now)
                 .withState(t.to(), now)
                 .withLease(Optional.of(workerId), Optional.of(now.plus(config.lease())));
-        if (!decision.allowed()) {
-            intent = intent.withFailureReason(policyReason(decision));
+        if (!allowed) {
+            intent = intent.withFailureReason(
+                    decision.map(DefaultOrchestrator::policyReason).orElse(POLICY_PREFIX + OwnStoreGuard.RULE));
         }
         try {
             intents.insert(intent);
@@ -297,9 +329,13 @@ public final class DefaultOrchestrator implements Orchestrator {
         proposed.put("lines", lines.stream().map(l -> Map.of("item_id", l.itemId(), "quantity", l.quantity())).toList());
         proposed.put("rationale", rationale.length() > MAX_RATIONALE ? rationale.substring(0, MAX_RATIONALE) : rationale);
         event(intent.id(), "proposed", proposed);
-        policyEvent(intent.id(), "proposal", decision);
+        if (decision.isPresent()) {
+            policyEvent(intent.id(), "proposal", decision.get());
+        } else {
+            notOwnedEvent(intent.id());
+        }
         transitionEvent(intent.id(), t);
-        if (!decision.allowed()) {
+        if (!allowed) {
             return new ProposalResult(intent.id(), intent.state(), Optional.empty());
         }
 
@@ -391,20 +427,34 @@ public final class DefaultOrchestrator implements Orchestrator {
         }
         PurchaseIntent intent = claimed.get();
         List<MerchantAttempt> attempts = intents.attempts(id);
+        // I12 (7.2): before any merchant call of the step, so before an attempt row is written. A terminal intent's
+        // owed cancel has its own check (cancelIfOwed).
+        Optional<MerchantEntry> entry = entry(intent.merchantId());
+        if (!intent.state().isTerminal() && !OwnStoreGuard.unchanged(entry, intent.merchantFingerprint())) {
+            return escalateMerchant(intent, attempts, TransitionEvent.MERCHANT_CHANGED, OwnStoreGuard.MERCHANT_CHANGED);
+        }
         return switch (intent.state()) {
-            case PROPOSED -> applyProposalPolicy(intent);
+            case PROPOSED -> applyProposalPolicy(intent, entry);
             case QUOTING -> quote(intent, attempts);
             case AWAITING_APPROVAL -> expireApproval(intent);
             case APPROVED -> sendComplete(intent, attempts);
             case COMPLETING -> completing(intent, attempts);
             case RECONCILING -> reconcile(intent, attempts);
-            case REJECTED, FAILED_NOT_CHARGED -> cancelIfOwed(intent, attempts);
+            case REJECTED, FAILED_NOT_CHARGED -> cancelIfOwed(intent, attempts, entry);
             case COMPLETED, ESCALATED -> idle(intent);
         };
     }
 
     /** PROPOSED is never stored by {@link #propose}; this handles an intent inserted in PROPOSED by other code. */
-    private Step applyProposalPolicy(PurchaseIntent intent) {
+    private Step applyProposalPolicy(PurchaseIntent intent, Optional<MerchantEntry> entry) {
+        if (!OwnStoreGuard.entryAllows(entry)) {
+            Move m = move(intent, TransitionEvent.POLICY_DENIED);
+            PurchaseIntent next = m.next().withFailureReason(POLICY_PREFIX + OwnStoreGuard.RULE);
+            intents.update(next, intent.version(), workerId);
+            notOwnedEvent(intent.id());
+            transitionEvent(intent.id(), m.transition());
+            return moved(intent, next);
+        }
         PolicyDecision decision = policy.evaluateProposal(intent.owner(), intent.merchantId(), intent.lines());
         Move m = decision.allowed()
                 ? move(intent, TransitionEvent.POLICY_OK, TransitionGuard.POLICY_ALLOWS)
@@ -501,6 +551,10 @@ public final class DefaultOrchestrator implements Orchestrator {
             body = CheckoutWire.updateBody(request);
             call = () -> merchant.update(session, request, key);
         }
+        Optional<Step> refused = refuseSend(intent, attempts);
+        if (refused.isPresent()) {
+            return refused.get();
+        }
         MerchantAttempt attempt = newAttempt(intent.id(), op, revision, key, Optional.of(new FrozenBody(body)));
         PurchaseIntent written = writeAhead(intent, attempt, intent.withState(QUOTING, clock.instant()));
         return onQuoteOutcome(written, attempt, call.get(), create);
@@ -586,6 +640,10 @@ public final class DefaultOrchestrator implements Orchestrator {
         IdempotencyKey key = IdempotencyKey.derive(intent.id(), MutatingOp.UPDATE, updates);
         UpdateCheckout request = UpdateCheckout.from(intent.lines(), Buyer.ofEmail(intent.buyerEmail()),
                 lastQuoteShape(attempts)).withFulfillment(Optional.of(selection));
+        Optional<Step> refused = refuseSend(intent, attempts);
+        if (refused.isPresent()) {
+            return refused.get();
+        }
         MerchantAttempt attempt = newAttempt(intent.id(), AttemptOp.UPDATE, updates, key,
                 Optional.of(new FrozenBody(CheckoutWire.updateBody(request))));
         PurchaseIntent written = writeAhead(intent, attempt, intent.withState(QUOTING, clock.instant()));
@@ -825,6 +883,10 @@ public final class DefaultOrchestrator implements Orchestrator {
         MerchantGateway merchant = gateway(intent);
         FrozenBody body = CheckoutWire.completeBody(instrument(intent));
         IdempotencyKey key = IdempotencyKey.derive(intent.id(), MutatingOp.COMPLETE, revision);
+        Optional<Step> refused = refuseSend(intent, attempts);
+        if (refused.isPresent()) {
+            return refused.get();
+        }
         MerchantAttempt attempt = newAttempt(intent.id(), AttemptOp.COMPLETE, revision, key, Optional.of(body));
         Move m = move(intent, TransitionEvent.SEND_COMPLETE, TransitionGuard.ATTEMPT_PERSISTED);
         // A new key starts a fresh reconciliation deadline (7.5 rule 1); cleared in the same write as the attempt.
@@ -975,6 +1037,10 @@ public final class DefaultOrchestrator implements Orchestrator {
                 .orElseThrow(() -> new IllegalStateException("I7: complete attempt without a stored body"));
         IdempotencyKey key = first.idempotencyKey()
                 .orElseThrow(() -> new IllegalStateException("I7: complete attempt without a key"));
+        Optional<Step> refused = refuseSend(intent, sameKey);
+        if (refused.isPresent()) {
+            return refused.get();
+        }
         MerchantAttempt attempt = newAttempt(intent.id(), AttemptOp.COMPLETE, first.revision(), key, Optional.of(body));
         PurchaseIntent written = writeAhead(intent, attempt, intent.withState(COMPLETING, clock.instant()));
         event(intent.id(), "complete_resent", Map.of("attempt_id", attempt.id().value(), "resend", sameKey.size()));
@@ -1084,6 +1150,55 @@ public final class DefaultOrchestrator implements Orchestrator {
     }
 
     /**
+     * I12 (7.2): the entry changed under the intent, or a step that would send a create, update or complete is at a
+     * merchant whose entry fails I12. Nothing is sent and no attempt is written; a human looks at it. Not
+     * FAILED_NOT_CHARGED: the cancel that would owe may itself be blocked, and a complete may already have reached the
+     * store.
+     */
+    private Step escalateMerchant(
+            PurchaseIntent intent, List<MerchantAttempt> attempts, TransitionEvent event, String reason) {
+        Move m = move(intent, event);
+        PurchaseIntent next = m.next().withFailureReason(reason);
+        intents.update(next, intent.version(), workerId);
+        // Literal types, so the console's event catalogue reads them from this source (EventPayloadsTest).
+        Map<String, Object> from = Map.of("from", intent.state().name());
+        if (event == TransitionEvent.MERCHANT_CHANGED) {
+            event(intent.id(), "merchant_changed", from);
+        } else {
+            event(intent.id(), "merchant_not_owned", from);
+        }
+        event(intent.id(), "escalated", Map.of("attempts", attempts.stream().map(a -> Map.of(
+                "attempt_id", a.id().value(), "op", a.op().name(), "revision", a.revision(),
+                "status", a.status().name(), "sent_at", a.sentAt().toString())).toList()));
+        transitionEvent(intent.id(), m.transition());
+        return moved(intent, next);
+    }
+
+    /**
+     * I12 at a send (7.2): called by every step of a non-terminal intent just before the attempt row of a create, update
+     * or complete, whatever state the step started in (a resend approved by RECONCILING goes out from COMPLETING). The
+     * entry is read again here, so a step never sends on an earlier look. Empty when the send may go out; otherwise the
+     * escalation, with nothing sent and no attempt written. A terminal intent's sends are cancelIfOwed's.
+     */
+    private Optional<Step> refuseSend(PurchaseIntent intent, List<MerchantAttempt> attempts) {
+        Optional<MerchantEntry> entry = entry(intent.merchantId());
+        if (!OwnStoreGuard.unchanged(entry, intent.merchantFingerprint())) {
+            return Optional.of(escalateMerchant(intent, attempts, TransitionEvent.MERCHANT_CHANGED,
+                    OwnStoreGuard.MERCHANT_CHANGED));
+        }
+        if (!OwnStoreGuard.entryAllows(entry)) {
+            return Optional.of(escalateMerchant(intent, attempts, TransitionEvent.MERCHANT_NOT_OWNED,
+                    OwnStoreGuard.MERCHANT_NOT_OWNED));
+        }
+        return Optional.empty();
+    }
+
+    /** The merchant's registry entry, read with no I/O (I12). */
+    private Optional<MerchantEntry> entry(MerchantId merchantId) {
+        return Objects.requireNonNull(entries.apply(merchantId), "entry");
+    }
+
+    /**
      * I3: the newest approval is missing, decided against, expired, or for another snapshot or another session than the
      * intent was approved with. Nothing is sent and no attempt is written; the intent goes to ESCALATED with a reason, so a human
      * looks at it instead of the worker retrying forever.
@@ -1168,9 +1283,16 @@ public final class DefaultOrchestrator implements Orchestrator {
      * the flag; so does the third unanswered attempt, which gives up. The intent's state never changes. An attempt a
      * crash left SENT counts as one of the three.
      */
-    private Step cancelIfOwed(PurchaseIntent intent, List<MerchantAttempt> attempts) {
+    private Step cancelIfOwed(PurchaseIntent intent, List<MerchantAttempt> attempts, Optional<MerchantEntry> entry) {
         if (!intent.cancelPending()) {
             return idle(intent);
+        }
+        if (!OwnStoreGuard.entryAllows(entry) || !OwnStoreGuard.unchanged(entry, intent.merchantFingerprint())) {
+            // I12 (7.6): neither the cancel nor an orphan probe's create is sent. Startup refuses this case (19).
+            PurchaseIntent next = intent.withCancelPending(false).withState(intent.state(), clock.instant());
+            intents.update(next, intent.version(), workerId);
+            event(intent.id(), "cancel_blocked_i12", Map.of());
+            return moved(intent, next);
         }
         if (intent.sessionId().isEmpty()) {
             return probeOrphanSession(intent, attempts);
@@ -1439,6 +1561,16 @@ public final class DefaultOrchestrator implements Orchestrator {
         payload.put("guard", t.guard().name());
         payload.put("to", t.to().name());
         event(id, "transition", payload);
+    }
+
+    /** The propose-time I12 denial, in the shape of a PolicyEngine denial with rule id I12 (7.2). */
+    private void notOwnedEvent(IntentId id) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("stage", "proposal");
+        payload.put("allowed", false);
+        payload.put("rule", OwnStoreGuard.RULE);
+        payload.put("reason", OwnStoreGuard.NOT_OWNED_REASON);
+        event(id, "policy_decision", payload);
     }
 
     private void policyEvent(IntentId id, String stage, PolicyDecision decision) {

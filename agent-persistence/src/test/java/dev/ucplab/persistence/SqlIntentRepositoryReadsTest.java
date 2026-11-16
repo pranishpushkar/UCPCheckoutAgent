@@ -71,7 +71,8 @@ class SqlIntentRepositoryReadsTest {
     @Test
     void insertThenFind_roundTripsEveryField() {
         PurchaseIntent full = new PurchaseIntent(
-                new IntentId("i1"), ALICE, SHOP, "k1",
+                new IntentId("i1"), ALICE, SHOP,
+                "{\"completion\":\"handoff\",\"owned\":true,\"shop_domain\":\"s.myshopify.com\",\"transport\":\"mcp\"}", "k1",
                 List.of(new ProposedLine("item_456", 3), new ProposedLine("item_123", 1)), "a@example.com",
                 IntentState.RECONCILING, 7, Optional.of(new SessionId("s1")), Optional.of("hash"), 2,
                 Optional.of("order-9"), Optional.of("why"), Optional.of(T0.plusNanos(5)), true,

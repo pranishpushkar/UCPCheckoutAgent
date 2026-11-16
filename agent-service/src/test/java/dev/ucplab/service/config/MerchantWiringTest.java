@@ -4,11 +4,15 @@ import dev.ucplab.ucp.registry.MerchantSettings;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import dev.ucplab.core.merchant.Completion;
+import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantStatus;
 import dev.ucplab.core.merchant.PaymentInstrument;
+import dev.ucplab.core.merchant.Transport;
 import dev.ucplab.ucp.UcpHttpGateway;
 import java.net.URI;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -103,4 +107,49 @@ class MerchantWiringTest {
                 .hasMessage(MerchantWiring.HANDOFF_NOT_WIRED);
         MerchantWiring.requireBuildable(settings(Optional.empty()));
     }
+
+    private static MerchantSettings at(MerchantId id, boolean owned, Completion completion) {
+        return new MerchantSettings(id, "Shop", URI.create("http://127.0.0.1:9101"), MerchantStatus.ACTIVE,
+                Optional.empty(), Set.of(), MerchantSettings.DEFAULT_VERSIONS, Optional.empty(), Transport.REST,
+                completion, owned, Optional.empty(), Optional.empty(), false);
+    }
+
+    // Covers: 19, I12, 10 (startup accepts intents in flight whose stored fingerprints are all the entry's now, and a
+    // configured merchant with no intent in flight)
+    @Test
+    void inFlightIntents_underTheEntryTheyStartedWith_startUp() {
+        MerchantSettings a = at(A, true, Completion.AGENT);
+        MerchantId b = new MerchantId("merchant-b");
+
+        MerchantWiring.requireInFlightMerchantsConfigured(Map.of(A, Set.of(a.entry(MerchantStatus.ACTIVE).fingerprint())),
+                List.of(a, at(b, true, Completion.AGENT)));
+        MerchantWiring.requireInFlightMerchantsConfigured(Map.of(), List.of(a));
+    }
+
+    // Covers: 19, I12, N1 (startup refuses, with a fixed message naming neither merchant nor file, an entry whose
+    // completion, owned or fingerprint differs from one an intent in flight stored, including one of several)
+    @Test
+    void inFlightIntents_underAnotherEntry_refuseStartup() {
+        MerchantSettings now = at(A, true, Completion.AGENT);
+        String handoff = at(A, true, Completion.HANDOFF).entry(MerchantStatus.ACTIVE).fingerprint();
+        String unowned = at(A, false, Completion.AGENT).entry(MerchantStatus.ACTIVE).fingerprint();
+        String same = now.entry(MerchantStatus.ACTIVE).fingerprint();
+
+        for (Set<String> stored : List.of(Set.of(handoff), Set.of(unowned), Set.of(same, handoff))) {
+            assertThatThrownBy(() -> MerchantWiring.requireInFlightMerchantsConfigured(Map.of(A, stored), List.of(now)))
+                    .as(stored.toString()).isInstanceOf(IllegalStateException.class)
+                    .hasMessage(MerchantWiring.IN_FLIGHT_MERCHANT_CHANGED);
+        }
+    }
+
+    // Covers: 19 (a merchant with intents in flight that the file no longer lists still refuses startup with its own
+    // reason, checked before the fingerprint)
+    @Test
+    void inFlightIntents_atARemovedMerchant_refuseStartup() {
+        assertThatThrownBy(() -> MerchantWiring.requireInFlightMerchantsConfigured(
+                Map.of(new MerchantId("gone"), Set.of(MerchantEntry.LAB_FINGERPRINT)),
+                List.of(at(A, true, Completion.AGENT))))
+                .isInstanceOf(IllegalStateException.class).hasMessage(MerchantWiring.IN_FLIGHT_MERCHANT_REMOVED);
+    }
 }
+

@@ -54,6 +54,15 @@ class FulfillmentPropertyTest {
         check("I7", mode, Invariants::i7);
     }
 
+    // Covers: I12, 7.2, 7.6, 19, 26.5, 14.1 Merchant strictness, fulfillment (a catch-all at the merchant: with the
+    // registry entry flipped at random points of the schedule, no mutating call reaches a merchant failing I12 or
+    // changed under its intent, whichever send it is)
+    @ParameterizedTest(name = "{0} merchant")
+    @EnumSource(FaultyMerchantModel.Mode.class)
+    void property_noMutatingCallReachesAMerchantFailingI12_withFulfillment(FaultyMerchantModel.Mode mode) {
+        check("I12", mode, Invariants::i12);
+    }
+
     // Covers: 7.2, 14.1 (reach: with fulfillment mode on, generated schedules do send selection updates, and with it off
     // they do not, unless the schedule itself re-quotes: the properties above are not vacuous)
     @org.junit.jupiter.api.Test

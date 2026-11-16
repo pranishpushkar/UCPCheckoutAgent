@@ -19,8 +19,13 @@ import java.util.SplittableRandom;
  *   <li>proxy holds ({@code DelayForward}) of 1 s to {@link #MAX_HOLD};
  *   <li>waits of up to {@link #MAX_SHORT_WAIT} in 250 ms steps, up to {@link #MAX_MEDIUM_WAIT}, or between
  *       {@link #MIN_LONG_WAIT} and {@link #MAX_LONG_WAIT} (11 minutes);
- *   <li>merchant-side prices from {@link #PRICES_ITEM_123} and {@link #PRICES_ITEM_456}, stock from {@link #STOCKS}.
+ *   <li>merchant-side prices from {@link #PRICES_ITEM_123} and {@link #PRICES_ITEM_456}, stock from {@link #STOCKS};
+ *   <li>in one schedule in {@link #FLIP_ONE_IN}, up to {@link #MAX_FLIPS} registry flips (I12): the entry becomes not
+ *       owned, or changes completion, shop_domain or transport, or returns to the original
+ *       ({@link ScheduleEntry.Registry}).
  * </ul>
+ *
+ * <p>The flips are drawn last, after everything else, so a seed's other entries are the same as before flips existed.
  *
  * <p>Each schedule is drawn from one of three profiles: {@code MIXED} (anything), {@code REQUOTE} (price and stock
  * changes anchored to {@code complete} calls with repeated approvals, for P7 and P8, sometimes with the response lost
@@ -50,6 +55,8 @@ final class ScheduleGenerator {
     static final long[] PRICES_ITEM_123 = {2300, 2500, 2600, 2800};
     static final long[] PRICES_ITEM_456 = {1100, 1200, 1300};
     static final int[] STOCKS = {0, 1, 2, 3, 100};
+    static final int FLIP_ONE_IN = 4;
+    static final int MAX_FLIPS = 3;
     private static final String[] ITEMS = {"item_123", "item_456"};
     private static final MerchantCall[] FAULT_CALLS = {
         MerchantCall.COMPLETE, MerchantCall.COMPLETE, MerchantCall.COMPLETE, MerchantCall.COMPLETE,
@@ -102,6 +109,13 @@ final class ScheduleGenerator {
         };
         for (int i = 0; i < crashes; i++) {
             insert(entries, new ScheduleEntry.Crash(pick(CRASH_CALLS), random.nextBoolean()));
+        }
+        if (random.nextInt(FLIP_ONE_IN) == 0) {
+            int flips = 1 + random.nextInt(MAX_FLIPS);
+            ScheduleEntry.Registry[] kinds = ScheduleEntry.Registry.values();
+            for (int i = 0; i < flips; i++) {
+                insert(entries, new ScheduleEntry.FlipEntry(kinds[random.nextInt(kinds.length)]));
+            }
         }
         return new Schedule(entries.size() > MAX_ENTRIES ? entries.subList(0, MAX_ENTRIES) : entries);
     }

@@ -71,6 +71,13 @@ final class Lab {
     PolicyConfig policyConfig = PolicyConfig.defaults();
     /** The clock the orchestrators read, when a test needs one that differs from the repositories' (default: {@link #clock}). */
     java.time.Clock orchestratorClock;
+    /**
+     * The registry entries the workers' orchestrators see (I12), read at each step so a test can change the file between
+     * steps; when null, workers use the constructor without entries (every merchant an owned lab entry).
+     */
+    java.util.function.Function<MerchantId, Optional<MerchantEntry>> entries;
+    /** When set, the PolicyEngine of the workers built after this, instead of the rule-based one. */
+    dev.ucplab.core.policy.PolicyEngine policyOverride;
     /** When true, policy reads the lab's own intents (P3, P5) instead of seeing no usage. */
     boolean countUsage;
     final IntentRepository intents;
@@ -184,8 +191,15 @@ final class Lab {
         DefaultApprovalService approvalService = new DefaultApprovalService(intentRepository, approvalRepository,
                 new ApprovalTokens(SECRET), clock, ids, workerId, config.lease(), DefaultApprovalService.DEFAULT_TTL,
                 DefaultApprovalService.DEFAULT_MAX_AUTH_AGE);
-        DefaultOrchestrator orchestrator = new DefaultOrchestrator(intentRepository, approvalRepository, approvalService, gateways, policy,
-                new RequotePolicy(policyConfig), instruments, config, orchestratorClock != null ? orchestratorClock : clock, ids, workerId, new SplittableRandom(42));
+        dev.ucplab.core.policy.PolicyEngine engine = policyOverride != null ? policyOverride : policy;
+        java.time.Clock at = orchestratorClock != null ? orchestratorClock : clock;
+        DefaultOrchestrator orchestrator = entries == null
+                ? new DefaultOrchestrator(intentRepository, approvalRepository, approvalService, gateways, engine,
+                        new RequotePolicy(policyConfig), instruments, config, at, ids, workerId, new SplittableRandom(42))
+                : new DefaultOrchestrator(intentRepository, approvalRepository, approvalService, gateways,
+                        id -> entries.apply(id), engine, new RequotePolicy(policyConfig), instruments,
+                        dev.ucplab.core.merchant.FulfillmentPolicy.cheapest(), config, at, ids, workerId,
+                        new SplittableRandom(42));
         return new Worker(workerId, orchestrator, approvalService);
     }
 

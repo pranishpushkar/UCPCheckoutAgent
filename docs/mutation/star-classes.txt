@@ -19,6 +19,7 @@ dev.ucplab.core.merchant.FulfillmentPolicy
 dev.ucplab.core.merchant.IdempotencyKey
 dev.ucplab.core.merchant.FrozenBody
 dev.ucplab.core.merchant.MerchantInstruments
+dev.ucplab.core.merchant.MerchantEntry
 dev.ucplab.core.json.CanonicalJson
 dev.ucplab.core.json.LenientJson
 dev.ucplab.core.intent.TransitionTable
@@ -30,6 +31,7 @@ dev.ucplab.core.recovery.RecoveryLoop
 dev.ucplab.core.recovery.RecoveryConfig
 dev.ucplab.core.orchestrator.DefaultOrchestrator
 dev.ucplab.core.orchestrator.OrchestratorConfig
+dev.ucplab.core.orchestrator.OwnStoreGuard
 # agent-ucp
 dev.ucplab.ucp.FailureClassifier
 dev.ucplab.ucp.UcpHttpGateway

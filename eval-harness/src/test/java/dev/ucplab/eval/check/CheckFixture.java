@@ -83,7 +83,8 @@ final class CheckFixture {
     Optional<Instant> terminalSeenAt = Optional.of(at(420));
 
     RunEvidence build() {
-        PurchaseIntent intent = new PurchaseIntent(INTENT, OWNER, Scenarios.SHOP, "dedupe-1",
+        PurchaseIntent intent = new PurchaseIntent(INTENT, OWNER, Scenarios.SHOP,
+                dev.ucplab.core.merchant.MerchantEntry.LAB_FINGERPRINT, "dedupe-1",
                 List.of(new ProposedLine("item_123", 2)), "buyer@eval.example", state, 6,
                 storedSession.map(SessionId::new), Optional.of(snapshot.hash()), 0,
                 state == IntentState.COMPLETED ? Optional.of(ORDER) : Optional.empty(), Optional.empty(),

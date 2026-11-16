@@ -49,9 +49,9 @@ import java.util.stream.Collectors;
  */
 public final class SqlIntentRepository implements IntentRepository {
 
-    static final String INTENT_COLUMNS = "id, user_id, merchant_id, dedupe_key, lines_json, buyer_email, state,"
-            + " version, session_id, approved_snapshot_hash, requote_count, order_id, failure_reason, uncertain_since,"
-            + " cancel_pending, lease_owner, lease_until, created_at, updated_at";
+    static final String INTENT_COLUMNS = "id, user_id, merchant_id, merchant_fingerprint, dedupe_key, lines_json,"
+            + " buyer_email, state, version, session_id, approved_snapshot_hash, requote_count, order_id, failure_reason,"
+            + " uncertain_since, cancel_pending, lease_owner, lease_until, created_at, updated_at";
 
     private static final String ATTEMPT_COLUMNS = "id, intent_id, op, revision, idempotency_key, request_hash,"
             + " request_body, status, http_status, response_json, sent_at, responded_at";
@@ -113,11 +113,12 @@ public final class SqlIntentRepository implements IntentRepository {
         db.write(c -> {
             try (PreparedStatement s = c.prepareStatement(
                     "INSERT INTO purchase_intent (" + INTENT_COLUMNS + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
-                            + " ?, ?, ?, ?, ?, ?)")) {
+                            + " ?, ?, ?, ?, ?, ?, ?)")) {
                 int n = 1;
                 s.setString(n++, i.id().value());
                 s.setString(n++, i.owner().value());
                 s.setString(n++, i.merchantId().value());
+                s.setString(n++, i.merchantFingerprint());
                 s.setString(n++, i.dedupeKey());
                 s.setString(n++, linesJson(i.lines()));
                 s.setString(n++, i.buyerEmail());
@@ -600,6 +601,7 @@ public final class SqlIntentRepository implements IntentRepository {
                 new IntentId(r.getString("id")),
                 new UserId(r.getString("user_id")),
                 new MerchantId(r.getString("merchant_id")),
+                r.getString("merchant_fingerprint"),
                 r.getString("dedupe_key"),
                 lines(r.getString("lines_json")),
                 r.getString("buyer_email"),

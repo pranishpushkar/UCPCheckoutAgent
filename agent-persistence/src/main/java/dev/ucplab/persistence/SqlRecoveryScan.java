@@ -10,8 +10,10 @@ import java.sql.ResultSet;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -58,20 +60,26 @@ public final class SqlRecoveryScan implements RecoveryScan, InFlightMerchants {
         });
     }
 
-    /** The distinct merchants of intents in any non-terminal state, across owners: a system read, like the one above. */
+    /**
+     * By merchant, the distinct fingerprints of intents in a non-terminal state or owing a cancel, across owners: a system
+     * read, like the one above.
+     */
     @Override
-    public Set<MerchantId> merchantsInFlight() {
+    public Map<MerchantId, Set<String>> fingerprintsInFlight() {
         String terminal = Arrays.stream(IntentState.values()).filter(IntentState::isTerminal)
                 .map(state -> "'" + state.name() + "'").collect(Collectors.joining(", "));
         return db.read(c -> {
             try (PreparedStatement s = c.prepareStatement(
-                    "SELECT DISTINCT merchant_id FROM purchase_intent WHERE state NOT IN (" + terminal + ")");
+                    "SELECT DISTINCT merchant_id, merchant_fingerprint FROM purchase_intent"
+                            + " WHERE state NOT IN (" + terminal + ") OR cancel_pending = 1");
                  ResultSet r = s.executeQuery()) {
-                Set<MerchantId> out = new HashSet<>();
+                Map<MerchantId, Set<String>> out = new HashMap<>();
                 while (r.next()) {
-                    out.add(new MerchantId(r.getString(1)));
+                    out.computeIfAbsent(new MerchantId(r.getString(1)), m -> new HashSet<>()).add(r.getString(2));
                 }
-                return Set.copyOf(out);
+                Map<MerchantId, Set<String>> copy = new HashMap<>();
+                out.forEach((m, f) -> copy.put(m, Set.copyOf(f)));
+                return Map.copyOf(copy);
             }
         });
     }

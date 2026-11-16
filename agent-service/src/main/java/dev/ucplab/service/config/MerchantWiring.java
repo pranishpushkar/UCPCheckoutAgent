@@ -6,6 +6,7 @@ import dev.ucplab.core.merchant.PaymentInstrument;
 import dev.ucplab.ucp.UcpHttpGateway;
 import dev.ucplab.ucp.registry.MerchantSettings;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -68,15 +69,24 @@ final class MerchantWiring {
     static final String IN_FLIGHT_MERCHANT_REMOVED =
             "an intent in flight names a merchant that MERCHANTS_FILE does not list; restore the merchant or finish its intents";
 
+    static final String IN_FLIGHT_MERCHANT_CHANGED = "MERCHANTS_FILE changes the owned, shop_domain, transport or"
+            + " completion of a merchant with intents in flight; restore the entry or finish its intents (19, I12)";
+
     /**
-     * DESIGN 19: every merchant that has an intent in flight must be configured, or startup refuses, because those intents
-     * could never reconcile. The message is fixed: it names neither the merchant nor the file.
+     * DESIGN 19: every merchant that has an intent in flight (a non-terminal state, or a cancel still owed) must be
+     * configured, with the entry those intents started under, or startup refuses: a removed merchant's intents could
+     * never reconcile, and a changed entry could send them to a store they were not proposed for (I12; from handoff to
+     * agent, a complete, N1). The messages are fixed: they name neither the merchant nor the file.
      */
-    static void requireInFlightMerchantsConfigured(Set<MerchantId> inFlight, List<MerchantSettings> configured) {
-        for (MerchantId id : inFlight) {
-            if (configured.stream().noneMatch(s -> s.id().equals(id))) {
-                throw new IllegalStateException(IN_FLIGHT_MERCHANT_REMOVED);
+    static void requireInFlightMerchantsConfigured(Map<MerchantId, Set<String>> inFlight,
+                                                   List<MerchantSettings> configured) {
+        inFlight.forEach((id, fingerprints) -> {
+            MerchantSettings settings = configured.stream().filter(s -> s.id().equals(id)).findFirst()
+                    .orElseThrow(() -> new IllegalStateException(IN_FLIGHT_MERCHANT_REMOVED));
+            String now = settings.entry(settings.fileStatus()).fingerprint();
+            if (!fingerprints.equals(Set.of(now))) {
+                throw new IllegalStateException(IN_FLIGHT_MERCHANT_CHANGED);
             }
-        }
+        });
     }
 }

@@ -107,4 +107,27 @@ sealed interface ScheduleEntry {
             return "crash(" + (afterCall ? "after " : "before ") + call + ")";
         }
     }
+
+    /**
+     * The merchants file changes under the running intents (I12, 19; H5 C2): from now on every merchant's registry
+     * entry is {@code entry}'s. {@link ScheduleExecutor#entryOf} builds it.
+     */
+    record FlipEntry(Registry entry) implements ScheduleEntry {
+        public FlipEntry {
+            Objects.requireNonNull(entry, "entry");
+        }
+
+        @Override
+        public String toString() {
+            return "entry(" + entry + ")";
+        }
+    }
+
+    /**
+     * The registry entries a schedule flips between (I12): as it started (REST, agent, owned, no shop_domain); not owned;
+     * completion handoff; a shop_domain; and MCP with that shop_domain. Between them they change each of the four
+     * fingerprint fields: SHOP_DOMAIN and MCP differ in transport alone (an MCP entry needs a shop_domain, so no flip
+     * changes transport alone from the original).
+     */
+    enum Registry { OWNED, NOT_OWNED, HANDOFF, SHOP_DOMAIN, MCP }
 }

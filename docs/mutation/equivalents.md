@@ -158,11 +158,12 @@ Format, one block per mutant. **An entry without an `approved:` line is only a p
 - the test that shows it: `OrchestratorQuoteMutationTest.aProposal_isRecorded_withItsLinesItsRationaleAndItsDecision` (a rationale of 300 and one of 301) passes with and without the mutation
 - approved: owner 2026-11-15
 
-### 26. dev.ucplab.core.orchestrator.DefaultOrchestrator.propose RemoveConditionalMutator_EQUAL_ELSE (the `!decision.allowed()` early return)
+### 26. dev.ucplab.core.orchestrator.DefaultOrchestrator.propose RemoveConditionalMutator_EQUAL_ELSE (the `!allowed` early return: a policy or I12 denial)
 - description: removed conditional - replaced equality check with false (a denied proposal goes on to a step)
-- why it is equivalent: the intent is already REJECTED with no owed cancel; the step that follows only claims it again (this worker holds the lease) and reports idle, and the result is the same REJECTED proposal with no quote. No merchant call is made either way
-- the test that shows it: `OrchestratorQuoteMutationTest.aDeniedProposal_isRejectedWithNoQuoteAndNoCall_andAnAllowedOneCarriesItsQuote` passes with and without the mutation
+- why it is equivalent: the intent is already REJECTED with no owed cancel; the step that follows only claims it again (this worker holds the lease) and reports idle, and the result is the same REJECTED proposal with no quote. No merchant call is made either way. An I12 denial at propose is the same: no cancel is owed, so `cancelIfOwed` returns idle before its I12 check
+- the test that shows it: `OrchestratorQuoteMutationTest.aDeniedProposal_isRejectedWithNoQuoteAndNoCall_andAnAllowedOneCarriesItsQuote` passes with and without the mutation; `OrchestratorOwnStoreTest.propose_atAnUnownedEntry_isDeniedWithI12_beforeThePolicyEngine` likewise
 - approved: owner 2026-11-15
+- wording extended for the I12 denial: owner 2026-11-16
 
 ### 27. dev.ucplab.core.orchestrator.DefaultOrchestrator.propose RemoveConditionalMutator_EQUAL_IF (the `last.after() == AWAITING_APPROVAL` choice of quote)
 - description: removed conditional - replaced equality check with true (the step's quote is always returned)

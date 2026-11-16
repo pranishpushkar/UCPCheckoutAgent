@@ -58,7 +58,21 @@ public final class TransitionTable {
             // A ProtocolError on complete does not settle the outcome: reconcile, never FAILED_NOT_CHARGED.
             row(COMPLETING, TransitionEvent.PROTOCOL_ERROR, TransitionGuard.NONE, RECONCILING, SideEffect.NONE),
             // The approval behind an APPROVED intent is not usable (I3): nothing is sent, a human must look.
-            row(APPROVED, TransitionEvent.APPROVAL_INVALID, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT));
+            row(APPROVED, TransitionEvent.APPROVAL_INVALID, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
+            // I12: the entry fails I12 at a step that would send, or changed under the intent. Any non-terminal state;
+            // nothing is sent and no attempt written.
+            row(PROPOSED, TransitionEvent.MERCHANT_NOT_OWNED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
+            row(QUOTING, TransitionEvent.MERCHANT_NOT_OWNED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
+            row(AWAITING_APPROVAL, TransitionEvent.MERCHANT_NOT_OWNED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
+            row(APPROVED, TransitionEvent.MERCHANT_NOT_OWNED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
+            row(COMPLETING, TransitionEvent.MERCHANT_NOT_OWNED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
+            row(RECONCILING, TransitionEvent.MERCHANT_NOT_OWNED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
+            row(PROPOSED, TransitionEvent.MERCHANT_CHANGED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
+            row(QUOTING, TransitionEvent.MERCHANT_CHANGED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
+            row(AWAITING_APPROVAL, TransitionEvent.MERCHANT_CHANGED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
+            row(APPROVED, TransitionEvent.MERCHANT_CHANGED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
+            row(COMPLETING, TransitionEvent.MERCHANT_CHANGED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
+            row(RECONCILING, TransitionEvent.MERCHANT_CHANGED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT));
 
     private TransitionTable() {
     }

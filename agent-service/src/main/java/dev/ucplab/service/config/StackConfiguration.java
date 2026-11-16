@@ -6,6 +6,8 @@ import dev.ucplab.core.crypto.HmacSha256;
 import dev.ucplab.core.id.IdGenerator;
 import dev.ucplab.core.id.UuidV7IdGenerator;
 import dev.ucplab.core.intent.IntentCursorCodec;
+import dev.ucplab.core.merchant.FulfillmentPolicy;
+import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantGateways;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantInstruments;
@@ -44,9 +46,11 @@ import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.time.Clock;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -248,13 +252,17 @@ public class StackConfiguration {
                                      IdGenerator ids, WorkerId workerId, RandomGenerator random,
                                      MerchantInstrumentMap merchantInstruments) {
         // DESIGN 19: a merchant dropped from the file while an intent at it is in flight could never reconcile.
-        MerchantWiring.requireInFlightMerchantsConfigured(new SqlRecoveryScan(db).merchantsInFlight(),
+        MerchantWiring.requireInFlightMerchantsConfigured(new SqlRecoveryScan(db).fingerprintsInFlight(),
                 properties.merchants());
         RuleBasedPolicyEngine policy = new RuleBasedPolicyEngine(properties.policy(), merchantRegistry::find,
                 new SqlPolicyUsage(db), clock);
-        return new DefaultOrchestrator(intents, approvals, approvalService, MerchantGateways.of(merchantGateways.byId()), policy,
-                new RequotePolicy(properties.policy()), MerchantInstruments.of(merchantInstruments.byId()),
-                orchestratorConfig, clock, ids, workerId.value(), random);
+        // I12: the entries as configured, read with no I/O (registry.find may start a discovery re-check).
+        Map<MerchantId, MerchantEntry> entries = new HashMap<>();
+        properties.merchants().forEach(m -> entries.put(m.id(), m.entry(m.fileStatus())));
+        return new DefaultOrchestrator(intents, approvals, approvalService, MerchantGateways.of(merchantGateways.byId()),
+                id -> Optional.ofNullable(entries.get(id)), policy, new RequotePolicy(properties.policy()),
+                MerchantInstruments.of(merchantInstruments.byId()), FulfillmentPolicy.cheapest(), orchestratorConfig,
+                clock, ids, workerId.value(), random);
     }
 
     /** The instrument of each configured merchant (19, 8.5). */

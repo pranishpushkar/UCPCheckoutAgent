@@ -54,6 +54,17 @@ final class Invariants {
 
     private Invariants() {}
 
+    // ---------------------------------------------------------------- I12
+
+    /**
+     * I12 (H5 C2): no create, update, complete or cancel reached a merchant whose entry, when the call arrived, was not
+     * owned or was not the entry the intent was proposed under. Seen where the call reaches the merchant
+     * ({@link OwnStoreCheckGateway}), so it does not depend on the orchestrator's list of sends.
+     */
+    static List<String> i12(Observations o) {
+        return o.ownStore().violations();
+    }
+
     // ---------------------------------------------------------------- I1
 
     /** I1: the merchant holds at most one order per intent. */

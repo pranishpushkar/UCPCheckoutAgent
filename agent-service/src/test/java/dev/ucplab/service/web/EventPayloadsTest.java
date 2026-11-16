@@ -26,11 +26,11 @@ class EventPayloadsTest {
             Path.of("../agent-core/src/main/java/dev/ucplab/core/approval/DefaultApprovalService.java"));
 
     /** The three ways a type is written: {@code event(id, "t", ...)}, {@code IntentEvent.of("t", ...)}, and the
-     * orchestrator's {@code stopProbing(intent, "t", ...)}. */
+     * orchestrator's {@code stopProbing(intent, "t", ...)}. A type may hold digits ({@code cancel_blocked_i12}, 7.6). */
     private static final List<Pattern> TYPE_LITERALS = List.of(
-            Pattern.compile("\\bevent\\(\\s*[\\w.()]+,\\s*\"([a-z_]+)\""),
-            Pattern.compile("IntentEvent\\.of\\(\\s*\"([a-z_]+)\""),
-            Pattern.compile("stopProbing\\(\\s*\\w+,\\s*\"([a-z_]+)\""));
+            Pattern.compile("\\bevent\\(\\s*[\\w.()]+,\\s*\"([a-z][a-z0-9_]*)\""),
+            Pattern.compile("IntentEvent\\.of\\(\\s*\"([a-z][a-z0-9_]*)\""),
+            Pattern.compile("stopProbing\\(\\s*\\w+,\\s*\"([a-z][a-z0-9_]*)\""));
 
     /**
      * A write of an event whose type is a variable, which the literal scan would miss. Only the two pass-throughs whose

@@ -300,7 +300,7 @@ class MigrationsTest {
 
             assertThat(column(db, "SELECT merchant_id || ':' || state FROM purchase_intent")).containsExactly("m:QUOTING");
             assertThat(column(db, "SELECT version FROM flyway_schema_history WHERE success = 1"
-                    + " ORDER BY installed_rank")).endsWith("7");
+                    + " ORDER BY installed_rank")).contains("7");
         }
     }
 
@@ -329,7 +329,49 @@ class MigrationsTest {
             assertThat(column(db, "SELECT name FROM sqlite_master WHERE type = 'trigger'"))
                     .containsExactly("purchase_intent_merchant_immutable");
             assertThat(column(db, "SELECT version FROM flyway_schema_history WHERE success = 1"
-                    + " ORDER BY installed_rank")).endsWith("6", "7");
+                    + " ORDER BY installed_rank")).containsSubsequence("6", "7");
+        }
+    }
+
+    // Covers: 10, 19, I12 (a database at V7 holding rows upgrades to V8: every row keeps every value it had and gets the
+    // lab entry's fingerprint, the only entry an intent from before H5 can run under; V8 is the last migration)
+    @Test
+    void v8_upgradesAV7DatabaseWithRows_givingEachTheLabFingerprint() {
+        Path file = dir.resolve("v7-to-v8.db");
+        Flyway.configure().dataSource("jdbc:sqlite:" + file, null, null).locations("classpath:db/migration")
+                .target("7").load().migrate();
+        String dump = "SELECT group_concat(id || '|' || user_id || '|' || merchant_id || '|' || state || '|' || version"
+                + " || '|' || created_at, ';') FROM (SELECT * FROM purchase_intent ORDER BY id)";
+        List<String> before;
+        try (Database old = Database.open(file, 1)) {
+            exec(old, intent("i1", "merchant-a", "k1", "PROPOSED", null));
+            exec(old, intent("i2", "merchant-b", "k2", "QUOTING", null));
+            before = column(old, dump);
+        }
+
+        Migrations.migrate(file);
+
+        try (Database db = Database.open(file, 1)) {
+            assertThat(column(db, dump)).isEqualTo(before);
+            assertThat(column(db, "SELECT merchant_fingerprint FROM purchase_intent ORDER BY id")).containsExactly(
+                    "{\"completion\":\"agent\",\"owned\":true,\"transport\":\"rest\"}",
+                    "{\"completion\":\"agent\",\"owned\":true,\"transport\":\"rest\"}");
+            assertThat(column(db, "SELECT version FROM flyway_schema_history WHERE success = 1"
+                    + " ORDER BY installed_rank")).endsWith("7", "8");
+        }
+    }
+
+    // Covers: 10, I12 (merchant_fingerprint is NOT NULL: a raw insert that sets it to NULL is refused)
+    @Test
+    void v8_merchantFingerprint_isNotNull() {
+        Path file = dir.resolve("v8.db");
+        Migrations.migrate(file);
+        try (Database db = Database.open(file, 1)) {
+            exec(db, intent("i1", "m", "k1", "PROPOSED", null));
+
+            org.assertj.core.api.Assertions.assertThatThrownBy(
+                    () -> exec(db, "UPDATE purchase_intent SET merchant_fingerprint = NULL WHERE id = 'i1'"))
+                    .hasStackTraceContaining("NOT NULL");
         }
     }
 

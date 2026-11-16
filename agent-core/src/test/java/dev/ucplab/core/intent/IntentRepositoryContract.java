@@ -206,13 +206,14 @@ public abstract class IntentRepositoryContract {
         assertThatThrownBy(() -> repo.update(claimed, 7, W2)).isInstanceOf(LeaseLostException.class);
     }
 
-    // Covers: T2, 7.6 (update never changes owner, dedupe key or lease, whatever the caller's copy says; the merchant of the
-    // copy must be the stored one, I11, see update_refusesAnotherMerchant_andChangesNothing)
+    // Covers: T2, 7.6, 10, I12 (update never changes owner, dedupe key, merchant_fingerprint or lease, whatever the
+    // caller's copy says; the merchant of the copy must be the stored one, I11, see
+    // update_refusesAnotherMerchant_andChangesNothing)
     @Test
     void update_keepsOwnerAndLease_whateverTheCallerPasses() {
         PurchaseIntent claimed = insertAndClaim("i1", ALICE, "d1", W1);
         PurchaseIntent forged = new PurchaseIntent(
-                claimed.id(), BOB, SHOP, "forged", List.of(new ProposedLine("other", 5)),
+                claimed.id(), BOB, SHOP, "{\"forged\":true}", "forged", List.of(new ProposedLine("other", 5)),
                 "forged@example.com", IntentState.COMPLETING, 99,
                 Optional.empty(), Optional.empty(), 0, Optional.empty(), Optional.empty(), Optional.empty(), false,
                 Optional.of(W2), Optional.of(T0.plusSeconds(9999)), T0.minusSeconds(5), clock.instant());
@@ -223,6 +224,7 @@ public abstract class IntentRepositoryContract {
         assertThat(stored.owner()).isEqualTo(ALICE);
         assertThat(stored.merchantId()).isEqualTo(SHOP);
         assertThat(stored.dedupeKey()).isEqualTo("d1");
+        assertThat(stored.merchantFingerprint()).isEqualTo(claimed.merchantFingerprint());
         assertThat(stored.lines()).isEqualTo(LINES);
         assertThat(stored.buyerEmail()).isEqualTo("a@example.com");
         assertThat(stored.createdAt()).isEqualTo(claimed.createdAt());
@@ -234,7 +236,7 @@ public abstract class IntentRepositoryContract {
 
     /** A copy of {@code i} at another merchant: what a caller breaking I11 would pass. */
     private static PurchaseIntent atMerchant(PurchaseIntent i, MerchantId merchant) {
-        return new PurchaseIntent(i.id(), i.owner(), merchant, i.dedupeKey(), i.lines(), i.buyerEmail(), i.state(),
+        return new PurchaseIntent(i.id(), i.owner(), merchant, i.merchantFingerprint(), i.dedupeKey(), i.lines(), i.buyerEmail(), i.state(),
                 i.version(), i.sessionId(), i.approvedSnapshotHash(), i.requoteCount(), i.orderId(), i.failureReason(),
                 i.uncertainSince(), i.cancelPending(), i.leaseOwner(), i.leaseUntil(), i.createdAt(), i.updatedAt());
     }

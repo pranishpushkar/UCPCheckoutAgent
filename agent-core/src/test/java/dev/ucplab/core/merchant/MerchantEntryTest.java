@@ -58,4 +58,42 @@ class MerchantEntryTest {
                 Transport.MCP, Completion.HANDOFF, true, Optional.empty()))
                 .isInstanceOf(IllegalArgumentException.class).hasMessage("an MCP merchant needs a shop_domain");
     }
+
+    // Covers: 10, 19, I12 (the fingerprint is CanonicalJson of completion, owned, shop_domain and transport, lower-case;
+    // a lab entry's is the V8 default; shop_domain is left out when empty)
+    @Test
+    void fingerprint_isTheFourI12Fields_asCanonicalJson() {
+        MerchantEntry lab = new MerchantEntry(A, URI.create("http://127.0.0.1:8081"), "Lab", MerchantStatus.ACTIVE);
+        MerchantEntry shop = new MerchantEntry(A, URI.create("https://s.myshopify.com"), "S", MerchantStatus.ACTIVE,
+                Transport.MCP, Completion.HANDOFF, true, Optional.of("s.myshopify.com"));
+
+        assertThat(lab.fingerprint()).isEqualTo(MerchantEntry.LAB_FINGERPRINT)
+                .isEqualTo("{\"completion\":\"agent\",\"owned\":true,\"transport\":\"rest\"}");
+        assertThat(shop.fingerprint()).isEqualTo(
+                "{\"completion\":\"handoff\",\"owned\":true,\"shop_domain\":\"s.myshopify.com\",\"transport\":\"mcp\"}");
+    }
+
+    // Covers: 10, 19, I12 (each of the four fields changes the fingerprint; id, URL, name and status do not)
+    @Test
+    void fingerprint_changesWithEachI12Field_only() {
+        MerchantEntry base = new MerchantEntry(A, URI.create("https://s.myshopify.com"), "S", MerchantStatus.ACTIVE,
+                Transport.MCP, Completion.HANDOFF, true, Optional.of("s.myshopify.com"));
+        String f = base.fingerprint();
+
+        assertThat(List.of(
+                new MerchantEntry(A, base.baseUrl(), "S", MerchantStatus.ACTIVE, Transport.MCP, Completion.AGENT, true,
+                        Optional.of("s.myshopify.com")),
+                new MerchantEntry(A, base.baseUrl(), "S", MerchantStatus.ACTIVE, Transport.MCP, Completion.HANDOFF, false,
+                        Optional.of("s.myshopify.com")),
+                new MerchantEntry(A, base.baseUrl(), "S", MerchantStatus.ACTIVE, Transport.MCP, Completion.HANDOFF, true,
+                        Optional.of("t.myshopify.com")),
+                new MerchantEntry(A, base.baseUrl(), "S", MerchantStatus.ACTIVE, Transport.REST, Completion.HANDOFF, true,
+                        Optional.of("s.myshopify.com")),
+                new MerchantEntry(A, base.baseUrl(), "S", MerchantStatus.ACTIVE, Transport.REST, Completion.HANDOFF, true,
+                        Optional.empty())))
+                .extracting(MerchantEntry::fingerprint).doesNotContain(f).doesNotHaveDuplicates();
+        assertThat(new MerchantEntry(new MerchantId("b"), URI.create("https://other.example"), "T",
+                MerchantStatus.SUSPENDED, Transport.MCP, Completion.HANDOFF, true, Optional.of("s.myshopify.com"))
+                .fingerprint()).isEqualTo(f);
+    }
 }
