@@ -27,7 +27,7 @@ class Fake(http.server.BaseHTTPRequestHandler):
     are wrapped as Shopify's MCP wraps them, in result.structuredContent, unless `flat`."""
     calls = []          # (method, host, tool name or path)
     paths = []          # the path of every POST
-    headers = {}        # tool name -> the last call's headers, keys lower-cased
+    headers = {}        # tool name + "@" + host -> the last call's headers, keys lower-cased
     bodies = {}         # tool name + "@" + host -> the last call's body
     fail_create = False
     bad_url = False
@@ -54,7 +54,7 @@ class Fake(http.server.BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
         name = body.get("params", {}).get("name", path)
         Fake.calls.append(("POST", host, name))
-        Fake.headers[name] = {k.lower(): v for k, v in self.headers.items()}
+        Fake.headers[name + "@" + host] = {k.lower(): v for k, v in self.headers.items()}
         Fake.bodies[name + "@" + host] = body
         if path == "/auth/access_token":
             self.reply({"access_token": "canary-token-333"})
@@ -198,13 +198,21 @@ class SpikeTest(unittest.TestCase):
         del os.environ["BUYER_IP"]
         out = self.run_main(["--i-own-this-store"])
         self.assertNotIn("missing environment", out)
-        self.assertNotIn("shopify-buyer-ip", Fake.headers["create_checkout"])
+        self.assertNotIn("shopify-buyer-ip", Fake.headers["create_checkout@" + STORE])
 
     # H5 fix 4: the IP is sent only with --with-buyer-ip, and never printed.
     def test_buyer_ip_only_with_the_flag(self):
         out = self.run_main(["--i-own-this-store", "--with-buyer-ip"])
-        self.assertEqual(Fake.headers["create_checkout"]["shopify-buyer-ip"], CANARIES["BUYER_IP"])
+        self.assertEqual(Fake.headers["create_checkout@" + STORE]["shopify-buyer-ip"], CANARIES["BUYER_IP"])
         self.assertNotIn(CANARIES["BUYER_IP"], out)
+
+    # H5 (run 2): with the flag, every call to the store carries the IP (its search refuses without it), and the global
+    # catalog's does not.
+    def test_buyer_ip_goes_on_every_store_call_and_only_there(self):
+        self.run_main(["--i-own-this-store", "--with-buyer-ip"])
+        for name in ("search_catalog", "create_checkout", "cancel_checkout"):
+            self.assertEqual(Fake.headers[name + "@" + STORE].get("shopify-buyer-ip"), CANARIES["BUYER_IP"], name)
+        self.assertNotIn("shopify-buyer-ip", Fake.headers["search_catalog@" + GLOBAL])
 
     # H5 fix 4: the flag without an IP refuses before any call.
     def test_buyer_ip_flag_without_an_ip_refuses(self):

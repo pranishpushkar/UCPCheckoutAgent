@@ -4,7 +4,7 @@
 real round trip against a Shopify **development store you own**: a token, one read-only search of the global catalog, the
 store's profile, one read-only search at the store itself, one checkout with an item from that search, and a cancel. **You
 run it. No CI job and no agent runs it.** It is tested only against a local fake (`python3 -I scripts/shopify_spike_test.py`,
-19 tests; not part of `./mvnw verify`, which needs no Python). H5 Stage 0 fixed it before its first real run: the Keychain
+20 tests; not part of `./mvnw verify`, which needs no Python). H5 Stage 0 fixed it before its first real run: the Keychain
 items, answers wrapped in `result.structuredContent`, the item taken from the store's own search, the buyer IP made optional,
 the query, `--record`, and the MCP endpoint read from the profile's `ucp.services` (the first real run showed the shape).
 
@@ -32,7 +32,7 @@ scripts/shopify-spike.sh --i-own-this-store --record notes/h5/spike            #
 (DESIGN 26.5). It also refuses if the MCP endpoint in the store's profile is not on `SHOPIFY_STORE_DOMAIN`, and it takes the
 checkout's item only from the store's own search (skipping any variant whose seller is another store), so a checkout is never
 created at, or for, a store a global search returned. If the store's search finds nothing, it stops before any create.
-`--with-buyer-ip` sends `Shopify-Buyer-IP`; without it no buyer data is sent (H5 decision 6). If Shopify refuses a create
+`--with-buyer-ip` sends `Shopify-Buyer-IP` on every call to the store (its search refuses without it), never to the global catalog; without it no buyer data is sent (H5 decision 6). If Shopify refuses a create
 without it, that is a finding for the owner, not a default. `--record DIR` writes each answer as JSON, redacted, with
 `continue_url` and `checkout_url` cut to their host; the token answer is never written. Keep it under `notes/` (never
 committed).

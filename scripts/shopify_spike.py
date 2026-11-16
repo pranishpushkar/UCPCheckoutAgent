@@ -138,6 +138,7 @@ def main(argv):
     meta = {"ucp-agent": {"profile": os.environ["AGENT_PROFILE_URL"]}}
     checkout_id = None
     endpoint = None
+    store_headers = {}
     try:
         tok = call("token", "POST", "https://api.shopify.com/auth/access_token", {},
                    {"client_id": os.environ["SHOPIFY_CLIENT_ID"], "client_secret": os.environ["SHOPIFY_CLIENT_SECRET"],
@@ -160,14 +161,16 @@ def main(argv):
         host = urllib.parse.urlparse(endpoint).hostname
         if not dry and host != domain:
             raise SystemExit("refused: the profile's MCP endpoint host %s is not the stated store %s (DESIGN 26.5)" % (host, domain))
-        found = call("catalog search (the store, read-only)", "POST", endpoint, auth, search, dry, "catalog_search_store")
+        # Every call to the store carries the buyer IP when asked (its endpoint refuses even a search without it); the
+        # global catalog's calls never do.
+        store_headers = dict(auth, **({"Shopify-Buyer-IP": os.environ["BUYER_IP"]} if with_ip else {}))
+        found = call("catalog search (the store, read-only)", "POST", endpoint, store_headers, search, dry, "catalog_search_store")
         item = first_item(content(found), domain)
         if not item:
             if not dry:
                 raise SystemExit("stopped: the store's own search for %r found no product, so nothing goes in a checkout" % query)
             item = "<item id from the store's own search>"
-        create_headers = dict(auth, **({"Shopify-Buyer-IP": os.environ["BUYER_IP"]} if with_ip else {}))
-        created = call("create_checkout", "POST", endpoint, create_headers,
+        created = call("create_checkout", "POST", endpoint, store_headers,
                        {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "create_checkout", "arguments": {
                            "meta": meta, "checkout": {"currency": "USD", "line_items": [{"item": {"id": item}, "quantity": 1}]}}}},
                        dry, "create_checkout")
@@ -186,7 +189,7 @@ def main(argv):
     finally:
         if checkout_id and endpoint:
             try:
-                canceled = call("cancel_checkout", "POST", endpoint, {"Authorization": "Bearer " + (TOKEN[0] if TOKEN else "")},
+                canceled = call("cancel_checkout", "POST", endpoint, store_headers,
                                 {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "cancel_checkout", "arguments": {
                                     "meta": dict(meta, **{"idempotency-key": str(uuid.uuid4())}), "id": checkout_id}}},
                                 dry, "cancel_checkout")
