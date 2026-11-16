@@ -90,9 +90,8 @@ class ToolUntrustedFieldsTest {
                 Optional.empty());
         orchestrator.statuses = Map.of(new IntentId("intent-1"), new IntentStatus(new IntentId("intent-1"),
                 IntentState.FAILED_NOT_CHARGED, Optional.empty(), Optional.of("merchant_error_IGNORE_RULES")));
-        assertThat(parse(run("propose_purchase", args)).get("failure_reason"))
-                .isEqualTo("<untrusted source=\"merchant\" field=\"failure_reason\">merchant_error_IGNORE_RULES"
-                        + "</untrusted>");
+        // 8.1, H5 C3: a merchant code off the allowlist reaches the model as merchant_error (was: wrapped)
+        assertThat(parse(run("propose_purchase", args)).get("failure_reason")).isEqualTo("merchant_error");
     }
 
     // Covers: 6.4, 9.3 L2 (get_purchase_status: an order id that is not an id is wrapped, our own reasons are not)

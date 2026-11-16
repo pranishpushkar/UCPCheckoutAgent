@@ -24,9 +24,10 @@ import java.util.Optional;
  * {@code amount} in minor units and a three-letter {@code currency}). {@code availability} is optional; a variant
  * without it is not available (see {@link Availability}). Unknown fields, including {@code null}s and decimals in fields
  * not used, are ignored. A product's {@code description} is optional: the 2026-08-25 shape is an object keyed by
- * format, and only its {@code plain} text is read; any other shape or format reads as no description. Titles,
- * descriptions and statuses are merchant text: control characters are replaced and they are cut to a fixed length,
- * because they reach the model and the logs.
+ * format, read from {@code plain}, else from {@code html}; any other shape or format reads as no description (6.4).
+ * Titles and descriptions have their markup removed first ({@link MerchantMarkup}, 6.4, H5 C3). Titles, descriptions
+ * and statuses are merchant text: control characters are replaced and they are cut to a fixed length, because they
+ * reach the model and the logs.
  */
 final class CatalogParser {
 
@@ -138,10 +139,12 @@ final class CatalogParser {
     }
 
     private static Optional<String> description(Object value) {
-        if (value instanceof Map<?, ?> d && d.get("plain") instanceof String s && !s.isBlank()) {
-            return Optional.of(clean(s, MAX_DESCRIPTION));
+        if (!(value instanceof Map<?, ?> d)) {
+            return Optional.empty();
         }
-        return Optional.empty();
+        Object text = d.get("plain") instanceof String plain ? plain : d.get("html");
+        return text instanceof String s ? Optional.of(clean(MerchantMarkup.strip(s), MAX_DESCRIPTION))
+                .filter(c -> !c.isBlank()) : Optional.empty();
     }
 
     private static CatalogVariant variant(Map<?, ?> v) {
@@ -181,7 +184,7 @@ final class CatalogParser {
     }
 
     private static String cleanText(Map<?, ?> map, String key) {
-        return clean(text(map, key), MAX_TEXT);
+        return clean(MerchantMarkup.strip(text(map, key)), MAX_TEXT);
     }
 
     private static String decode(byte[] body) throws CharacterCodingException {
