@@ -72,7 +72,8 @@ class ApprovalAnswerSessionIdTest {
                 List.of());
         PendingApproval opened = service.open(intent, quote);
 
-        Map<String, Object> pending = new ApprovalController(service, intents, id -> false).pending(alice, ID.value());
+        Map<String, Object> pending = new ApprovalController(service, intents, id -> false,
+                m -> dev.ucplab.core.merchant.Completion.AGENT).pending(alice, ID.value());
         Map<String, Object> read = new IntentController(intents, approvals, new InMemoryIntentQueries(intents),
                 new IntentCursorCodec(new byte[32])).intent(alice, ID.value());
         for (String answer : List.of(CanonicalJson.write(pending), CanonicalJson.write(read))) {

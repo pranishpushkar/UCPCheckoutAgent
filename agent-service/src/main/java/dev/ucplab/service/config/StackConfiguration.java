@@ -10,6 +10,7 @@ import dev.ucplab.core.merchant.FulfillmentPolicy;
 import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantGateway;
 import dev.ucplab.core.merchant.MerchantGateways;
+import dev.ucplab.core.merchant.Completion;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantInstruments;
 import dev.ucplab.core.merchant.PaymentInstrument;
@@ -218,13 +219,28 @@ public class StackConfiguration {
         return new ConfiguredGateways(Map.copyOf(byId));
     }
 
-    /** What the gateways and the catalogs are built from (8.5, 26.4): one real transport per client. */
+    /** Each merchant's completion from the file, read as the orchestrator reads its entries (19, 7.2, 23.2). */
+    @Bean
+    MerchantCompletions merchantCompletions(ServiceProperties properties) {
+        Map<MerchantId, Completion> byId = new HashMap<>();
+        properties.merchants().forEach(m -> byId.put(m.id(), m.completion()));
+        return id -> byId.getOrDefault(id, Completion.AGENT);
+    }
+
+    /** One real transport per client: the JDK's. A test replaces this bean (nothing else) to keep calls in the JVM. */
+    @Bean
+    @ConditionalOnMissingBean
+    MerchantTransports merchantTransports(UcpConfig ucp) {
+        return () -> new JdkHttpTransport(ucp);
+    }
+
+    /** What the gateways and the catalogs are built from (8.5, 26.4). */
     @Bean
     MerchantWiring.GatewayParts gatewayParts(ServiceProperties properties, UcpConfig ucp, CircuitBreakers breakers,
                                              Clock clock, RandomGenerator random, IdGenerator ids,
-                                             Environment environment) {
+                                             Environment environment, MerchantTransports transports) {
         return new MerchantWiring.GatewayParts(ucp, breakers, clock, Sleeper.THREAD, random, ids,
-                () -> new JdkHttpTransport(ucp), properties.shopifyTokenEndpoint(), properties.ucpAgentVersion(), properties.buyerIp(),
+                transports, properties.shopifyTokenEndpoint(), properties.ucpAgentVersion(), properties.buyerIp(),
                 environment);
     }
 

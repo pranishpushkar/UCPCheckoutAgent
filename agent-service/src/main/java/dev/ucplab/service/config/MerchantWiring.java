@@ -69,19 +69,6 @@ final class MerchantWiring {
         MerchantInstruments.requireMatchingHandler(settings.id(), requiredHandler(settings), instrument);
     }
 
-    // TODO(H5 C7): remove once the orchestrator takes the hand_off rows of 7.2.
-    static final String HANDOFF_NOT_WIRED = "a completion: handoff merchant has no handoff path in this build";
-
-    /**
-     * Refuses a merchant whose path does not exist yet, so the stack never falls back to behaviour it must not have:
-     * never a complete at a handoff merchant (19, 7.2).
-     */
-    static void requireBuildable(MerchantSettings settings) {
-        if (settings.completion() == dev.ucplab.core.merchant.Completion.HANDOFF) {
-            throw new IllegalStateException(HANDOFF_NOT_WIRED);
-        }
-    }
-
     /** How long a token without expires_in is taken to last (TODO(VERIFY 1)), and how early it is refreshed (20). */
     static final Duration TOKEN_DEFAULT_LIFETIME = Duration.ofMinutes(10);
     static final Duration TOKEN_REFRESH_MARGIN = Duration.ofMinutes(1);
@@ -102,15 +89,10 @@ final class MerchantWiring {
      * The merchant's gateway, picked by its transport (19): {@link UcpHttpGateway} for {@code rest};
      * {@link McpMerchantGateway} for {@code mcp}, with its client credentials read from the variable its
      * {@code credential_ref} names (26.4; startup has checked that it is set and splits), a {@link TokenProvider} for the
-     * token endpoint, and {@code Shopify-Buyer-IP} only when the entry says {@code requires_buyer_ip}.
+     * token endpoint, and {@code Shopify-Buyer-IP} only when the entry says {@code requires_buyer_ip}. A
+     * {@code completion: handoff} merchant builds like any other: the orchestrator never sends it a complete (7.2).
      */
     static MerchantGateway gateway(MerchantSettings s, GatewayParts p) {
-        requireBuildable(s);
-        return build(s, p);
-    }
-
-    /** The choice by transport, without {@link #requireBuildable}: until C7 an MCP merchant reaches it only in a test. */
-    static MerchantGateway build(MerchantSettings s, GatewayParts p) {
         MerchantEntry entry = s.entry(s.fileStatus());
         if (s.transport() == Transport.REST) {
             return new UcpHttpGateway(entry, p.ucp(), p.transports().get(), p.breakers(), p.clock(), p.sleeper(),

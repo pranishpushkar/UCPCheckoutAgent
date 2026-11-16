@@ -14,14 +14,15 @@ import java.util.Map;
  *   <li>the approval token: only the body of a 200 {@code GET /api/intents/{id}/approval};</li>
  *   <li>a session cookie value: only the {@code Set-Cookie} header that delivers it;</li>
  *   <li>a CSRF token: only the {@code X-CSRF-Token} response header that delivers it;</li>
- *   <li>a message text: in any response (the run's own messages), but in no log line and no database file.</li>
+ *   <li>a message text: in any response (the run's own messages), but in no log line and no database file;</li>
+ *   <li>a handoff URL: only the body of a 200 {@code GET /api/intents/{id}} (23.2, to the owner only).</li>
  * </ul>
  * Everything else (the approval secret's suffix, the payment token, the model key, message texts) is allowed nowhere.
  */
 final class LeakEvidence {
 
     /** Where a canary may appear: the part of a response it may be found in. */
-    enum Allowed { NOWHERE, APPROVAL_BODY, SET_COOKIE_HEADER, CSRF_HEADER, ANY_RESPONSE }
+    enum Allowed { NOWHERE, APPROVAL_BODY, SET_COOKIE_HEADER, CSRF_HEADER, ANY_RESPONSE, HANDOFF_BODY }
 
     private final Map<String, Allowed> canaries = new LinkedHashMap<>();
     private final Map<String, String> names = new LinkedHashMap<>();
@@ -75,7 +76,8 @@ final class LeakEvidence {
                     if (c.getValue() == Allowed.ANY_RESPONSE) {
                         continue;
                     }
-                    if (r.body().contains(value) && !(c.getValue() == Allowed.APPROVAL_BODY && isApprovalGet(r))) {
+                    if (r.body().contains(value) && !(c.getValue() == Allowed.APPROVAL_BODY && isApprovalGet(r))
+                            && !(c.getValue() == Allowed.HANDOFF_BODY && isIntentGet(r))) {
                         found.add(name + " in the body of " + where);
                     }
                     r.headers().map().forEach((header, values) -> {
@@ -97,6 +99,11 @@ final class LeakEvidence {
     private static boolean isApprovalGet(HttpResponse<?> r) {
         return r.request().method().equals("GET") && r.statusCode() == 200
                 && r.request().uri().getPath().matches("/api/intents/[^/]+/approval");
+    }
+
+    private static boolean isIntentGet(HttpResponse<?> r) {
+        return r.request().method().equals("GET") && r.statusCode() == 200
+                && r.request().uri().getPath().matches("/api/intents/[^/]+");
     }
 
     private static boolean deliveredBy(Allowed allowed, String header) {

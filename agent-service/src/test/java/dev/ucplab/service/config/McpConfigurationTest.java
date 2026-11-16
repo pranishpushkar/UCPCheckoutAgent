@@ -91,11 +91,10 @@ class McpConfigurationTest {
         UcpConfig ucp = stack.ucpConfig(properties);
         Clock clock = Clock.systemUTC();
         MerchantWiring.GatewayParts p = stack.gatewayParts(properties, ucp, new CircuitBreakers(ucp, clock), clock,
-                new SplittableRandom(1), new SequentialIdGenerator("c"), Environment.of(env));
+                new SplittableRandom(1), new SequentialIdGenerator("c"), Environment.of(env), this::network);
         MerchantWiring.GatewayParts offline = new MerchantWiring.GatewayParts(p.ucp(), p.breakers(), p.clock(), d -> { },
                 p.random(), p.ids(), this::network, p.tokenEndpoint(), p.agentVersion(), p.buyerIp(), p.environment());
-        // MerchantWiring.build, not gateway: until C7 an MCP merchant refuses to build a stack (HANDOFF_NOT_WIRED).
-        return MerchantWiring.build(properties.merchants().getFirst(), offline);
+        return MerchantWiring.gateway(properties.merchants().getFirst(), offline);
     }
 
     private static IdempotencyKey key(MutatingOp op) {

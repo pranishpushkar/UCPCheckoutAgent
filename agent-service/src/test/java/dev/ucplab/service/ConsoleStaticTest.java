@@ -95,7 +95,7 @@ class ConsoleStaticTest {
         String card = card(js);
 
         Set<String> allowed = Set.of("snapshot", "lines", "item_id", "quantity", "unit_price_minor", "currency",
-                "total_minor", "expires_at", "token", "merchant_id");
+                "total_minor", "expires_at", "token", "merchant_id", "completion", "note");
         Set<String> read = new LinkedHashSet<>();
         Matcher fields = Pattern.compile("\\b(?:approval|snapshot|line)\\.([A-Za-z_]+)").matcher(card);
         while (fields.find()) {
@@ -161,6 +161,23 @@ class ConsoleStaticTest {
         String card = card(read("console.js"));
 
         assertThat(card).contains("Price and stock are not held").contains("expires_at").contains("Other charges (tax)");
+    }
+
+    // Covers: 23.2, 24.3, H5 C7c (a handoff merchant's card shows the answer's note, our fixed text, as text; only when
+    // the answer's completion is handoff)
+    @Test
+    void approvalCard_showsTheHandoffNote_onlyAtAHandoffMerchant() throws IOException {
+        String card = card(read("console.js"));
+
+        assertThat(card).contains("if (approval.completion === \"handoff\") {")
+                .contains("card.appendChild(el(\"p\", approval.note, \"fixed\"));");
+    }
+
+    // Covers: 7.1, H5 C7c (HANDED_OFF is terminal: the timeline stops polling a handed-off intent)
+    @Test
+    void timeline_stopsAtHandedOff() throws IOException {
+        assertThat(read("console.js"))
+                .contains("const TERMINAL = [\"COMPLETED\", \"HANDED_OFF\", \"REJECTED\", \"FAILED_NOT_CHARGED\", \"ESCALATED\"];");
     }
 
     // Covers: 24.3 (a 401 goes to /auth/login, reauth_required goes to /auth/login?reauth=true&return_to=/intents/{id})

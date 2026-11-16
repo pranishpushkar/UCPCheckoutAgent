@@ -3,7 +3,7 @@
 // session is the cookie; the CSRF token and the approval token live in variables of this page only.
 "use strict";
 
-const TERMINAL = ["COMPLETED", "REJECTED", "FAILED_NOT_CHARGED", "ESCALATED"];
+const TERMINAL = ["COMPLETED", "HANDED_OFF", "REJECTED", "FAILED_NOT_CHARGED", "ESCALATED"];
 const RUN_WAITING = ["waiting_for_user", "done", "waiting_for_approval"];
 
 let csrf = "";
@@ -248,6 +248,9 @@ function showApprovalCard(id, approvalResponse) {
   table.appendChild(foot);
   card.appendChild(table);
   card.appendChild(el("p", "Price and stock are not held.", "fixed"));
+  if (approval.completion === "handoff") {
+    card.appendChild(el("p", approval.note, "fixed"));
+  }
   const expiry = el("p");
   card.appendChild(expiry);
   const actions = el("div", null, "actions");

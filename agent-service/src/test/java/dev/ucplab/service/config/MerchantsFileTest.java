@@ -129,16 +129,14 @@ class MerchantsFileTest {
                 .hasMessage(MerchantsFile.UNREADABLE);
     }
 
-    // Covers: 19, 7.2, H5 C9 (the completion: handoff row: the file accepts it, and the stack refuses it with the
-    // temporary reason until C7 adds the handoff path; C7 removes the refusal and changes this row in the same commit)
+    // Covers: 19, 7.2, H5 C9, C7c (the completion: handoff row: the file accepts it; since C7c the stack builds it,
+    // MerchantWiringTest.handoffMerchant_buildsItsGateway and HandoffServiceTest)
     @Test
-    void load_completionHandoff_isReadButTheStackRefusesIt() throws IOException {
+    void load_completionHandoff_isRead() throws IOException {
         MerchantSettings m = load("merchants:\n" + merchant("a", "    completion: handoff\n"), AgentProfile.LOCAL)
                 .getFirst();
 
         assertThat(m.completion()).isEqualTo(dev.ucplab.core.merchant.Completion.HANDOFF);
-        assertThatThrownBy(() -> MerchantWiring.requireBuildable(m)).isInstanceOf(IllegalStateException.class)
-                .hasMessage(MerchantWiring.HANDOFF_NOT_WIRED);
     }
 
     // Covers: 19, 23.3 (lab_url is a local-profile key: in demo and prod the lab routes do not exist, so the key is refused)
