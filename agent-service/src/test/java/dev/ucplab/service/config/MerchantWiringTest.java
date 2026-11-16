@@ -1,21 +1,32 @@
 package dev.ucplab.service.config;
 
-import dev.ucplab.ucp.registry.MerchantSettings;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import dev.ucplab.core.id.SequentialIdGenerator;
 import dev.ucplab.core.merchant.Completion;
 import dev.ucplab.core.merchant.MerchantEntry;
+import dev.ucplab.core.merchant.MerchantGateway;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantStatus;
 import dev.ucplab.core.merchant.PaymentInstrument;
 import dev.ucplab.core.merchant.Transport;
+import dev.ucplab.ucp.CatalogClient;
+import dev.ucplab.ucp.CircuitBreakers;
+import dev.ucplab.ucp.McpCatalogGateway;
+import dev.ucplab.ucp.McpMerchantGateway;
+import dev.ucplab.ucp.UcpConfig;
 import dev.ucplab.ucp.UcpHttpGateway;
+import dev.ucplab.ucp.auth.ClientCredentials;
+import dev.ucplab.ucp.registry.BuyerIp;
+import dev.ucplab.ucp.registry.MerchantSettings;
 import java.net.URI;
+import java.time.Clock;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.SplittableRandom;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -88,21 +99,81 @@ class MerchantWiringTest {
                 .isInstanceOf(IllegalStateException.class).message().doesNotContain(TOKEN);
     }
 
-    // Covers: 19, 8.5, 7.2, H5 C9 (an MCP or a handoff merchant is read from the file but refuses to build a stack until
-    // its gateway (C6) and its orchestrator path (C7) exist: no REST discovery at a store, and never a complete at a
-    // handoff merchant)
-    @Test
-    void mcpOrHandoffMerchant_refusesToBuild_untilItsPathExists() {
-        MerchantSettings mcp = new MerchantSettings(A, "Store", URI.create("https://example-dev.myshopify.com"),
+    private static MerchantSettings mcp(boolean buyerIp) {
+        return new MerchantSettings(A, "Store", URI.create("https://example-dev.myshopify.com"),
                 MerchantStatus.ACTIVE, Optional.empty(), Set.of(), MerchantSettings.DEFAULT_VERSIONS, Optional.empty(),
                 dev.ucplab.core.merchant.Transport.MCP, dev.ucplab.core.merchant.Completion.HANDOFF, true,
-                Optional.of("example-dev.myshopify.com"), Optional.of("env:SHOPIFY_CLIENT"), false);
+                Optional.of("example-dev.myshopify.com"), Optional.of("env:SHOPIFY_CLIENT"), buyerIp);
+    }
+
+    private static MerchantWiring.GatewayParts parts(Map<String, String> env) {
+        UcpConfig ucp = UcpConfig.defaults("profile=\"https://agent.example/.well-known/ucp\"");
+        Clock clock = Clock.systemUTC();
+        return new MerchantWiring.GatewayParts(ucp, new CircuitBreakers(ucp, clock), clock, d -> { },
+                new SplittableRandom(1), new SequentialIdGenerator("w"), () -> call -> {
+                    throw new java.io.IOException("no network in this test");
+                }, ServiceProperties.DEFAULT_TOKEN_ENDPOINT, Optional.of(new BuyerIp("203.0.113.5")), Environment.of(env));
+    }
+
+    // Covers: 19, 8.5, 26.4, H5 C6 (transport picks the gateway: rest builds UcpHttpGateway and its CatalogClient; mcp
+    // builds McpMerchantGateway, with the credentials its credential_ref names, and McpCatalogGateway. Until C7 an MCP
+    // merchant still refuses to build a stack, by HANDOFF_NOT_WIRED; nothing here is sent)
+    @Test
+    void transport_picksTheGateway() {
+        MerchantWiring.GatewayParts p = parts(Map.of("SHOPIFY_CLIENT", "client-1:secret-1"));
+
+        MerchantGateway rest = MerchantWiring.gateway(settings(Optional.empty()), p);
+        MerchantGateway store = MerchantWiring.build(mcp(true), p);
+
+        assertThat(rest).isInstanceOf(UcpHttpGateway.class);
+        assertThat(MerchantWiring.catalog(rest, p)).isInstanceOf(CatalogClient.class);
+        assertThat(store).isInstanceOf(McpMerchantGateway.class);
+        assertThat(((McpMerchantGateway) store).merchant().shopDomain()).contains("example-dev.myshopify.com");
+        assertThat(MerchantWiring.catalog(store, p)).isInstanceOf(McpCatalogGateway.class);
+        assertThat(store.toString()).doesNotContain("secret-1");
+        assertThatThrownBy(() -> MerchantWiring.gateway(mcp(false), p)).hasMessage(MerchantWiring.HANDOFF_NOT_WIRED);
+    }
+
+    // Covers: 8.4, 19 (Shopify-Buyer-IP goes to a merchant whose entry says requires_buyer_ip, and to no other: the
+    // discovery GET's headers, recorded before the call fails; nothing leaves the JVM)
+    @Test
+    void buyerIp_goesOnlyToAMerchantThatAsksForIt() {
+        java.util.List<java.util.Map<String, String>> sent = new java.util.ArrayList<>();
+        UcpConfig ucp = UcpConfig.defaults("profile=\"https://agent.example/.well-known/ucp\"");
+        Clock clock = Clock.systemUTC();
+        MerchantWiring.GatewayParts p = new MerchantWiring.GatewayParts(ucp, new CircuitBreakers(ucp, clock), clock,
+                d -> { }, new SplittableRandom(1), new SequentialIdGenerator("w"), () -> call -> {
+                    sent.add(call.headers());
+                    throw new java.io.IOException("no network in this test");
+                }, ServiceProperties.DEFAULT_TOKEN_ENDPOINT, Optional.of(new BuyerIp("203.0.113.5")),
+                Environment.of(Map.of("SHOPIFY_CLIENT", "client-1:secret-1")));
+
+        for (boolean asks : new boolean[] {true, false}) {
+            sent.clear();
+            MerchantGateway g = MerchantWiring.build(mcp(asks), p);
+            assertThatThrownBy(() -> g.discover(A)).isInstanceOf(dev.ucplab.core.merchant.DiscoveryFailedException.class);
+            assertThat(sent).as("asks: " + asks).isNotEmpty().allSatisfy(h -> assertThat(
+                    h.get(dev.ucplab.ucp.mcp.StoreHeaders.BUYER_IP_HEADER)).isEqualTo(asks ? "203.0.113.5" : null));
+        }
+    }
+
+    // Covers: 26.4, I8 (a credential value that does not split is refused while building, and the reason never holds it)
+    @Test
+    void mcp_malformedCredential_isRefused_withoutTheValue() {
+        assertThatThrownBy(() -> MerchantWiring.build(mcp(false), parts(Map.of("SHOPIFY_CLIENT", "nocolon_canary"))))
+                .hasMessage(ClientCredentials.MALFORMED).message().doesNotContain("canary");
+    }
+
+    // Covers: 19, 7.2, H5 C9 (a handoff merchant refuses to build a stack until its orchestrator path (C7) exists:
+    // never a complete at a handoff merchant)
+    @Test
+    void handoffMerchant_refusesToBuild_untilItsPathExists() {
         MerchantSettings restHandoff = new MerchantSettings(A, "Shop", URI.create("http://127.0.0.1:9101"),
                 MerchantStatus.ACTIVE, Optional.empty(), Set.of(), MerchantSettings.DEFAULT_VERSIONS, Optional.empty(),
                 dev.ucplab.core.merchant.Transport.REST, dev.ucplab.core.merchant.Completion.HANDOFF, true,
                 Optional.empty(), Optional.empty(), false);
 
-        assertThatThrownBy(() -> MerchantWiring.requireBuildable(mcp)).hasMessage(MerchantWiring.MCP_NOT_WIRED);
+        assertThatThrownBy(() -> MerchantWiring.requireBuildable(mcp(false))).hasMessage(MerchantWiring.HANDOFF_NOT_WIRED);
         assertThatThrownBy(() -> MerchantWiring.requireBuildable(restHandoff))
                 .hasMessage(MerchantWiring.HANDOFF_NOT_WIRED);
         MerchantWiring.requireBuildable(settings(Optional.empty()));

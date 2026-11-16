@@ -494,3 +494,17 @@ Format, one block per mutant. **An entry without an `approved:` line is only a p
 - why it is equivalent: justified: driver behaviour (sqlite-jdbc answers null before `next()`). For an intent with no row the mutant reads `getString(1)` before any `next()`, so the result is the same empty Optional. Checked by hand (the test below is green with the mutation)
 - the test that shows it: `IntentRepositoryContract.resolveAttemptWithIntent_forAnUnknownIntent_isNotFound` passes with and without the mutation
 - approved: owner 2026-11-15
+
+## From H5 C6 (agent-ucp: the MCP gateway)
+
+### 87. dev.ucplab.ucp.McpMerchantGateway.send RemoveConditionalMutator_ORDER_IF (the `e.httpStatus() >= 400` operand of the cache clear after a create's refusal)
+- description: removed conditional - replaced comparison check with true
+- why it is equivalent: as 53 over REST: a ProtocolError of a create with a status below 400 does not exist. `FailureClassifier` gives a create a ProtocolError only for 400, 401, 403, 404, 409, 422, a 402 envelope, 429 and 503; an unlisted status (`McpTransport.UNLISTED`, 202, included) is Uncertain for a create, and only a get makes an unexpected status a ProtocolError
+- the test that shows it: `McpMerchantGatewayMutationTest.onlyA4xxOtherThan429OfACreate_makesTheNextCreateReadTheProfileAgain` passes with and without the mutation
+- approved: owner 2026-11-16
+
+### 88. dev.ucplab.ucp.McpMerchantGateway.send ConditionalsBoundaryMutator (`e.httpStatus() < 500` becomes `<= 500`)
+- description: changed conditional boundary
+- why it is equivalent: as 52 over REST: a ProtocolError with status 500 does not exist for a create; the classifier answers a 500 (and the -32603 McpTransport maps to 500) as Uncertain
+- the test that shows it: the same test (its 503 case kills the `< 500` operand itself)
+- approved: owner 2026-11-16

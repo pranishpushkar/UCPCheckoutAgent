@@ -8,6 +8,7 @@ import dev.ucplab.core.id.UuidV7IdGenerator;
 import dev.ucplab.core.intent.IntentCursorCodec;
 import dev.ucplab.core.merchant.FulfillmentPolicy;
 import dev.ucplab.core.merchant.MerchantEntry;
+import dev.ucplab.core.merchant.MerchantGateway;
 import dev.ucplab.core.merchant.MerchantGateways;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantInstruments;
@@ -35,7 +36,6 @@ import dev.ucplab.ucp.CircuitBreakers;
 import dev.ucplab.ucp.JdkHttpTransport;
 import dev.ucplab.ucp.Sleeper;
 import dev.ucplab.ucp.UcpConfig;
-import dev.ucplab.ucp.UcpHttpGateway;
 import dev.ucplab.ucp.registry.ConfiguredMerchantRegistry;
 import dev.ucplab.ucp.registry.MerchantSettings;
 import java.io.IOException;
@@ -207,19 +207,25 @@ public class StackConfiguration {
 
     /**
      * One gateway per configured merchant, SUSPENDED ones included (19: an in-flight intent at a merchant that is failing
-     * discovery still reconciles), each with its own endpoint hosts, handler and versions from the file, over the one
-     * {@link CircuitBreakers}.
+     * discovery still reconciles), picked by its transport, each with its own endpoint hosts, handler and versions from
+     * the file, over the one {@link CircuitBreakers}.
      */
     @Bean
-    ConfiguredGateways merchantGateways(ServiceProperties properties, UcpConfig ucp, CircuitBreakers breakers,
-                                        Clock clock, RandomGenerator random, IdGenerator ids) {
-        Map<MerchantId, UcpHttpGateway> byId = new LinkedHashMap<>();
+    ConfiguredGateways merchantGateways(ServiceProperties properties, MerchantWiring.GatewayParts parts) {
+        Map<MerchantId, MerchantGateway> byId = new LinkedHashMap<>();
         for (MerchantSettings s : properties.merchants()) {
-            MerchantWiring.requireBuildable(s);
-            byId.put(s.id(), new UcpHttpGateway(s.entry(s.fileStatus()), ucp, new JdkHttpTransport(ucp), breakers, clock,
-                    Sleeper.THREAD, random, ids, s.endpointHosts(), MerchantWiring.requiredHandler(s), s.ucpVersions()));
+            byId.put(s.id(), MerchantWiring.gateway(s, parts));
         }
         return new ConfiguredGateways(Map.copyOf(byId));
+    }
+
+    /** What the gateways and the catalogs are built from (8.5, 26.4): one real transport per client. */
+    @Bean
+    MerchantWiring.GatewayParts gatewayParts(ServiceProperties properties, UcpConfig ucp, CircuitBreakers breakers,
+                                             Clock clock, RandomGenerator random, IdGenerator ids,
+                                             Environment environment) {
+        return new MerchantWiring.GatewayParts(ucp, breakers, clock, Sleeper.THREAD, random, ids,
+                () -> new JdkHttpTransport(ucp), properties.shopifyTokenEndpoint(), properties.buyerIp(), environment);
     }
 
     /** Status from discovery (19): the startup check asks every merchant at once, and a failing one starts SUSPENDED. */
@@ -273,7 +279,7 @@ public class StackConfiguration {
     }
 
     /** The gateway of each configured merchant, SUSPENDED ones included (19). */
-    public record ConfiguredGateways(Map<MerchantId, UcpHttpGateway> byId) {
+    public record ConfiguredGateways(Map<MerchantId, MerchantGateway> byId) {
         public ConfiguredGateways {
             byId = Map.copyOf(Objects.requireNonNull(byId, "byId"));
         }

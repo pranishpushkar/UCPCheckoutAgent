@@ -317,7 +317,7 @@ public final class UcpHttpGateway implements MerchantGateway {
     }
 
     /** An {@code Ok} view says whether the profile this call went out under lists the fulfillment capability. */
-    private static CallOutcome<CheckoutView> offered(CallOutcome<CheckoutView> outcome, MerchantProfile profile) {
+    static CallOutcome<CheckoutView> offered(CallOutcome<CheckoutView> outcome, MerchantProfile profile) {
         if (outcome instanceof CallOutcome.Ok<CheckoutView> ok) {
             return new CallOutcome.Ok<>(ok.httpStatus(),
                     ok.value().withFulfillmentOffered(profile.capabilities().contains(FULFILLMENT_CAPABILITY)),
@@ -356,7 +356,7 @@ public final class UcpHttpGateway implements MerchantGateway {
     }
 
     /** A reply about another session than the one asked for is not trusted (I4). */
-    private static CallOutcome<CheckoutView> checkSession(AttemptOp op, SessionId asked, CallOutcome<CheckoutView> outcome) {
+    static CallOutcome<CheckoutView> checkSession(AttemptOp op, SessionId asked, CallOutcome<CheckoutView> outcome) {
         if (outcome instanceof CallOutcome.Ok<CheckoutView> ok && !ok.value().id().equals(asked)) {
             return op == AttemptOp.GET
                     ? new CallOutcome.ProtocolError<>(ok.httpStatus(), "invalid_response",
@@ -368,7 +368,7 @@ public final class UcpHttpGateway implements MerchantGateway {
 
     // ---------------------------------------------------------------- helpers
 
-    private static String describe(CallOutcome<CheckoutView> outcome) {
+    static String describe(CallOutcome<CheckoutView> outcome) {
         return switch (outcome) {
             case CallOutcome.NotSent<CheckoutView> n -> "not sent: " + n.cause();
             case CallOutcome.Uncertain<CheckoutView> u -> "no usable reply: " + u.cause();
@@ -378,13 +378,13 @@ public final class UcpHttpGateway implements MerchantGateway {
         };
     }
 
-    private static URI stripTrailingSlash(URI uri) {
+    static URI stripTrailingSlash(URI uri) {
         String s = uri.toString();
         return s.endsWith("/") ? URI.create(s.substring(0, s.length() - 1)) : uri;
     }
 
     /** {@code host:port} in the form {@link #hostPort(URI)} gives, so {@code Host:443} and {@code host:443} compare equal. */
-    private static String normalizeHostPort(String text, String scheme) {
+    static String normalizeHostPort(String text, String scheme) {
         int colon = text.lastIndexOf(':');
         if (colon < 0 && "https".equalsIgnoreCase(scheme) && !text.isEmpty()) {
             return text.toLowerCase(java.util.Locale.ROOT) + ":443";    // https without a port is 443; http is not guessed
@@ -400,7 +400,7 @@ public final class UcpHttpGateway implements MerchantGateway {
         }
     }
 
-    private static String hostPort(URI uri) {
+    static String hostPort(URI uri) {
         return uri.getHost().toLowerCase(java.util.Locale.ROOT) + ":"
                 + (uri.getPort() == -1 ? ("https".equals(uri.getScheme()) ? 443 : 80) : uri.getPort());
     }

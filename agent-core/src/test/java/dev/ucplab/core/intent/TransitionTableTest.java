@@ -51,20 +51,23 @@ class TransitionTableTest {
             row(24, "COMPLETING", "PROTOCOL_ERROR", "NONE", "RECONCILING", "NONE"),
             // Added in M3: the approval behind an APPROVED intent is not usable, so nothing is sent (I3).
             row(25, "APPROVED", "APPROVAL_INVALID", "NONE", "ESCALATED", "ESCALATION_EVENT"),
+            // Added in H5 C6 (8.4, N1): "APPROVED | complete_unavailable | the merchant's transport offers no complete |
+            // FAILED_NOT_CHARGED | ... cancel session". DESIGN lists it after row 25, so the I12 rows are now 27.
+            row(26, "APPROVED", "COMPLETE_UNAVAILABLE", "NONE", "FAILED_NOT_CHARGED", "CANCEL_SESSION"),
             // Added in H5 (I12): "any non-terminal state | merchant_not_owned or merchant_changed | ... | ESCALATED".
             // A terminal state has no such row: its owed cancel is blocked instead (7.6, cancel_blocked_i12).
-            row(26, "PROPOSED", "MERCHANT_NOT_OWNED", "NONE", "ESCALATED", "ESCALATION_EVENT"),
-            row(26, "QUOTING", "MERCHANT_NOT_OWNED", "NONE", "ESCALATED", "ESCALATION_EVENT"),
-            row(26, "AWAITING_APPROVAL", "MERCHANT_NOT_OWNED", "NONE", "ESCALATED", "ESCALATION_EVENT"),
-            row(26, "APPROVED", "MERCHANT_NOT_OWNED", "NONE", "ESCALATED", "ESCALATION_EVENT"),
-            row(26, "COMPLETING", "MERCHANT_NOT_OWNED", "NONE", "ESCALATED", "ESCALATION_EVENT"),
-            row(26, "RECONCILING", "MERCHANT_NOT_OWNED", "NONE", "ESCALATED", "ESCALATION_EVENT"),
-            row(26, "PROPOSED", "MERCHANT_CHANGED", "NONE", "ESCALATED", "ESCALATION_EVENT"),
-            row(26, "QUOTING", "MERCHANT_CHANGED", "NONE", "ESCALATED", "ESCALATION_EVENT"),
-            row(26, "AWAITING_APPROVAL", "MERCHANT_CHANGED", "NONE", "ESCALATED", "ESCALATION_EVENT"),
-            row(26, "APPROVED", "MERCHANT_CHANGED", "NONE", "ESCALATED", "ESCALATION_EVENT"),
-            row(26, "COMPLETING", "MERCHANT_CHANGED", "NONE", "ESCALATED", "ESCALATION_EVENT"),
-            row(26, "RECONCILING", "MERCHANT_CHANGED", "NONE", "ESCALATED", "ESCALATION_EVENT"));
+            row(27, "PROPOSED", "MERCHANT_NOT_OWNED", "NONE", "ESCALATED", "ESCALATION_EVENT"),
+            row(27, "QUOTING", "MERCHANT_NOT_OWNED", "NONE", "ESCALATED", "ESCALATION_EVENT"),
+            row(27, "AWAITING_APPROVAL", "MERCHANT_NOT_OWNED", "NONE", "ESCALATED", "ESCALATION_EVENT"),
+            row(27, "APPROVED", "MERCHANT_NOT_OWNED", "NONE", "ESCALATED", "ESCALATION_EVENT"),
+            row(27, "COMPLETING", "MERCHANT_NOT_OWNED", "NONE", "ESCALATED", "ESCALATION_EVENT"),
+            row(27, "RECONCILING", "MERCHANT_NOT_OWNED", "NONE", "ESCALATED", "ESCALATION_EVENT"),
+            row(27, "PROPOSED", "MERCHANT_CHANGED", "NONE", "ESCALATED", "ESCALATION_EVENT"),
+            row(27, "QUOTING", "MERCHANT_CHANGED", "NONE", "ESCALATED", "ESCALATION_EVENT"),
+            row(27, "AWAITING_APPROVAL", "MERCHANT_CHANGED", "NONE", "ESCALATED", "ESCALATION_EVENT"),
+            row(27, "APPROVED", "MERCHANT_CHANGED", "NONE", "ESCALATED", "ESCALATION_EVENT"),
+            row(27, "COMPLETING", "MERCHANT_CHANGED", "NONE", "ESCALATED", "ESCALATION_EVENT"),
+            row(27, "RECONCILING", "MERCHANT_CHANGED", "NONE", "ESCALATED", "ESCALATION_EVENT"));
 
     static Stream<Arguments> expectedRows() {
         return EXPECTED.stream();

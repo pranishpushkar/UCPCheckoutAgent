@@ -57,6 +57,9 @@ final class MerchantsFile {
     static final String BAD_SHOP_DOMAIN = "MERCHANTS_FILE has a shop_domain that is not a host name without port or path";
     static final String BAD_CREDENTIAL_REF = "MERCHANTS_FILE has a credential_ref that is not env:NAME";
     static final String MCP_INCOMPLETE = "MERCHANTS_FILE has a transport: mcp merchant without credential_ref or shop_domain";
+    /** 19: 8.4 offers no complete over MCP, and N1 rules one out at the store. */
+    static final String MCP_AGENT_COMPLETION =
+            "MERCHANTS_FILE has a transport: mcp merchant with completion: agent; MCP offers no complete (8.4, N1)";
     static final String NOT_OWNED = "MERCHANTS_FILE has a merchant off loopback without owned: true (I12)";
     static final String BUYER_IP_NOT_LOCAL = "MERCHANTS_FILE requires_buyer_ip is only allowed in the local profile";
 
@@ -149,6 +152,9 @@ final class MerchantsFile {
         boolean buyerIp = m.containsKey("requires_buyer_ip") && bool(m.get("requires_buyer_ip"));
         if (transport == Transport.MCP && (credentialRef.isEmpty() || shopDomain.isEmpty())) {
             throw refuse(MCP_INCOMPLETE);
+        }
+        if (transport == Transport.MCP && completion == Completion.AGENT) {
+            throw refuse(MCP_AGENT_COMPLETION);
         }
         if (!owned && !MerchantEntry.isLoopback(url)) {
             throw refuse(NOT_OWNED);

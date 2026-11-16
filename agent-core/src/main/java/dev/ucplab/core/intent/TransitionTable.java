@@ -72,7 +72,10 @@ public final class TransitionTable {
             row(AWAITING_APPROVAL, TransitionEvent.MERCHANT_CHANGED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
             row(APPROVED, TransitionEvent.MERCHANT_CHANGED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
             row(COMPLETING, TransitionEvent.MERCHANT_CHANGED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
-            row(RECONCILING, TransitionEvent.MERCHANT_CHANGED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT));
+            row(RECONCILING, TransitionEvent.MERCHANT_CHANGED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
+            // The merchant's transport offers no complete (8.4, N1): nothing was sent, so not charged; checked before
+            // the write-ahead, so no complete attempt is written and nothing reconciles.
+            row(APPROVED, TransitionEvent.COMPLETE_UNAVAILABLE, TransitionGuard.NONE, FAILED_NOT_CHARGED, SideEffect.CANCEL_SESSION));
 
     private TransitionTable() {
     }

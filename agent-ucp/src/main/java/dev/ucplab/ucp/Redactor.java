@@ -20,16 +20,21 @@ final class Redactor {
     private static final Pattern AUTHORIZATION = Pattern.compile(
             "(?i)((?:proxy-)?authorization)(\\s*[:=]\\s*)([^\\s,;\"]+(?:\\s+[^\\s,;\"]+)?)");
 
-    private final List<String> secrets;
+    /**
+     * Each secret matched whatever its case: a merchant that lower-cases an echo (an MCP error message becomes a
+     * lower-cased code, 8.4) must not get it past the mask.
+     */
+    private final List<Pattern> secrets;
 
     Redactor(Collection<String> secrets) {
-        this.secrets = secrets.stream().filter(s -> s != null && !s.isBlank()).toList();
+        this.secrets = secrets.stream().filter(s -> s != null && !s.isBlank())
+                .map(s -> Pattern.compile(Pattern.quote(s), Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE)).toList();
     }
 
     String scrub(String text) {
         String out = text;
-        for (String secret : secrets) {
-            out = out.replace(secret, MASK);
+        for (Pattern secret : secrets) {
+            out = secret.matcher(out).replaceAll(MASK);
         }
         return AUTHORIZATION.matcher(out).replaceAll("$1$2" + MASK);
     }
@@ -48,7 +53,7 @@ final class Redactor {
                 CheckoutView v = ok.value();
                 CheckoutView clean = new CheckoutView(v.id(), v.status(), v.currency(), v.lines(), v.subtotalMinor(),
                         v.taxMinor(), v.totalMinor(), v.order(), v.buyer(), messages, v.fulfillment(),
-                        v.fulfillmentMinor(), v.fulfillmentOffered());
+                        v.fulfillmentMinor(), v.fulfillmentOffered(), v.continueUrl());
                 yield new CallOutcome.Ok<>(ok.httpStatus(), clean, messages);
             }
         };

@@ -7,6 +7,7 @@ import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantStatus;
 import dev.ucplab.core.policy.PolicyConfig;
+import dev.ucplab.ucp.auth.ClientCredentials;
 import dev.ucplab.ucp.registry.BuyerIp;
 import dev.ucplab.ucp.registry.MerchantSettings;
 import java.net.URI;
@@ -51,6 +52,12 @@ public final class ServiceProperties {
     static final String BUYER_IP_REQUIRED = "BUYER_IP must be set for a merchant with requires_buyer_ip";
     static final String BUYER_IP_NOT_LOCAL = "BUYER_IP is only accepted in the local profile";
     static final String CREDENTIAL_UNSET = "a merchant's credential_ref names a variable that is not set";
+    /** 26.4: the value is client_id:client_secret; the reason never holds it (I8). */
+    static final String CREDENTIAL_MALFORMED = "a merchant's credential_ref variable is not client_id:client_secret";
+    static final String TOKEN_ENDPOINT_INVALID =
+            "SHOPIFY_TOKEN_ENDPOINT must be an https URL with a host, and no user info or query";
+    /** The token endpoint the H5 spike used (26.4). */
+    static final URI DEFAULT_TOKEN_ENDPOINT = URI.create("https://api.shopify.com/auth/access_token");
     static final String USERS_INVALID = "LOCAL_USERS must be a comma-separated list of lowercase names";
     static final String LAB_URL_INVALID = "MERCHANT_LAB_URL must be an http URL";
     static final String MODEL_INVALID = "AGENT_MODEL must be scripted or gemini";
@@ -87,12 +94,14 @@ public final class ServiceProperties {
     private final Optional<URI> modelBaseUrl;
     private final URI merchantLabUrl;
     private final Optional<BuyerIp> buyerIp;
+    private final URI shopifyTokenEndpoint;
 
     private ServiceProperties(AgentProfile profile, Path databaseFile, byte[] approvalSecret, ApprovalSecret approvalKey,
                               PolicyConfig policy, MerchantEntry merchant, List<MerchantSettings> merchants,
                               List<String> localUsers,
                               List<String> publicOrigins, AgentModel agentModel, Optional<ModelKey> modelKey,
-                              Optional<URI> modelBaseUrl, URI merchantLabUrl, Optional<BuyerIp> buyerIp) {
+                              Optional<URI> modelBaseUrl, URI merchantLabUrl, Optional<BuyerIp> buyerIp,
+                              URI shopifyTokenEndpoint) {
         this.profile = profile;
         this.databaseFile = databaseFile;
         this.approvalSecret = approvalSecret;
@@ -107,6 +116,7 @@ public final class ServiceProperties {
         this.modelBaseUrl = modelBaseUrl;
         this.buyerIp = buyerIp;
         this.merchantLabUrl = merchantLabUrl;
+        this.shopifyTokenEndpoint = shopifyTokenEndpoint;
     }
 
     /** Reads and checks every setting; throws {@link IllegalStateException} with a fixed message on the first refusal. */
@@ -203,16 +213,46 @@ public final class ServiceProperties {
         }
         Optional<BuyerIp> buyerIp = buyerIp(env, profile, merchants);
         for (MerchantSettings m : merchants) {
-            if (m.credentialRef().isPresent()
-                    && env.get(m.credentialRef().get().substring("env:".length())).isEmpty()) {
-                throw new IllegalStateException(CREDENTIAL_UNSET);
+            if (m.credentialRef().isPresent()) {
+                Optional<String> value = env.get(m.credentialRef().get().substring("env:".length()));
+                if (value.isEmpty()) {
+                    throw new IllegalStateException(CREDENTIAL_UNSET);
+                }
+                try {
+                    ClientCredentials.parse(value.get());
+                } catch (IllegalArgumentException e) {
+                    throw new IllegalStateException(CREDENTIAL_MALFORMED);   // ClientCredentials' reason, never the value
+                }
             }
         }
+        URI tokenEndpoint = tokenEndpoint(env);
         MerchantSettings first = merchants.getFirst();
 
         return new ServiceProperties(profile, databaseFile, secretBytes, approvalKey, policy, first.entry(first.fileStatus()), merchants, localUsers,
                 origins(env.get("PUBLIC_ORIGIN").orElse(DEFAULT_ORIGINS)), agentModel,
-                agentModel == AgentModel.GEMINI ? modelKey : Optional.empty(), modelBaseUrl, first.labUrl().orElse(fallbackLab), buyerIp);
+                agentModel == AgentModel.GEMINI ? modelKey : Optional.empty(), modelBaseUrl, first.labUrl().orElse(fallbackLab), buyerIp, tokenEndpoint);
+    }
+
+    /**
+     * SHOPIFY_TOKEN_ENDPOINT (26.4): the spike's endpoint by default; otherwise an https URL with a host and no user
+     * info or query. The refusal is a fixed message without the value.
+     */
+    private static URI tokenEndpoint(Environment env) {
+        Optional<String> raw = env.get("SHOPIFY_TOKEN_ENDPOINT");
+        if (raw.isEmpty()) {
+            return DEFAULT_TOKEN_ENDPOINT;
+        }
+        URI uri;
+        try {
+            uri = new URI(raw.get());
+        } catch (URISyntaxException e) {
+            throw new IllegalStateException(TOKEN_ENDPOINT_INVALID);   // the exception's message holds the input
+        }
+        if (!"https".equalsIgnoreCase(uri.getScheme()) || uri.getHost() == null || uri.getRawUserInfo() != null
+                || uri.getRawQuery() != null) {
+            throw new IllegalStateException(TOKEN_ENDPOINT_INVALID);
+        }
+        return uri;
     }
 
     /**
@@ -294,6 +334,11 @@ public final class ServiceProperties {
     }
 
     /** Every configured merchant, in file order (DESIGN 19); one, from {@code MERCHANT_URL}, without a file. */
+    /** The token endpoint of the MCP merchants' client credentials (26.4). Log its host only. */
+    public URI shopifyTokenEndpoint() {
+        return shopifyTokenEndpoint;
+    }
+
     /** The operator's BUYER_IP, when set (local profile only, 8.4). Its toString is masked (I8). */
     public Optional<BuyerIp> buyerIp() {
         return buyerIp;

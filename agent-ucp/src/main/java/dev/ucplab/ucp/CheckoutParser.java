@@ -4,6 +4,7 @@ import dev.ucplab.core.json.LenientJson;
 import dev.ucplab.core.merchant.Buyer;
 import dev.ucplab.core.merchant.CheckoutStatus;
 import dev.ucplab.core.merchant.CheckoutView;
+import dev.ucplab.core.merchant.ContinueUrl;
 import dev.ucplab.core.merchant.FulfillmentView;
 import dev.ucplab.core.merchant.LineView;
 import dev.ucplab.core.merchant.MerchantMessage;
@@ -147,7 +148,16 @@ public final class CheckoutParser {
         Optional<OrderRef> order = order(root.get("order"));
         return new CheckoutView(id, status, currency, lines, totals.subtotal, totals.tax, totals.total, order,
                 buyer(root.get("buyer")), messages(root.get("messages")), fulfillment(root.get("fulfillment")),
-                totals.fulfillment);
+                totals.fulfillment, false, continueUrl(root.get("continue_url")));
+    }
+
+    /**
+     * The answer's {@code continue_url} as sent (H5): never required, and a value that is not a URI reads as none. Its
+     * use is the orchestrator's I12 check (7.2 hand_off); {@code expires_at} beside it is not read (Appendix B has no
+     * field for it).
+     */
+    private static Optional<ContinueUrl> continueUrl(Object value) {
+        return value instanceof String raw ? ContinueUrl.parse(raw) : Optional.empty();
     }
 
     private static List<LineView> lines(Object value) {

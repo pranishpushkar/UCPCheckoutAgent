@@ -58,6 +58,7 @@ import dev.ucplab.core.merchant.MutatingOp;
 import dev.ucplab.core.merchant.PaymentInstrument;
 import dev.ucplab.core.merchant.QuoteShape;
 import dev.ucplab.core.merchant.SessionId;
+import dev.ucplab.core.merchant.Transport;
 import dev.ucplab.core.merchant.UpdateCheckout;
 import dev.ucplab.core.policy.PolicyDecision;
 import dev.ucplab.core.policy.PolicyEngine;
@@ -129,6 +130,8 @@ public final class DefaultOrchestrator implements Orchestrator {
     static final String CANCELED_BY_MERCHANT = "canceled_by_merchant";
     static final String OUTCOME_UNKNOWN = "outcome_unknown";
     static final String APPROVAL_INVALID = "approval_invalid";
+    /** The fixed reason of an intent at a merchant whose transport offers no complete (7.2, 8.4, N1). */
+    static final String COMPLETE_UNAVAILABLE = "complete_unavailable";
     /** The fixed reason of a merchant that wants the buyer to take over (8.1): not completable by the agent. */
     static final String REQUIRES_ESCALATION = "requires_escalation";
     static final String POLICY_PREFIX = "policy_";
@@ -880,13 +883,18 @@ public final class DefaultOrchestrator implements Orchestrator {
                     + intent.id());
         }
 
-        MerchantGateway merchant = gateway(intent);
-        FrozenBody body = CheckoutWire.completeBody(instrument(intent));
-        IdempotencyKey key = IdempotencyKey.derive(intent.id(), MutatingOp.COMPLETE, revision);
         Optional<Step> refused = refuseSend(intent, attempts);
         if (refused.isPresent()) {
             return refused.get();
         }
+        // 7.2 complete_unavailable, after I3 and I12 and before the write-ahead. A method reference, not a lambda: a
+        // lambda would renumber the class's later ones, which the approved mutation equivalents name.
+        if (entry(intent.merchantId()).map(MerchantEntry::transport).equals(Optional.of(Transport.MCP))) {
+            return completeUnavailable(intent);
+        }
+        MerchantGateway merchant = gateway(intent);
+        FrozenBody body = CheckoutWire.completeBody(instrument(intent));
+        IdempotencyKey key = IdempotencyKey.derive(intent.id(), MutatingOp.COMPLETE, revision);
         MerchantAttempt attempt = newAttempt(intent.id(), AttemptOp.COMPLETE, revision, key, Optional.of(body));
         Move m = move(intent, TransitionEvent.SEND_COMPLETE, TransitionGuard.ATTEMPT_PERSISTED);
         // A new key starts a fresh reconciliation deadline (7.5 rule 1); cleared in the same write as the attempt.
@@ -1216,6 +1224,19 @@ public final class DefaultOrchestrator implements Orchestrator {
         event(intent.id(), "escalated", Map.of("attempts", attempts.stream().map(a -> Map.of(
                 "attempt_id", a.id().value(), "op", a.op().name(), "revision", a.revision(),
                 "status", a.status().name(), "sent_at", a.sentAt().toString())).toList()));
+        transitionEvent(intent.id(), m.transition());
+        return moved(intent, next);
+    }
+
+    /**
+     * 7.2 complete_unavailable: the merchant's transport offers no complete (8.4, N1). Nothing was sent, so the intent is
+     * not charged; the session is cancelled as an owed cancel, and no complete attempt is written.
+     */
+    private Step completeUnavailable(PurchaseIntent intent) {
+        Move m = move(intent, TransitionEvent.COMPLETE_UNAVAILABLE);
+        PurchaseIntent next = m.next().withFailureReason(COMPLETE_UNAVAILABLE).withCancelPending(true);
+        intents.update(next, intent.version(), workerId);
+        event(intent.id(), "complete_unavailable", Map.of("from", intent.state().name()));
         transitionEvent(intent.id(), m.transition());
         return moved(intent, next);
     }

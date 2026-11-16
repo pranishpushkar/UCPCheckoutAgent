@@ -41,6 +41,11 @@ dev.ucplab.ucp.CheckoutParser
 dev.ucplab.ucp.ProfileParser
 dev.ucplab.ucp.CircuitBreaker
 dev.ucplab.ucp.RateLimiter
+# H5 C6: the MCP gateway's send path (8.4, 8.5, 26.4, I8, I12)
+dev.ucplab.ucp.McpMerchantGateway
+dev.ucplab.ucp.mcp.McpTransport
+dev.ucplab.ucp.mcp.McpEnvelope
+dev.ucplab.ucp.mcp.StoreHeaders
 # agent-persistence
 dev.ucplab.persistence.SqlIntentRepository
 dev.ucplab.persistence.SqlApprovalRepository

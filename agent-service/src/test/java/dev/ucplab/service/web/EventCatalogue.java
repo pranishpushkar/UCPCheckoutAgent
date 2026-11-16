@@ -32,6 +32,7 @@ public final class EventCatalogue {
             Map.entry("merchant_changed", Set.of("from")),
             Map.entry("merchant_not_owned", Set.of("from")),
             Map.entry("cancel_blocked_i12", Set.of()),
+            Map.entry("complete_unavailable", Set.of("from")),
             Map.entry("cancel_sent", Set.of("outcome", "attempt")),
             Map.entry("cancel_gave_up", Set.of("attempts")),
             Map.entry("orphan_session_found", Set.of("probe")),

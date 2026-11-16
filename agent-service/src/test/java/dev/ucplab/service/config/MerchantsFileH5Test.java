@@ -93,6 +93,10 @@ class MerchantsFileH5Test {
                     owned: true
                     credential_ref: env:SHOPIFY_CLIENT
                 """), MerchantsFile.MCP_INCOMPLETE, AgentProfile.LOCAL});
+        table.put("mcp with completion: agent", new Object[] {store(MCP.replace("completion: handoff",
+                "completion: agent")), MerchantsFile.MCP_AGENT_COMPLETION, AgentProfile.LOCAL});
+        table.put("mcp with completion left to its default, agent", new Object[] {store(MCP.replace(
+                "    completion: handoff\n", "")), MerchantsFile.MCP_AGENT_COMPLETION, AgentProfile.LOCAL});
         table.put("off loopback without owned", new Object[] {store(""), MerchantsFile.NOT_OWNED, AgentProfile.LOCAL});
         table.put("off loopback with owned: false", new Object[] {store("    owned: false\n"), MerchantsFile.NOT_OWNED,
                 AgentProfile.LOCAL});

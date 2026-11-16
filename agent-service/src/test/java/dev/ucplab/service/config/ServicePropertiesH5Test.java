@@ -48,7 +48,7 @@ class ServicePropertiesH5Test {
                 """ + (buyerIp ? "    requires_buyer_ip: true\n" : ""));
         Map<String, String> env = env(profile);
         env.put("MERCHANTS_FILE", file.toString());
-        env.put("SHOPIFY_CLIENT", CANARY);
+        env.put("SHOPIFY_CLIENT", "client-1:" + CANARY);   // 26.4: client_id:client_secret
         return env;
     }
 
@@ -122,5 +122,42 @@ class ServicePropertiesH5Test {
         blank.put("SHOPIFY_CLIENT", " ");
         assertThatThrownBy(() -> ServiceProperties.from(Environment.of(blank)))
                 .hasMessage(ServiceProperties.CREDENTIAL_UNSET);
+    }
+
+    // Covers: 26.4, 19, I8 (a credential_ref value that does not split into client_id:client_secret refuses startup
+    // with a fixed reason that holds no part of it)
+    @Test
+    void credentialRef_valueThatDoesNotSplit_refusesStartup() throws IOException {
+        for (String value : java.util.List.of(CANARY, ":" + CANARY, CANARY + ":", "  :" + CANARY)) {
+            Map<String, String> env = withStore("local", false);
+            env.put("SHOPIFY_CLIENT", value);
+            assertThatThrownBy(() -> ServiceProperties.from(Environment.of(env))).as(value)
+                    .hasMessage(ServiceProperties.CREDENTIAL_MALFORMED).message().doesNotContain(CANARY);
+        }
+    }
+
+    // Covers: 26.4, 19 (SHOPIFY_TOKEN_ENDPOINT: the spike's endpoint by default; another https URL is taken)
+    @Test
+    void tokenEndpoint_defaultsToTheSpikes_andTakesAnHttpsUrl() throws IOException {
+        assertThat(ServiceProperties.from(Environment.of(withStore("local", false))).shopifyTokenEndpoint())
+                .isEqualTo(java.net.URI.create("https://api.shopify.com/auth/access_token"));
+        Map<String, String> env = withStore("local", false);
+        env.put("SHOPIFY_TOKEN_ENDPOINT", "https://auth.example/token");
+        assertThat(ServiceProperties.from(Environment.of(env)).shopifyTokenEndpoint())
+                .isEqualTo(java.net.URI.create("https://auth.example/token"));
+    }
+
+    // Covers: 26.4, 19, I8 (a token endpoint that is not https, has no host, or carries user info or a query refuses
+    // startup with a fixed reason that never echoes the value)
+    @Test
+    void tokenEndpoint_refusals() throws IOException {
+        for (String value : java.util.List.of("http://auth.example/token-" + CANARY,
+                "https://user:" + CANARY + "@auth.example/token", "https://auth.example/token?key=" + CANARY,
+                "https:///token-" + CANARY, "https://auth example/" + CANARY, "file:/tmp/" + CANARY)) {
+            Map<String, String> env = withStore("local", false);
+            env.put("SHOPIFY_TOKEN_ENDPOINT", value);
+            assertThatThrownBy(() -> ServiceProperties.from(Environment.of(env))).as(value)
+                    .hasMessage(ServiceProperties.TOKEN_ENDPOINT_INVALID).message().doesNotContain(CANARY);
+        }
     }
 }
