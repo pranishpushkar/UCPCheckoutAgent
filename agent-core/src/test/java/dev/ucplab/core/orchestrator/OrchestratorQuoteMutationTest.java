@@ -658,6 +658,29 @@ class OrchestratorQuoteMutationTest {
         assertThat(attempts(id, AttemptOp.UPDATE)).singleElement().satisfies(a -> assertThat(a.status()).isEqualTo(AttemptStatus.SENT));
     }
 
+    // Covers: I4, I8, H5 C1 (the refusal of an update answered for another session names that session masked: a
+    // checkout id's ?key= never reaches an exception message)
+    @Test
+    void anUpdateAnsweredForAnotherKeyedSession_isRefusedWithTheKeyMasked() {
+        String canary = "CANARY-key-81b4f0";
+        lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 1, new Fault.PriceChange("item_123", 2600)));
+        RewritingGateway wrong = new RewritingGateway(lab.merchant).rewrite(MerchantCall.UPDATE, outcome -> {
+            CallOutcome.Ok<CheckoutView> ok = (CallOutcome.Ok<CheckoutView>) outcome;
+            CheckoutView v = ok.value();
+            CheckoutView other = new CheckoutView(new dev.ucplab.core.merchant.SessionId("cs_other?key=" + canary),
+                    v.status(), v.currency(), v.lines(), v.subtotalMinor(), v.taxMinor(), v.totalMinor(), v.order(),
+                    v.buyer(), v.messages());
+            return new CallOutcome.Ok<>(ok.httpStatus(), other, v.messages());
+        });
+        w = lab.worker("worker-a", wrong);
+        IntentId id = lab.propose(w, TWO_SHIRTS).intentId();
+        lab.decide(w, id, true);
+        w.orchestrator().advance(id);
+
+        assertThatThrownBy(() -> w.orchestrator().advance(id)).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("cs_other?[redacted]").message().doesNotContain(canary);
+    }
+
     // Covers: 7.2, 8.1. Kills DefaultOrchestrator.onQuoteOutcome:609 and :613 RemoveConditional_EQUAL_ELSE and finish:744
     // transitionEvent: a create answered with an out_of_stock or item_unavailable error ends FAILED_NOT_CHARGED with that
     // reason and its own transition event

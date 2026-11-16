@@ -175,6 +175,27 @@ class LoggingTest {
                 .allMatch(l -> l.contains("[redacted]"));
     }
 
+    // Covers: I8, 10, H5 C1 (the second layer masks a merchant access key, ?key= or &key=, in a checkout id or a
+    // continue_url that a library or a careless line writes)
+    @Test
+    void merchantAccessKeys_loggedThroughTheRealSetup_comeOutMasked() throws IOException {
+        logs = new LogCapture();
+        service = TestService.start(dir);
+        Logger plant = LoggerFactory.getLogger("test.plant");
+        String c = canary("merchant-key");
+
+        plant.warn("checkout gid://shopify/Checkout/hWN1x2?key={}", c);
+        plant.warn("continue at https://example-dev.myshopify.com/cart/c/hWN1x2?key={}&x=1", c);
+        plant.warn("body was {\"id\":\"gid://shopify/Checkout/hWN1x2?key={}\"}", c);
+        plant.warn("query was ?a=1&KEY={}", c);
+        plant.error("failed", new IllegalStateException("bad id gid://shopify/Checkout/x?key=" + c));
+
+        String out = logs.text();
+        assertThat(out).doesNotContain(c);
+        assertThat(out.lines().filter(l -> l.contains("test.plant")).toList()).hasSize(5)
+                .allMatch(l -> l.contains("[redacted]"));
+    }
+
     // Covers: I8, 11 (a request log line holds the method, the path template, the status, the duration and the user:
     // never the query string, a header, the cookie or the body)
     @Test

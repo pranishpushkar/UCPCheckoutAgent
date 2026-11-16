@@ -26,6 +26,8 @@ public final class Redaction {
             new Rule(Pattern.compile("(X-CSRF-Token\\s*[:=]\\s*)[^\\s\"',;]+", FLAGS), "$1" + MASK),
             new Rule(Pattern.compile("(x-goog-api-key\\s*[:=]\\s*)[^\\s\"',;]+", FLAGS), "$1" + MASK),
             new Rule(Pattern.compile("\\btok_[A-Za-z0-9_\\-]+"), MASK),
+            // A merchant access key in a checkout id or a continue_url (I8, 10; H5 C1).
+            new Rule(Pattern.compile("([?&]key=)[^\\s\"'&#\\\\]+", FLAGS), "$1" + MASK),
             new Rule(Pattern.compile("(" + Q + "(?:credential|token)" + Q + "\\s*:\\s*" + Q + ")[^\"\\\\]*(" + Q + ")",
                     FLAGS), "$1" + MASK + "$2"));
 

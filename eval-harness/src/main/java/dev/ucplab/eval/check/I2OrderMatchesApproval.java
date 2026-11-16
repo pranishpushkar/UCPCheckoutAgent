@@ -79,7 +79,7 @@ public final class I2OrderMatchesApproval implements InvariantCheck {
                         + ", but the order is at " + c.merchant().value()));
             }
             if (!snap.sessionId().value().equals(order.checkoutId())) {
-                v.add(new Violation(id(), where + ": " + approved + " is for session " + snap.sessionId().value()));
+                v.add(new Violation(id(), where + ": " + approved + " is for session " + snap.sessionId()));
             }
             if (order.amountMinor() > snap.maxTotalMinor()) {
                 v.add(new Violation(id(), where + ": amount " + order.amountMinor() + " is above the approved maximum "

@@ -75,7 +75,7 @@ final class SearchCatalogTool implements Tool {
             List<Object> mine = new ArrayList<>();
             for (CatalogProduct product : pages.get(i).get().products()) {
                 for (CatalogVariant variant : product.variants()) {
-                    if (Args.ID.matcher(variant.itemId()).matches()) {
+                    if (Args.ITEM_ID.matcher(variant.itemId()).matches()) {
                         mine.add(item(merchant, product, variant));
                     }
                 }

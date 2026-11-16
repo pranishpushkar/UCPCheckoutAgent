@@ -101,7 +101,7 @@ public final class I3CompleteNeedsApproval implements InvariantCheck {
             Optional<String> session = Wire.session(l.path());
             if (!session.equals(Optional.of(snap.sessionId().value()))) {
                 v.add(where + " targets " + session.orElse("no session") + ", but decision #" + d.seq()
-                        + " approved " + snap.sessionId().value());
+                        + " approved " + snap.sessionId());
             }
             storedRow(e, intent, d).ifPresentOrElse(row -> {
                 if (row.status() != ApprovalStatus.CONSUMED && row.status() != ApprovalStatus.APPROVED) {

@@ -24,7 +24,7 @@ final class ToolText {
 
     /** An id the merchant sent (an item or order id): as it is when it looks like an id, else wrapped. */
     static String merchantId(String field, String value) {
-        return Args.ID.matcher(value).matches() ? value : UntrustedText.wrap("merchant", field, value);
+        return Args.ITEM_ID.matcher(value).matches() ? value : UntrustedText.wrap("merchant", field, value);
     }
 
     /**

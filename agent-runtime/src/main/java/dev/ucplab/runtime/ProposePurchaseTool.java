@@ -47,7 +47,7 @@ final class ProposePurchaseTool implements Tool {
                                             "type", "object",
                                             "properties", Map.of(
                                                     "item_id", Map.of("type", "string",
-                                                            "pattern", "^[A-Za-z0-9_-]{1,100}$"),
+                                                            "pattern", Args.ITEM_ID_SCHEMA),
                                                     "quantity", Map.of("type", "integer", "minimum", 1,
                                                             "maximum", MAX_QUANTITY)),
                                             "required", List.of("item_id", "quantity"),
@@ -79,7 +79,7 @@ final class ProposePurchaseTool implements Tool {
             for (Object entry : Args.list(arguments, "items", 1, MAX_LINES)) {
                 Map<String, Object> item = Args.object(entry, "each of items");
                 Args.only(item, Set.of("item_id", "quantity"));
-                lines.add(new ProposedLine(Args.id(item.get("item_id"), "item_id"),
+                lines.add(new ProposedLine(Args.itemId(item.get("item_id"), "item_id"),
                         Args.integer(item.get("quantity"), "quantity", 1, MAX_QUANTITY)));
             }
             rationale = Args.truncated(arguments, "rationale", MAX_RATIONALE);
