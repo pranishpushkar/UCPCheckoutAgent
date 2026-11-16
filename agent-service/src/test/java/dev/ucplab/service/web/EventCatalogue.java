@@ -33,6 +33,8 @@ public final class EventCatalogue {
             Map.entry("merchant_not_owned", Set.of("from")),
             Map.entry("cancel_blocked_i12", Set.of()),
             Map.entry("complete_unavailable", Set.of("from")),
+            Map.entry("handed_off", Set.of("host")),
+            Map.entry("hand_off_refused", Set.of("host")),
             Map.entry("cancel_sent", Set.of("outcome", "attempt")),
             Map.entry("cancel_gave_up", Set.of("attempts")),
             Map.entry("orphan_session_found", Set.of("probe")),
@@ -50,5 +52,5 @@ public final class EventCatalogue {
      * and the approval's amounts are allowed (Stage 3 review, point 4). Redacted by the allowlist's default.
      */
     public static final Set<String> REDACTED = Set.of("rationale", "cause", "snapshot_hash", "attempt_id",
-            "attempts");
+            "attempts", "host");   // host (7.2 hand_off): kept out of the console in H5; showing it is a post-H5 choice
 }

@@ -16,6 +16,7 @@ import dev.ucplab.core.intent.MerchantAttempt;
 import dev.ucplab.core.intent.ProposedLine;
 import dev.ucplab.core.intent.PurchaseIntent;
 import dev.ucplab.core.json.CanonicalJson;
+import dev.ucplab.core.merchant.ContinueUrl;
 import dev.ucplab.core.merchant.FrozenBody;
 import dev.ucplab.core.merchant.IdempotencyKey;
 import dev.ucplab.core.merchant.MerchantId;
@@ -51,7 +52,7 @@ public final class SqlIntentRepository implements IntentRepository {
 
     static final String INTENT_COLUMNS = "id, user_id, merchant_id, merchant_fingerprint, dedupe_key, lines_json,"
             + " buyer_email, state, version, session_id, approved_snapshot_hash, requote_count, order_id, failure_reason,"
-            + " uncertain_since, cancel_pending, lease_owner, lease_until, created_at, updated_at";
+            + " uncertain_since, cancel_pending, lease_owner, lease_until, created_at, updated_at, handoff_url";
 
     private static final String ATTEMPT_COLUMNS = "id, intent_id, op, revision, idempotency_key, request_hash,"
             + " request_body, status, http_status, response_json, sent_at, responded_at";
@@ -113,7 +114,7 @@ public final class SqlIntentRepository implements IntentRepository {
         db.write(c -> {
             try (PreparedStatement s = c.prepareStatement(
                     "INSERT INTO purchase_intent (" + INTENT_COLUMNS + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
-                            + " ?, ?, ?, ?, ?, ?, ?)")) {
+                            + " ?, ?, ?, ?, ?, ?, ?, ?)")) {
                 int n = 1;
                 s.setString(n++, i.id().value());
                 s.setString(n++, i.owner().value());
@@ -134,7 +135,8 @@ public final class SqlIntentRepository implements IntentRepository {
                 s.setString(n++, i.leaseOwner().orElse(null));
                 s.setString(n++, i.leaseUntil().map(SqlTimes::format).orElse(null));
                 s.setString(n++, SqlTimes.format(i.createdAt()));
-                s.setString(n, SqlTimes.format(i.updatedAt()));
+                s.setString(n++, SqlTimes.format(i.updatedAt()));
+                s.setString(n, handoffUrl(i));
                 s.executeUpdate();
             } catch (SQLException e) {
                 // The primary key (a repeated id) and ux_intent_active_dedupe (an active dedupe key) both land here.
@@ -441,7 +443,8 @@ public final class SqlIntentRepository implements IntentRepository {
         try (PreparedStatement s = c.prepareStatement(
                 "UPDATE purchase_intent SET state = ?, version = ?, session_id = ?, approved_snapshot_hash = ?,"
                         + " requote_count = ?, order_id = ?, failure_reason = ?, uncertain_since = ?,"
-                        + " cancel_pending = ?, updated_at = ? WHERE id = ? AND lease_owner = ? AND version = ?"
+                        + " cancel_pending = ?, updated_at = ?, handoff_url = ? WHERE id = ? AND lease_owner = ?"
+                        + " AND version = ?"
                         + " AND merchant_id = ?")) {
             int n = 1;
             s.setString(n++, i.state().name());
@@ -454,6 +457,8 @@ public final class SqlIntentRepository implements IntentRepository {
             s.setString(n++, i.uncertainSince().map(SqlTimes::format).orElse(null));
             s.setInt(n++, i.cancelPending() ? 1 : 0);
             s.setString(n++, SqlTimes.format(i.updatedAt()));
+            // 7.2 hand_off: the continue_url is written in the same fenced write as the move to HANDED_OFF.
+            s.setString(n++, handoffUrl(i));
             s.setString(n++, i.id().value());
             s.setString(n++, leaseOwner);
             s.setLong(n++, expectedVersion);
@@ -596,6 +601,12 @@ public final class SqlIntentRepository implements IntentRepository {
         }
     }
 
+    /** The stored form of the intent's continue_url (I8: written here and returned only to the owner, 23.2). */
+    private static String handoffUrl(PurchaseIntent i) {
+        // No lambda: a new one here would renumber those the mutation equivalents name.
+        return i.handoffUrl().isPresent() ? i.handoffUrl().get().value().toString() : null;
+    }
+
     static PurchaseIntent intent(ResultSet r) throws SQLException {
         return new PurchaseIntent(
                 new IntentId(r.getString("id")),
@@ -611,6 +622,8 @@ public final class SqlIntentRepository implements IntentRepository {
                 Optional.ofNullable(r.getString("approved_snapshot_hash")),
                 r.getInt("requote_count"),
                 Optional.ofNullable(r.getString("order_id")),
+                // Written only from a ContinueUrl, so it always parses (V9).
+                Optional.ofNullable(r.getString("handoff_url")).flatMap(ContinueUrl::parse),
                 Optional.ofNullable(r.getString("failure_reason")),
                 Optional.ofNullable(r.getString("uncertain_since")).map(SqlTimes::parse),
                 r.getInt("cancel_pending") != 0,

@@ -1,6 +1,7 @@
 package dev.ucplab.core.intent;
 
 import dev.ucplab.core.identity.UserId;
+import dev.ucplab.core.merchant.ContinueUrl;
 import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.SessionId;
@@ -41,6 +42,7 @@ public record PurchaseIntent(
         Optional<String> approvedSnapshotHash,
         int requoteCount,
         Optional<String> orderId,
+        Optional<ContinueUrl> handoffUrl,
         Optional<String> failureReason,
         Optional<Instant> uncertainSince,
         boolean cancelPending,
@@ -61,6 +63,7 @@ public record PurchaseIntent(
         Objects.requireNonNull(sessionId, "sessionId");
         Objects.requireNonNull(approvedSnapshotHash, "approvedSnapshotHash");
         Objects.requireNonNull(orderId, "orderId");
+        Objects.requireNonNull(handoffUrl, "handoffUrl");
         Objects.requireNonNull(failureReason, "failureReason");
         Objects.requireNonNull(uncertainSince, "uncertainSince");
         Objects.requireNonNull(leaseOwner, "leaseOwner");
@@ -94,14 +97,14 @@ public record PurchaseIntent(
             List<ProposedLine> lines, String buyerEmail, Instant now) {
         return new PurchaseIntent(
                 id, owner, merchantId, merchantFingerprint, dedupeKey, lines, buyerEmail, IntentState.PROPOSED, 0,
-                Optional.empty(), Optional.empty(), 0, Optional.empty(), Optional.empty(), Optional.empty(), false,
+                Optional.empty(), Optional.empty(), 0, Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), false,
                 Optional.empty(), Optional.empty(), now, now);
     }
 
     public PurchaseIntent withState(IntentState newState, Instant now) {
         return new PurchaseIntent(
                 id, owner, merchantId, merchantFingerprint, dedupeKey, lines, buyerEmail, newState, version, sessionId,
-                approvedSnapshotHash, requoteCount, orderId, failureReason, uncertainSince, cancelPending, leaseOwner, leaseUntil,
+                approvedSnapshotHash, requoteCount, orderId, handoffUrl, failureReason, uncertainSince, cancelPending, leaseOwner, leaseUntil,
                 createdAt, now);
     }
 
@@ -118,47 +121,55 @@ public record PurchaseIntent(
     public PurchaseIntent withCancelPending(boolean pending) {
         return new PurchaseIntent(
                 id, owner, merchantId, merchantFingerprint, dedupeKey, lines, buyerEmail, state, version, sessionId,
-                approvedSnapshotHash, requoteCount, orderId, failureReason, uncertainSince, pending, leaseOwner,
+                approvedSnapshotHash, requoteCount, orderId, handoffUrl, failureReason, uncertainSince, pending, leaseOwner,
                 leaseUntil, createdAt, updatedAt);
     }
 
     public PurchaseIntent withSessionId(SessionId session) {
         return new PurchaseIntent(
                 id, owner, merchantId, merchantFingerprint, dedupeKey, lines, buyerEmail, state, version, Optional.of(session),
-                approvedSnapshotHash, requoteCount, orderId, failureReason, uncertainSince, cancelPending, leaseOwner, leaseUntil,
+                approvedSnapshotHash, requoteCount, orderId, handoffUrl, failureReason, uncertainSince, cancelPending, leaseOwner, leaseUntil,
                 createdAt, updatedAt);
     }
 
     public PurchaseIntent withApprovedSnapshotHash(Optional<String> hash) {
         return new PurchaseIntent(
                 id, owner, merchantId, merchantFingerprint, dedupeKey, lines, buyerEmail, state, version, sessionId, hash, requoteCount,
-                orderId, failureReason, uncertainSince, cancelPending, leaseOwner, leaseUntil, createdAt, updatedAt);
+                orderId, handoffUrl, failureReason, uncertainSince, cancelPending, leaseOwner, leaseUntil, createdAt, updatedAt);
     }
 
     public PurchaseIntent withRequoteCount(int newRequoteCount) {
         return new PurchaseIntent(
                 id, owner, merchantId, merchantFingerprint, dedupeKey, lines, buyerEmail, state, version, sessionId, approvedSnapshotHash,
-                newRequoteCount, orderId, failureReason, uncertainSince, cancelPending, leaseOwner, leaseUntil, createdAt, updatedAt);
+                newRequoteCount, orderId, handoffUrl, failureReason, uncertainSince, cancelPending, leaseOwner, leaseUntil, createdAt, updatedAt);
     }
 
     public PurchaseIntent withOrderId(String newOrderId) {
         return new PurchaseIntent(
                 id, owner, merchantId, merchantFingerprint, dedupeKey, lines, buyerEmail, state, version, sessionId, approvedSnapshotHash,
-                requoteCount, Optional.of(newOrderId), failureReason, uncertainSince, cancelPending, leaseOwner, leaseUntil,
+                requoteCount, Optional.of(newOrderId), handoffUrl, failureReason, uncertainSince, cancelPending, leaseOwner, leaseUntil,
+                createdAt, updatedAt);
+    }
+
+    /** Sets the continue_url the buyer was handed (7.2 hand_off, 10); set once, with the move to HANDED_OFF. */
+    public PurchaseIntent withHandoffUrl(ContinueUrl url) {
+        return new PurchaseIntent(
+                id, owner, merchantId, merchantFingerprint, dedupeKey, lines, buyerEmail, state, version, sessionId, approvedSnapshotHash,
+                requoteCount, orderId, Optional.of(url), failureReason, uncertainSince, cancelPending, leaseOwner, leaseUntil,
                 createdAt, updatedAt);
     }
 
     public PurchaseIntent withFailureReason(String reason) {
         return new PurchaseIntent(
                 id, owner, merchantId, merchantFingerprint, dedupeKey, lines, buyerEmail, state, version, sessionId, approvedSnapshotHash,
-                requoteCount, orderId, Optional.of(reason), uncertainSince, cancelPending, leaseOwner, leaseUntil, createdAt,
+                requoteCount, orderId, handoffUrl, Optional.of(reason), uncertainSince, cancelPending, leaseOwner, leaseUntil, createdAt,
                 updatedAt);
     }
 
     public PurchaseIntent withUncertainSince(Instant since) {
         return new PurchaseIntent(
                 id, owner, merchantId, merchantFingerprint, dedupeKey, lines, buyerEmail, state, version, sessionId, approvedSnapshotHash,
-                requoteCount, orderId, failureReason, Optional.of(since), cancelPending, leaseOwner, leaseUntil, createdAt,
+                requoteCount, orderId, handoffUrl, failureReason, Optional.of(since), cancelPending, leaseOwner, leaseUntil, createdAt,
                 updatedAt);
     }
 
@@ -166,20 +177,20 @@ public record PurchaseIntent(
     public PurchaseIntent withoutUncertainSince() {
         return new PurchaseIntent(
                 id, owner, merchantId, merchantFingerprint, dedupeKey, lines, buyerEmail, state, version, sessionId, approvedSnapshotHash,
-                requoteCount, orderId, failureReason, Optional.empty(), cancelPending, leaseOwner, leaseUntil, createdAt, updatedAt);
+                requoteCount, orderId, handoffUrl, failureReason, Optional.empty(), cancelPending, leaseOwner, leaseUntil, createdAt, updatedAt);
     }
 
     public PurchaseIntent withVersion(long newVersion) {
         return new PurchaseIntent(
                 id, owner, merchantId, merchantFingerprint, dedupeKey, lines, buyerEmail, state, newVersion, sessionId,
-                approvedSnapshotHash, requoteCount, orderId, failureReason, uncertainSince, cancelPending, leaseOwner, leaseUntil,
+                approvedSnapshotHash, requoteCount, orderId, handoffUrl, failureReason, uncertainSince, cancelPending, leaseOwner, leaseUntil,
                 createdAt, updatedAt);
     }
 
     public PurchaseIntent withLease(Optional<String> newLeaseOwner, Optional<Instant> newLeaseUntil) {
         return new PurchaseIntent(
                 id, owner, merchantId, merchantFingerprint, dedupeKey, lines, buyerEmail, state, version, sessionId,
-                approvedSnapshotHash, requoteCount, orderId, failureReason, uncertainSince, cancelPending, newLeaseOwner,
+                approvedSnapshotHash, requoteCount, orderId, handoffUrl, failureReason, uncertainSince, cancelPending, newLeaseOwner,
                 newLeaseUntil, createdAt, updatedAt);
     }
 
@@ -187,6 +198,7 @@ public record PurchaseIntent(
     public String toString() {
         return "PurchaseIntent[id=" + id + ", owner=" + owner + ", merchantId=" + merchantId + ", state=" + state
                 + ", version=" + version + ", sessionId=" + sessionId + ", requoteCount=" + requoteCount
-                + ", orderId=" + orderId + ", failureReason=" + failureReason + ", cancelPending=" + cancelPending + ", leaseOwner=" + leaseOwner + ']';
+                // handoffUrl: ContinueUrl shows the host only (I8)
+                + ", orderId=" + orderId + ", handoffUrl=" + handoffUrl + ", failureReason=" + failureReason + ", cancelPending=" + cancelPending + ", leaseOwner=" + leaseOwner + ']';
     }
 }

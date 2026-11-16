@@ -13,6 +13,7 @@ import dev.ucplab.core.merchant.Completion;
 import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantGateway;
 import dev.ucplab.core.merchant.MerchantGateways;
+import dev.ucplab.core.merchant.fake.MerchantCall;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantStatus;
 import dev.ucplab.core.merchant.Transport;
@@ -76,6 +77,8 @@ final class ScheduleExecutor {
     private final boolean spread;
     /** H1 C6: the merchant runs in fulfillment mode, so every intent goes through the shipping selection. */
     private boolean fulfillment;
+    /** H5 C7a: every intent starts at an owned handoff merchant (7.2, 19), whose answers carry a continue_url. */
+    private boolean handoff;
     private final FaultyMerchantModel.Mode mode;
     private final java.util.function.Function<dev.ucplab.core.MutableClock, CrashHarness.Stores> storeFactory;
 
@@ -99,6 +102,24 @@ final class ScheduleExecutor {
         ScheduleExecutor e = new ScheduleExecutor(DEFAULT_ORCHESTRATOR, mode);
         e.fulfillment = true;
         return e;
+    }
+
+    /**
+     * The handoff runs (H5 C7a, 14.1): merchant A's entry is an owned MCP store whose completion is handoff, with the
+     * shop domain {@link #FLIP_SHOP_DOMAIN}; every answer carries a continue_url on it and a GET shows the store's
+     * prices now ({@link ContinueUrlGateway}), so an approved intent hands off, or re-quotes when a price moved. A fault
+     * the generator anchors on the nth complete, which a handoff intent never sends, goes on the nth GET instead. A
+     * flip to any other kind changes the fingerprint (merchant_changed).
+     */
+    static ScheduleExecutor atHandoff(FaultyMerchantModel.Mode mode) {
+        ScheduleExecutor e = new ScheduleExecutor(DEFAULT_ORCHESTRATOR, mode);
+        e.handoff = true;
+        return e;
+    }
+
+    static MerchantEntry handoffEntry(MerchantId id) {
+        return new MerchantEntry(id, URI.create("http://127.0.0.1:8081"), "Shop", MerchantStatus.ACTIVE, Transport.MCP,
+                Completion.HANDOFF, true, Optional.of(FLIP_SHOP_DOMAIN));
     }
 
     static ScheduleExecutor spread(FaultyMerchantModel.Mode mode) {
@@ -172,6 +193,9 @@ final class ScheduleExecutor {
                 Lab.SHOP, entryOf(Lab.SHOP, ScheduleEntry.Registry.OWNED),
                 Lab.SHOP_B, entryOf(Lab.SHOP_B, ScheduleEntry.Registry.OWNED)));
         {
+            if (handoff) {
+                entryNow.put(Lab.SHOP, handoffEntry(Lab.SHOP));
+            }
             lab.entries = id -> Optional.ofNullable(entryNow.get(id));
         }
         /** The intent whose step runs now, or the slot being proposed (its intent is stored before its create goes). */
@@ -199,6 +223,8 @@ final class ScheduleExecutor {
         List<Observations> run(Schedule schedule) {
             schedule.entries().stream()
                     .filter(ScheduleEntry.CallFault.class::isInstance).map(ScheduleEntry.CallFault.class::cast)
+                    .map(f -> handoff && f.call() == MerchantCall.COMPLETE
+                            ? new ScheduleEntry.CallFault(MerchantCall.GET, f.nth(), f.fault()) : f)
                     .forEach(f -> {
                         lab.merchant.addRule(FaultRule.nth(f.call(), f.nth(), f.fault()));
                         if (spread) {
@@ -234,8 +260,17 @@ final class ScheduleExecutor {
                 lab.merchantB.settle();
                 return List.of(view(false, ownStore), view(true, ownStore));
             }
+            Map<IntentId, List<dev.ucplab.core.intent.AttemptOp>> ops = new HashMap<>();
+            String handoffPrint = handoffEntry(Lab.SHOP).fingerprint();
+            for (IntentId id : slots.values()) {
+                if (handoff && lab.intents.findForSystem(id).map(PurchaseIntent::merchantFingerprint)
+                        .equals(Optional.of(handoffPrint))) {
+                    ops.put(id, lab.intents.attempts(id).stream().map(dev.ucplab.core.intent.MerchantAttempt::op)
+                            .toList());
+                }
+            }
             return List.of(new Observations(slots, probe.calls(), lab.merchant.log(), lab.merchant.orders(), decisions,
-                    crashes, samples, aborts, lab.config, ownStore));
+                    crashes, samples, aborts, lab.config, ownStore).withAttemptOps(ops));
         }
 
         private void apply(ScheduleEntry entry) {
@@ -403,7 +438,8 @@ final class ScheduleExecutor {
         /** A fresh process: a new orchestrator and worker id over the same repositories and merchant (S9). */
         private void restart() {
             workers++;
-            gateway = new InterceptingGateway(checked(probe));
+            gateway = new InterceptingGateway(checked(handoff
+                    ? new ContinueUrlGateway(probe, FLIP_SHOP_DOMAIN, lab.merchant::price) : probe));
             if (spread) {
                 gatewayB = new InterceptingGateway(checked(probeB));
                 InterceptingGateway.link(gateway, gatewayB);

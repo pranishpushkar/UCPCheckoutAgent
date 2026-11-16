@@ -67,7 +67,18 @@ class TransitionTableTest {
             row(27, "AWAITING_APPROVAL", "MERCHANT_CHANGED", "NONE", "ESCALATED", "ESCALATION_EVENT"),
             row(27, "APPROVED", "MERCHANT_CHANGED", "NONE", "ESCALATED", "ESCALATION_EVENT"),
             row(27, "COMPLETING", "MERCHANT_CHANGED", "NONE", "ESCALATED", "ESCALATION_EVENT"),
-            row(27, "RECONCILING", "MERCHANT_CHANGED", "NONE", "ESCALATED", "ESCALATION_EVENT"));
+            row(27, "RECONCILING", "MERCHANT_CHANGED", "NONE", "ESCALATED", "ESCALATION_EVENT"),
+            // Added in H5 C7a (7.2 handoff rows). quote_ready (handoff) is the QUOTE_READY row above under its own
+            // condition; requires_escalation (handoff) ends QUOTING as a quote would.
+            row(28, "QUOTING", "REQUIRES_ESCALATION", "QUOTE_POLICY_ALLOWS", "AWAITING_APPROVAL", "CREATE_APPROVAL"),
+            row(29, "APPROVED", "HAND_OFF", "NONE", "HANDED_OFF", "STORE_HANDOFF_URL"),
+            row(30, "APPROVED", "HAND_OFF_CHANGED", "REQUOTE_BELOW_CAP", "QUOTING", "REQUOTE_ON_SAME_SESSION"),
+            row(30, "APPROVED", "HAND_OFF_CHANGED", "REQUOTE_CAP_REACHED", "REJECTED", "REJECT_PRICE_UNSTABLE"),
+            row(31, "APPROVED", "HAND_OFF_GONE", "NONE", "FAILED_NOT_CHARGED", "NONE"),
+            row(32, "APPROVED", "NOT_SENT", "NONE", "APPROVED", "NONE"),
+            row(32, "APPROVED", "UNCERTAIN", "NONE", "APPROVED", "NONE"),
+            row(33, "APPROVED", "HAND_OFF_REFUSED", "NONE", "FAILED_NOT_CHARGED", "CANCEL_SESSION"),
+            row(34, "APPROVED", "HAND_OFF_UNEXPECTED", "NONE", "ESCALATED", "ESCALATION_EVENT"));
 
     static Stream<Arguments> expectedRows() {
         return EXPECTED.stream();
@@ -125,7 +136,8 @@ class TransitionTableTest {
 
     // Covers: 7.1 (terminal states accept no event)
     @ParameterizedTest
-    @EnumSource(value = IntentState.class, names = {"COMPLETED", "REJECTED", "FAILED_NOT_CHARGED", "ESCALATED"})
+    // H5 C7a: HANDED_OFF is terminal (7.1), so the source list names it; a name not in the enum fails the run.
+    @EnumSource(value = IntentState.class, names = {"COMPLETED", "HANDED_OFF", "REJECTED", "FAILED_NOT_CHARGED", "ESCALATED"})
     void transitionTable_hasNoRowFromState_whenStateIsTerminal(IntentState terminal) {
         assertThat(terminal.isTerminal()).isTrue();
         assertThat(TransitionTable.rows()).noneMatch(t -> t.from() == terminal);
@@ -172,8 +184,10 @@ class TransitionTableTest {
                 .containsExactlyInAnyOrder(
                         org.assertj.core.groups.Tuple.tuple(IntentState.APPROVED, TransitionGuard.ATTEMPT_PERSISTED),
                         org.assertj.core.groups.Tuple.tuple(IntentState.RECONCILING, TransitionGuard.RESEND_ALLOWED));
+        // Every transition into APPROVED from another state comes from AWAITING_APPROVAL (H5 C7a: the hand_off read's
+        // APPROVED -> APPROVED rows enter nothing).
         assertThat(TransitionTable.rows())
-                .filteredOn(t -> t.to() == IntentState.APPROVED)
+                .filteredOn(t -> t.to() == IntentState.APPROVED && t.from() != IntentState.APPROVED)
                 .extracting(Transition::from, Transition::guard)
                 .containsExactly(org.assertj.core.groups.Tuple.tuple(IntentState.AWAITING_APPROVAL, TransitionGuard.APPROVAL_VALID));
     }

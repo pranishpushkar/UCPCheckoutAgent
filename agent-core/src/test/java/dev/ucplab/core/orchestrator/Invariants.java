@@ -261,7 +261,7 @@ final class Invariants {
         return switch (state) {
             case PROPOSED, QUOTING, APPROVED, AWAITING_APPROVAL -> Optional.of(state.name());
             case COMPLETING, RECONCILING -> Optional.of("COMPLETING/RECONCILING");
-            case COMPLETED, REJECTED, FAILED_NOT_CHARGED, ESCALATED -> Optional.empty();
+            case COMPLETED, HANDED_OFF, REJECTED, FAILED_NOT_CHARGED, ESCALATED -> Optional.empty();
         };
     }
 
@@ -274,7 +274,7 @@ final class Invariants {
             case APPROVED -> s.at().plus(WORKER_PASS).plus(c.completeRequestTimeout());
             case AWAITING_APPROVAL -> s.approvalExpiresAt().orElse(s.at().plus(DefaultApprovalService.DEFAULT_TTL));
             case COMPLETING, RECONCILING -> s.at().plus(c.reconcileDeadline());
-            case COMPLETED, REJECTED, FAILED_NOT_CHARGED, ESCALATED -> Instant.MAX;
+            case COMPLETED, HANDED_OFF, REJECTED, FAILED_NOT_CHARGED, ESCALATED -> Instant.MAX;
         };
     }
 
@@ -297,6 +297,28 @@ final class Invariants {
             delay = delay.multipliedBy(2);
         }
         return total;
+    }
+
+    // ---------------------------------------------------------------- handoff (7.2)
+
+    /**
+     * 7.2 Handoff merchants (H5 C7a): for an intent proposed at a handoff entry ({@code attemptOps}' keys), no complete
+     * reaches the merchant on its session and no complete attempt row is written, whatever the faults, crashes, flips
+     * and decisions. An intent proposed after a flip to an agent entry completes as usual.
+     */
+    static List<String> handoffNeverCompletes(Observations o) {
+        List<String> v = new ArrayList<>();
+        Set<SessionId> sessions = new HashSet<>();
+        o.samples().stream().filter(s -> o.attemptOps().containsKey(s.intent()))
+                .forEach(s -> s.session().ifPresent(sessions::add));
+        o.calls().stream().filter(c -> c.call() == MerchantCall.COMPLETE && c.session().filter(sessions::contains).isPresent())
+                .forEach(c -> v.add("handoff: complete #" + c.seq() + " reached the merchant"));
+        o.attemptOps().forEach((id, ops) -> {
+            if (ops.contains(dev.ucplab.core.intent.AttemptOp.COMPLETE)) {
+                v.add("handoff: intent " + id.value() + " has a complete attempt row: " + ops);
+            }
+        });
+        return v;
     }
 
     // ---------------------------------------------------------------- I7

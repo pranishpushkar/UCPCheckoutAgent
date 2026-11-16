@@ -75,7 +75,19 @@ public final class TransitionTable {
             row(RECONCILING, TransitionEvent.MERCHANT_CHANGED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
             // The merchant's transport offers no complete (8.4, N1): nothing was sent, so not charged; checked before
             // the write-ahead, so no complete attempt is written and nothing reconciles.
-            row(APPROVED, TransitionEvent.COMPLETE_UNAVAILABLE, TransitionGuard.NONE, FAILED_NOT_CHARGED, SideEffect.CANCEL_SESSION));
+            row(APPROVED, TransitionEvent.COMPLETE_UNAVAILABLE, TransitionGuard.NONE, FAILED_NOT_CHARGED, SideEffect.CANCEL_SESSION),
+            // Handoff merchants (7.2, 19): QUOTE_READY serves quote_ready (handoff) under its own condition; APPROVED
+            // leads only to these rows, never to SEND_COMPLETE.
+            row(QUOTING, TransitionEvent.REQUIRES_ESCALATION, TransitionGuard.QUOTE_POLICY_ALLOWS, AWAITING_APPROVAL, SideEffect.CREATE_APPROVAL),
+            row(APPROVED, TransitionEvent.HAND_OFF, TransitionGuard.NONE, IntentState.HANDED_OFF, SideEffect.STORE_HANDOFF_URL),
+            row(APPROVED, TransitionEvent.HAND_OFF_CHANGED, TransitionGuard.REQUOTE_BELOW_CAP, QUOTING, SideEffect.REQUOTE_ON_SAME_SESSION),
+            row(APPROVED, TransitionEvent.HAND_OFF_CHANGED, TransitionGuard.REQUOTE_CAP_REACHED, IntentState.REJECTED, SideEffect.REJECT_PRICE_UNSTABLE),
+            row(APPROVED, TransitionEvent.HAND_OFF_GONE, TransitionGuard.NONE, FAILED_NOT_CHARGED, SideEffect.NONE),
+            // The hand_off read was not sent or is uncertain: try again on the next pass (7.6 deadline applies).
+            row(APPROVED, TransitionEvent.NOT_SENT, TransitionGuard.NONE, APPROVED, SideEffect.NONE),
+            row(APPROVED, TransitionEvent.UNCERTAIN, TransitionGuard.NONE, APPROVED, SideEffect.NONE),
+            row(APPROVED, TransitionEvent.HAND_OFF_REFUSED, TransitionGuard.NONE, FAILED_NOT_CHARGED, SideEffect.CANCEL_SESSION),
+            row(APPROVED, TransitionEvent.HAND_OFF_UNEXPECTED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT));
 
     private TransitionTable() {
     }

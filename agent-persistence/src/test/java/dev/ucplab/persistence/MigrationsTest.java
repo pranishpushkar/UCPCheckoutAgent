@@ -52,13 +52,11 @@ class MigrationsTest {
         }
     }
 
-    // Covers: 7.7 (the terminal states named in the partial unique index are exactly IntentState's terminal states, so
-    // the SQL and the in-memory repository agree on what is active)
+    // Covers: 7.7, 7.1 (the terminal states named in the partial unique index are exactly IntentState's terminal states,
+    // so the SQL and the in-memory repository agree on what is active; V9 is the newest definition, with HANDED_OFF)
     @Test
     void dedupeIndex_namesExactlyTheTerminalStates() throws IOException {
-        for (String file : List.of("V1__purchase_intent_and_events.sql", "V4__recovery_indexes.sql")) {
-            assertDedupeListMatchesEnum(Files.readString(Path.of("src/main/resources/db/migration/" + file)));
-        }
+        assertDedupeListMatchesEnum(Files.readString(Path.of("src/main/resources/db/migration/V9__intent_handoff_url.sql")));
     }
 
     private static void assertDedupeListMatchesEnum(String sql) {
@@ -176,8 +174,9 @@ class MigrationsTest {
     // Covers: section 10 (the state, op and status lists in the CHECKs are exactly the Java enums' values)
     @Test
     void checks_listExactlyTheEnumValues() throws IOException {
-        String sql = Files.readString(Path.of("src/main/resources/db/migration/V4__recovery_indexes.sql"));
+        String sql = Files.readString(Path.of("src/main/resources/db/migration/V9__intent_handoff_url.sql"));
 
+        // V9 is the newest definition of every list (it rebuilt the four tables, H5 C7a).
         assertThat(checkList(sql, "state")).isEqualTo(names(IntentState.values()));
         assertThat(checkList(sql, "op")).isEqualTo(names(dev.ucplab.core.intent.AttemptOp.values()));
         assertThat(checkList(sql, "status", "SENT")).isEqualTo(names(dev.ucplab.core.intent.AttemptStatus.values()));
@@ -334,7 +333,7 @@ class MigrationsTest {
     }
 
     // Covers: 10, 19, I12 (a database at V7 holding rows upgrades to V8: every row keeps every value it had and gets the
-    // lab entry's fingerprint, the only entry an intent from before H5 can run under; V8 is the last migration)
+    // lab entry's fingerprint, the only entry an intent from before H5 can run under)
     @Test
     void v8_upgradesAV7DatabaseWithRows_givingEachTheLabFingerprint() {
         Path file = dir.resolve("v7-to-v8.db");
@@ -357,7 +356,65 @@ class MigrationsTest {
                     "{\"completion\":\"agent\",\"owned\":true,\"transport\":\"rest\"}",
                     "{\"completion\":\"agent\",\"owned\":true,\"transport\":\"rest\"}");
             assertThat(column(db, "SELECT version FROM flyway_schema_history WHERE success = 1"
-                    + " ORDER BY installed_rank")).endsWith("7", "8");
+                    + " ORDER BY installed_rank")).containsSubsequence("7", "8");
+        }
+    }
+
+    // Covers: 10, 7.2, H5 C7a (a database at V8 holding rows, events, attempts and approvals upgrades to V9: every row
+    // keeps every value it had, handoff_url starts empty, HANDED_OFF is accepted and terminal for the dedupe index, the
+    // children point at the renamed parent, and the indexes and the I11 trigger are back; V9 is the last migration)
+    @Test
+    void v9_upgradesAV8DatabaseWithRows_andAcceptsHandedOff() {
+        Path file = dir.resolve("v8-to-v9.db");
+        Flyway.configure().dataSource("jdbc:sqlite:" + file, null, null).locations("classpath:db/migration")
+                .target("8").load().migrate();
+        String dump = "SELECT group_concat(id || '|' || user_id || '|' || merchant_id || '|' || merchant_fingerprint"
+                + " || '|' || state || '|' || version || '|' || created_at, ';') FROM (SELECT * FROM purchase_intent"
+                + " ORDER BY id)";
+        List<String> before;
+        try (Database old = Database.open(file, 1)) {
+            exec(old, intent("i1", "merchant-a", "k1", "APPROVED", null),
+                    intent("i2", "merchant-b", "k2", "COMPLETED", "o2"),
+                    "INSERT INTO intent_event (intent_id, seq, type, payload_json, at) VALUES ('i1', 1, 't', '{}', 't')",
+                    "INSERT INTO merchant_attempt (id, intent_id, seq, op, revision, status, sent_at)"
+                            + " VALUES ('a1', 'i1', 1, 'CREATE', 0, 'SENT', 't')",
+                    "INSERT INTO approval (id, intent_id, seq, user_id, snapshot_json, snapshot_hash, token_hash,"
+                            + " expires_at, status) VALUES ('p1', 'i1', 1, 'u', '{}', 'h', 'th', 't', 'APPROVED')");
+            before = column(old, dump);
+            org.assertj.core.api.Assertions.assertThatThrownBy(
+                    () -> exec(old, "UPDATE purchase_intent SET state = 'HANDED_OFF' WHERE id = 'i1'"))
+                    .as("V8 does not know HANDED_OFF").isInstanceOf(DatabaseException.class);
+        }
+
+        Migrations.migrate(file);
+
+        try (Database db = Database.open(file, 1)) {
+            assertThat(column(db, dump)).isEqualTo(before);
+            assertThat(column(db, "SELECT count(*) FROM purchase_intent WHERE handoff_url IS NULL")).containsExactly("2");
+            assertThat(column(db, "SELECT type FROM intent_event")).containsExactly("t");
+            assertThat(column(db, "SELECT id FROM merchant_attempt")).containsExactly("a1");
+            assertThat(column(db, "SELECT status FROM approval")).containsExactly("APPROVED");
+            exec(db, "UPDATE purchase_intent SET state = 'HANDED_OFF', handoff_url = 'https://shop.example/c'"
+                    + " WHERE id = 'i1'");
+            // HANDED_OFF is terminal: a new active intent may take its dedupe key.
+            exec(db, intent("i3", "merchant-a", "k1", "PROPOSED", null));
+            // The children point at the renamed parent: a row for an existing intent is taken, an orphan refused.
+            exec(db, "INSERT INTO intent_event (intent_id, seq, type, payload_json, at) VALUES ('i3', 1, 't', '{}', 't')");
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> exec(db,
+                    "INSERT INTO intent_event (intent_id, seq, type, payload_json, at) VALUES ('ghost', 1, 't', '{}', 't')"))
+                    .isInstanceOf(DatabaseException.class);
+            assertThat(column(db, "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%\\_new' ESCAPE '\\'"))
+                    .isEmpty();
+            assertThat(column(db, "SELECT name FROM sqlite_master WHERE type = 'index'"))
+                    .contains("ux_intent_active_dedupe", "ix_intent_user", "ux_intent_order", "ix_intent_state_created",
+                            "ix_intent_cancel_pending", "ix_approval_pending_expiry");
+            assertThat(column(db, "SELECT name FROM sqlite_master WHERE type = 'trigger'"))
+                    .containsExactly("purchase_intent_merchant_immutable");
+            org.assertj.core.api.Assertions.assertThatThrownBy(
+                    () -> exec(db, "UPDATE purchase_intent SET merchant_id = 'other' WHERE id = 'i1'"))
+                    .hasStackTraceContaining("I11");
+            assertThat(column(db, "SELECT version FROM flyway_schema_history WHERE success = 1"
+                    + " ORDER BY installed_rank")).endsWith("8", "9");
         }
     }
 

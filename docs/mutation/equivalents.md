@@ -508,3 +508,9 @@ Format, one block per mutant. **An entry without an `approved:` line is only a p
 - why it is equivalent: as 52 over REST: a ProtocolError with status 500 does not exist for a create; the classifier answers a 500 (and the -32603 McpTransport maps to 500) as Uncertain
 - the test that shows it: the same test (its 503 case kills the `< 500` operand itself)
 - approved: owner 2026-11-16
+
+### 89. dev.ucplab.core.orchestrator.DefaultOrchestrator.handedOff RemoveConditionalMutator_EQUAL_IF (`approval.status() != CONSUMED`)
+- description: removed conditional - replaced equality check with true (the approval is moved to CONSUMED even when it already is)
+- why it is equivalent: as 43 for send_complete, whose order 7.2 hand_off mirrors: `approvals.transition(APPROVED, CONSUMED)` is a compare-and-set on the expected status, so for an approval that is already CONSUMED it changes nothing and returns false
+- the test that shows it: `HandoffTest.handOff_storesTheUrl_consumesTheApproval_andNeverCompletes` and `aPendingApprovalUnderAnApprovedIntent_isRecovered_thenConsumed_atHandOff` pass with and without the mutation
+- approved: owner 2026-11-16

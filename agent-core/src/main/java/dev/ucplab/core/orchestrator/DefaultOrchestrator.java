@@ -8,8 +8,10 @@ import static dev.ucplab.core.intent.IntentState.QUOTING;
 import dev.ucplab.core.approval.ApprovalRecord;
 import dev.ucplab.core.approval.ApprovalRepository;
 import dev.ucplab.core.approval.ApprovalService;
+import dev.ucplab.core.approval.ApprovalSnapshot;
 import dev.ucplab.core.approval.ApprovalStatus;
 import dev.ucplab.core.approval.DefaultApprovalService;
+import dev.ucplab.core.approval.SnapshotLine;
 import dev.ucplab.core.crypto.Sha256;
 import dev.ucplab.core.id.IdGenerator;
 import dev.ucplab.core.identity.AuthContext;
@@ -40,9 +42,12 @@ import dev.ucplab.core.merchant.CallOutcome;
 import dev.ucplab.core.merchant.CheckoutStatus;
 import dev.ucplab.core.merchant.CheckoutView;
 import dev.ucplab.core.merchant.CheckoutWire;
+import dev.ucplab.core.merchant.Completion;
+import dev.ucplab.core.merchant.ContinueUrl;
 import dev.ucplab.core.merchant.CreateCheckout;
 import dev.ucplab.core.merchant.FrozenBody;
 import dev.ucplab.core.merchant.IdempotencyKey;
+import dev.ucplab.core.merchant.LineView;
 import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantGateway;
 import dev.ucplab.core.merchant.MerchantId;
@@ -134,6 +139,15 @@ public final class DefaultOrchestrator implements Orchestrator {
     static final String COMPLETE_UNAVAILABLE = "complete_unavailable";
     /** The fixed reason of a merchant that wants the buyer to take over (8.1): not completable by the agent. */
     static final String REQUIRES_ESCALATION = "requires_escalation";
+    /** 7.2 hand_off_gone: the session was canceled or is not found. */
+    static final String SESSION_GONE = "session_gone";
+    /** 7.2 hand_off_refused: no continue_url, or one that fails I12. */
+    static final String CONTINUE_URL_NOT_ALLOWED = "continue_url_not_allowed";
+    /** 7.2 hand_off_unexpected: the session shows completed or complete_in_progress. */
+    static final String HANDOFF_STATUS_UNEXPECTED = "handoff_status_unexpected";
+    /** The buyer codes a handoff quote may carry (7.2 quote_ready (handoff), 8.1's allowlist). */
+    static final Set<String> HANDOFF_BUYER_CODES = Set.of("buyer_identity_contact_method_required",
+            "delivery_address_required", "delivery_no_delivery_available_for_merchandise_line");
     static final String POLICY_PREFIX = "policy_";
     static final String MERCHANT_ERROR_PREFIX = "merchant_error_";
     static final String COMPLETE_ERROR_PREFIX = "complete_error:";
@@ -444,7 +458,7 @@ public final class DefaultOrchestrator implements Orchestrator {
             case COMPLETING -> completing(intent, attempts);
             case RECONCILING -> reconcile(intent, attempts);
             case REJECTED, FAILED_NOT_CHARGED -> cancelIfOwed(intent, attempts, entry);
-            case COMPLETED, ESCALATED -> idle(intent);
+            case COMPLETED, HANDED_OFF, ESCALATED -> idle(intent);
         };
     }
 
@@ -510,7 +524,7 @@ public final class DefaultOrchestrator implements Orchestrator {
     private Step quote(PurchaseIntent intent, List<MerchantAttempt> attempts) {
         boolean create = intent.requoteCount() == 0;
         AttemptOp op = create ? AttemptOp.CREATE : AttemptOp.UPDATE;
-        // The attempts of this quote cycle: those after the last complete (a re-quote starts a new cycle).
+        // The attempts of this quote cycle: those after the last complete, or the get of a handoff re-quote (7.2).
         List<MerchantAttempt> cycle = quoteCycle(attempts);
         int updates = (int) attempts.stream().filter(a -> a.op() == AttemptOp.UPDATE).count();
         Optional<FulfillmentSelection> selection = pendingSelection(intent, cycle);
@@ -569,7 +583,7 @@ public final class DefaultOrchestrator implements Orchestrator {
     private static List<MerchantAttempt> quoteCycle(List<MerchantAttempt> attempts) {
         int from = 0;
         for (int i = 0; i < attempts.size(); i++) {
-            if (attempts.get(i).op() == AttemptOp.COMPLETE) {
+            if (attempts.get(i).op() == AttemptOp.COMPLETE || attempts.get(i).op() == AttemptOp.GET) {
                 from = i + 1;
             }
         }
@@ -675,7 +689,7 @@ public final class DefaultOrchestrator implements Orchestrator {
                     yield moved(written, next);
                 }
                 PurchaseIntent base = create ? written.withSessionId(view.id()) : written;
-                if (view.status() == CheckoutStatus.REQUIRES_ESCALATION) {
+                if (view.status() == CheckoutStatus.REQUIRES_ESCALATION && !handoff(base)) {
                     // Not Uncertain and not a quote (8.1): no state of its own until M6c, so it ends like an answer that
                     // cannot be used, with a fixed reason (the session is cancelled, best effort).
                     yield finish(base, attempt, AttemptStatus.RESPONDED, http, summary,
@@ -703,8 +717,8 @@ public final class DefaultOrchestrator implements Orchestrator {
                             move(base, TransitionEvent.OUT_OF_STOCK),
                             codes.contains(QUANTITY_ADJUSTED) ? QUANTITY_ADJUSTED : QUOTE_LINES_DIFFER);
                 }
-                if (view.status() == CheckoutStatus.READY_FOR_COMPLETE) {
-                    yield quoteReady(base, attempt, http, summary, view);
+                if (view.status() == CheckoutStatus.READY_FOR_COMPLETE && !handoff(base)) {
+                    yield quoteReady(base, attempt, http, summary, view, TransitionEvent.QUOTE_READY);
                 }
                 if (view.status() == CheckoutStatus.INCOMPLETE && view.messages().isEmpty()
                         && selectionPending(base, view)) {
@@ -712,6 +726,12 @@ public final class DefaultOrchestrator implements Orchestrator {
                     resolve(attempt, AttemptStatus.RESPONDED, http, summary, base, written.version());
                     event(base.id(), "fulfillment_selection_needed", Map.of("status", "incomplete"));
                     yield moved(written, base);
+                }
+                if (handoff(base) && handoffQuote(view)) {
+                    // 7.2 quote_ready (handoff), requires_escalation (handoff): the buyer finishes on the merchant's page.
+                    yield quoteReady(base, attempt, http, summary, view,
+                            view.status() == CheckoutStatus.REQUIRES_ESCALATION
+                                    ? TransitionEvent.REQUIRES_ESCALATION : TransitionEvent.QUOTE_READY);
                 }
                 // An answer that is neither a quote nor a known failure: retry under the same key until exhausted.
                 yield exhaustQuoting(base, attempt, AttemptStatus.RESPONDED, http, summary);
@@ -770,7 +790,7 @@ public final class DefaultOrchestrator implements Orchestrator {
 
     private Step quoteReady(
             PurchaseIntent base, MerchantAttempt attempt, Optional<Integer> http, Optional<String> summary,
-            CheckoutView view) {
+            CheckoutView view, TransitionEvent event) {
         PolicyDecision decision = policy.evaluateQuote(base.owner(), view);
         if (!decision.allowed()) {
             // DESIGN GAP: table 7.2 has no QUOTING row for a quote that policy denies (P2, P3, P4). This uses the
@@ -785,7 +805,7 @@ public final class DefaultOrchestrator implements Orchestrator {
                     .map(a -> a.snapshot().totalMinor()).orElse(view.totalMinor());
             p7 = Optional.of(requotePolicy.evaluateReapproval(base.requoteCount() - 1, approvedTotal, view.totalMinor()));
         }
-        Move m = move(base, TransitionEvent.QUOTE_READY, TransitionGuard.QUOTE_POLICY_ALLOWS);
+        Move m = move(base, event, TransitionGuard.QUOTE_POLICY_ALLOWS);
         // Opened before the state write: a crash in between leaves a PENDING approval that the next open replaces,
         // never an AWAITING_APPROVAL intent without an approval.
         approvalService.open(m.next(), view);
@@ -872,6 +892,10 @@ public final class DefaultOrchestrator implements Orchestrator {
             return escalateInvalidApproval(intent, attempts, latest, hash);
         }
         ApprovalRecord approval = usable.get();
+        // Handoff merchants [CONTRACT] (7.2): send_complete is never taken; approval_invalid applied just above.
+        if (handoff(intent)) {
+            return handOff(intent, attempts, approval);
+        }
         SessionId session = requireSession(intent);
         int revision = intent.requoteCount();
         List<MerchantAttempt> completes = completes(attempts);
@@ -1601,5 +1625,157 @@ public final class DefaultOrchestrator implements Orchestrator {
         decision.ruleId().ifPresent(r -> payload.put("rule", r.name()));
         payload.put("reason", decision.reason());
         event(id, "policy_decision", payload);
+    }
+
+    // ---------------------------------------------------------------- handoff (7.2, 19)
+    // Kept at the end of the class: a lambda here does not renumber the earlier ones the mutation equivalents name.
+
+    /** Whether the merchant's {@code completion} is {@code handoff} (19). */
+    private boolean handoff(PurchaseIntent intent) {
+        return entry(intent.merchantId()).map(MerchantEntry::completion).equals(Optional.of(Completion.HANDOFF));
+    }
+
+    /**
+     * 7.2 quote_ready (handoff) and requires_escalation (handoff): a status the buyer can finish from, and every
+     * message recoverable or one of the three buyer codes. The lines and policy are checked as for any quote.
+     */
+    private static boolean handoffQuote(CheckoutView view) {
+        CheckoutStatus s = view.status();
+        if (s != CheckoutStatus.INCOMPLETE && s != CheckoutStatus.READY_FOR_COMPLETE
+                && s != CheckoutStatus.REQUIRES_ESCALATION) {
+            return false;
+        }
+        for (MerchantMessage m : view.messages()) {
+            if (!m.severity().equals(Optional.of("recoverable")) && !HANDOFF_BUYER_CODES.contains(m.code())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * APPROVED at a handoff merchant (7.2 hand_off rows): one GET of the session decides. No complete attempt is ever
+     * written (I1, I4 and I7 hold trivially). Only the GET that finds a change is recorded, as the new cycle's start
+     * ({@link #handOffChanged}); every other read writes no row.
+     */
+    private Step handOff(PurchaseIntent intent, List<MerchantAttempt> attempts, ApprovalRecord approval) {
+        CallOutcome<CheckoutView> read = gateway(intent).get(requireSession(intent));
+        if (read instanceof CallOutcome.ProtocolError<CheckoutView> e && e.httpStatus() == 404) {
+            return handOffGone(intent);
+        }
+        if (read instanceof CallOutcome.NotSent<CheckoutView>) {
+            return pollAgain(intent, TransitionEvent.NOT_SENT);
+        }
+        if (!(read instanceof CallOutcome.Ok<CheckoutView> ok)) {
+            // Uncertain, any other ProtocolError, or Rejected: no money can have moved; try again on the next pass.
+            return pollAgain(intent, TransitionEvent.UNCERTAIN);
+        }
+        CheckoutView view = ok.value();
+        if (view.status() == CheckoutStatus.COMPLETED || view.status() == CheckoutStatus.COMPLETE_IN_PROGRESS) {
+            return handOffUnexpected(intent, attempts);
+        }
+        if (view.status() == CheckoutStatus.CANCELED) {
+            return handOffGone(intent);
+        }
+        if (!sameAsApproved(view, approval.snapshot())) {
+            return handOffChanged(intent, ok.httpStatus(), view);
+        }
+        Optional<ContinueUrl> url = view.continueUrl();
+        if (url.isEmpty() || !OwnStoreGuard.continueUrlAllowed(entry(intent.merchantId()), url.get())) {
+            return handOffRefused(intent, url);
+        }
+        return handedOff(intent, approval, url.get());
+    }
+
+    /** The GET shows the approved lines, currency and total, as the snapshot holds them (I2). */
+    private static boolean sameAsApproved(CheckoutView view, ApprovalSnapshot snapshot) {
+        List<SnapshotLine> lines = new java.util.ArrayList<>();
+        for (LineView l : view.lines()) {
+            lines.add(new SnapshotLine(l.itemId(), l.quantity(), l.unitPriceMinor()));
+        }
+        return view.currency().equals(snapshot.currency()) && view.totalMinor() == snapshot.totalMinor()
+                && lines.size() == snapshot.lines().size()
+                && new java.util.HashSet<>(lines).equals(new java.util.HashSet<>(snapshot.lines()));
+    }
+
+    /**
+     * 7.2 hand_off: the fenced write stores the URL with the move; then the approval is consumed in send_complete's
+     * order (a PENDING one, left by a crash inside decide, is first recovered to APPROVED). A crash between the two
+     * leaves a terminal intent with an APPROVED approval, which nothing can complete.
+     */
+    private Step handedOff(PurchaseIntent intent, ApprovalRecord approval, ContinueUrl url) {
+        Move m = move(intent, TransitionEvent.HAND_OFF);
+        PurchaseIntent next = m.next().withHandoffUrl(url);
+        intents.update(next, intent.version(), workerId);
+        if (approval.status() == ApprovalStatus.PENDING) {
+            approvals.transition(approval.id(), ApprovalStatus.PENDING, ApprovalStatus.APPROVED, clock.instant(),
+                    Optional.of(intent.owner()));
+            event(intent.id(), "approval_decision_recovered", Map.of("approval_id", approval.id()));
+        }
+        if (approval.status() != ApprovalStatus.CONSUMED) {
+            approvals.transition(approval.id(), ApprovalStatus.APPROVED, ApprovalStatus.CONSUMED, clock.instant(),
+                    Optional.empty());
+        }
+        // I8: the host only; the URL carries an access key.
+        event(intent.id(), "handed_off", Map.of("host", url.value().getHost()));
+        transitionEvent(intent.id(), m.transition());
+        return moved(intent, next);
+    }
+
+    /**
+     * 7.2 hand_off_changed: re-quote on the same session. The GET is recorded as a {@code get} attempt in the same fenced
+     * write as the move (recordAttempt, one transaction), so a QUOTING intent never lacks its cycle start: the attempt
+     * starts the new quote cycle, as a complete does at an agent merchant. It has no key and no body, and its response
+     * names no lines, so no retry, resend, I4, I7, orphan or quote-shape rule reads it as a call. At the P8 cap the same
+     * write ends the intent REJECTED (price_unstable, cancel owed).
+     */
+    private Step handOffChanged(PurchaseIntent intent, int httpStatus, CheckoutView view) {
+        Move m = requote(intent, TransitionEvent.HAND_OFF_CHANGED);
+        Instant now = clock.instant();
+        MerchantAttempt read = new MerchantAttempt(new AttemptId(ids.next()), intent.id(), AttemptOp.GET,
+                intent.requoteCount(), Optional.empty(), Optional.empty(), Optional.empty(), AttemptStatus.RESPONDED,
+                Optional.of(httpStatus), Optional.of(CanonicalJson.write(Map.of("hand_off", "changed",
+                        "status", view.status().wire(), "total_minor", view.totalMinor()))), now, Optional.of(now));
+        intents.recordAttempt(read, m.next(), intent.version(), workerId);
+        requoteEvents(intent, m);
+        return moved(intent, m.next());
+    }
+
+    /** 7.2 hand_off_gone: canceled or not found; nothing to cancel. */
+    private Step handOffGone(PurchaseIntent intent) {
+        Move m = move(intent, TransitionEvent.HAND_OFF_GONE);
+        PurchaseIntent next = m.next().withFailureReason(SESSION_GONE);
+        intents.update(next, intent.version(), workerId);
+        transitionEvent(intent.id(), m.transition());
+        return moved(intent, next);
+    }
+
+    /**
+     * 7.2 hand_off_refused: the outcome is known (the agent never completes, the buyer never got a URL), so not
+     * charged; the cancel goes to the store's own endpoint, which I12 allows. The event names the host only.
+     */
+    private Step handOffRefused(PurchaseIntent intent, Optional<ContinueUrl> url) {
+        Move m = move(intent, TransitionEvent.HAND_OFF_REFUSED);
+        PurchaseIntent next = m.next().withFailureReason(CONTINUE_URL_NOT_ALLOWED);
+        intents.update(next, intent.version(), workerId);
+        Map<String, Object> payload = new LinkedHashMap<>();
+        if (url.isPresent() && url.get().value().getHost() != null) {
+            payload.put("host", url.get().value().getHost());
+        }
+        event(intent.id(), "hand_off_refused", payload);
+        transitionEvent(intent.id(), m.transition());
+        return moved(intent, next);
+    }
+
+    /** 7.2 hand_off_unexpected: someone else acted on the session; a human must look. Nothing is sent. */
+    private Step handOffUnexpected(PurchaseIntent intent, List<MerchantAttempt> attempts) {
+        Move m = move(intent, TransitionEvent.HAND_OFF_UNEXPECTED);
+        PurchaseIntent next = m.next().withFailureReason(HANDOFF_STATUS_UNEXPECTED);
+        intents.update(next, intent.version(), workerId);
+        event(intent.id(), "escalated", Map.of("attempts", attempts.stream().map(a -> Map.of(
+                "attempt_id", a.id().value(), "op", a.op().name(), "revision", a.revision(),
+                "status", a.status().name(), "sent_at", a.sentAt().toString())).toList()));
+        transitionEvent(intent.id(), m.transition());
+        return moved(intent, next);
     }
 }

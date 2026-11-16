@@ -24,6 +24,8 @@ import java.util.Optional;
  * @param intentsBySlot the intent created for each slot's basket
  * @param aborts reasons the run could not finish (the orchestrator threw, or the run did not settle)
  * @param config the orchestrator settings the run used (deadlines, lease, timeouts for I5)
+ * @param attemptOps for each intent proposed at a handoff entry (its fingerprint), its attempt rows' ops at the end, in
+ *     order (7.2 Handoff merchants); empty outside the handoff runs
  */
 record Observations(
         Map<Integer, IntentId> intentsBySlot,
@@ -36,7 +38,8 @@ record Observations(
         List<String> aborts,
         OrchestratorConfig config,
         Map<Integer, List<dev.ucplab.core.intent.ProposedLine>> baskets,
-        OwnStore ownStore) {
+        OwnStore ownStore,
+        Map<IntentId, List<dev.ucplab.core.intent.AttemptOp>> attemptOps) {
 
     /**
      * I12 evidence (H5 C2): {@code violations} from {@link OwnStoreCheckGateway}, every mutating call that reached a
@@ -61,7 +64,7 @@ record Observations(
             List<String> aborts, OrchestratorConfig config,
             Map<Integer, List<dev.ucplab.core.intent.ProposedLine>> baskets) {
         this(intentsBySlot, calls, merchantLog, orders, decisions, crashes, samples, aborts, config, baskets,
-                OwnStore.NONE);
+                OwnStore.NONE, Map.of());
     }
 
     /** The property runs' form: each slot's basket is {@link ScheduleExecutor#SLOT_LINES}. */
@@ -70,7 +73,13 @@ record Observations(
             List<ModelOrder> orders, List<Decision> decisions, List<CrashEvent> crashes, List<Sample> samples,
             List<String> aborts, OrchestratorConfig config, OwnStore ownStore) {
         this(intentsBySlot, calls, merchantLog, orders, decisions, crashes, samples, aborts, config,
-                slotBaskets(intentsBySlot), ownStore);
+                slotBaskets(intentsBySlot), ownStore, Map.of());
+    }
+
+    /** The same, with each intent's attempt ops (the handoff runs, 7.2). */
+    Observations withAttemptOps(Map<IntentId, List<dev.ucplab.core.intent.AttemptOp>> ops) {
+        return new Observations(intentsBySlot, calls, merchantLog, orders, decisions, crashes, samples, aborts, config,
+                baskets, ownStore, ops);
     }
 
     private static Map<Integer, List<dev.ucplab.core.intent.ProposedLine>> slotBaskets(Map<Integer, IntentId> slots) {
@@ -90,6 +99,7 @@ record Observations(
         aborts = List.copyOf(aborts);
         baskets = Map.copyOf(baskets);
         java.util.Objects.requireNonNull(ownStore, "ownStore");
+        attemptOps = Map.copyOf(attemptOps);
     }
 
     /**

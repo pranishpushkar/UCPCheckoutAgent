@@ -69,6 +69,7 @@
       "aborted": 0,
       "terminal": {
         "COMPLETED": 3,
+        "HANDED_OFF": 0,
         "REJECTED": 0,
         "FAILED_NOT_CHARGED": 0,
         "ESCALATED": 0
@@ -132,6 +133,7 @@
       "aborted": 1,
       "terminal": {
         "COMPLETED": 2,
+        "HANDED_OFF": 0,
         "REJECTED": 0,
         "FAILED_NOT_CHARGED": 0,
         "ESCALATED": 0
@@ -194,6 +196,7 @@
       "aborted": 0,
       "terminal": {
         "COMPLETED": 1,
+        "HANDED_OFF": 0,
         "REJECTED": 2,
         "FAILED_NOT_CHARGED": 0,
         "ESCALATED": 0
@@ -256,6 +259,7 @@
       "aborted": 0,
       "terminal": {
         "COMPLETED": 3,
+        "HANDED_OFF": 0,
         "REJECTED": 0,
         "FAILED_NOT_CHARGED": 0,
         "ESCALATED": 0
@@ -315,6 +319,7 @@
       "aborted": 0,
       "terminal": {
         "COMPLETED": 2,
+        "HANDED_OFF": 0,
         "REJECTED": 1,
         "FAILED_NOT_CHARGED": 0,
         "ESCALATED": 0

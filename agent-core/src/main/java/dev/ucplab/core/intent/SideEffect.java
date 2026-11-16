@@ -28,5 +28,7 @@ public enum SideEffect {
     /** Event listing all attempts. */
     ESCALATION_EVENT,
     /** failure_reason price_unstable, cancel session. */
-    REJECT_PRICE_UNSTABLE
+    REJECT_PRICE_UNSTABLE,
+    /** Store continue_url as handoff_url (7.2 hand_off, 10). */
+    STORE_HANDOFF_URL
 }

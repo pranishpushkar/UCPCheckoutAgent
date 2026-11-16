@@ -215,8 +215,8 @@ public abstract class IntentRepositoryContract {
         PurchaseIntent forged = new PurchaseIntent(
                 claimed.id(), BOB, SHOP, "{\"forged\":true}", "forged", List.of(new ProposedLine("other", 5)),
                 "forged@example.com", IntentState.COMPLETING, 99,
-                Optional.empty(), Optional.empty(), 0, Optional.empty(), Optional.empty(), Optional.empty(), false,
-                Optional.of(W2), Optional.of(T0.plusSeconds(9999)), T0.minusSeconds(5), clock.instant());
+                Optional.empty(), Optional.empty(), 0, Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(),
+                false, Optional.of(W2), Optional.of(T0.plusSeconds(9999)), T0.minusSeconds(5), clock.instant());
 
         repo.update(forged, 0, W1);
 
@@ -237,7 +237,7 @@ public abstract class IntentRepositoryContract {
     /** A copy of {@code i} at another merchant: what a caller breaking I11 would pass. */
     private static PurchaseIntent atMerchant(PurchaseIntent i, MerchantId merchant) {
         return new PurchaseIntent(i.id(), i.owner(), merchant, i.merchantFingerprint(), i.dedupeKey(), i.lines(), i.buyerEmail(), i.state(),
-                i.version(), i.sessionId(), i.approvedSnapshotHash(), i.requoteCount(), i.orderId(), i.failureReason(),
+                i.version(), i.sessionId(), i.approvedSnapshotHash(), i.requoteCount(), i.orderId(), i.handoffUrl(), i.failureReason(),
                 i.uncertainSince(), i.cancelPending(), i.leaseOwner(), i.leaseUntil(), i.createdAt(), i.updatedAt());
     }
 
@@ -300,6 +300,44 @@ public abstract class IntentRepositoryContract {
 
         repo.update(repo.findForSystem(claimed.id()).orElseThrow().withCancelPending(false), 1, W1);
         assertThat(repo.findForSystem(claimed.id()).orElseThrow().cancelPending()).isFalse();
+    }
+
+    // Covers: 7.2 hand_off, 10 (handoff_url is written in the same fenced write as the move to HANDED_OFF and read back
+    // whole, query included; a stale write stores neither the state nor the URL)
+    @Test
+    void update_writesTheHandoffUrl_withTheMoveToHandedOff() {
+        PurchaseIntent claimed = insertAndClaim("i1", ALICE, "d1", W1);
+        dev.ucplab.core.merchant.ContinueUrl url = new dev.ucplab.core.merchant.ContinueUrl(
+                java.net.URI.create("https://shop.example/cart/c/abc?key=k-secret-1"));
+        PurchaseIntent handedOff = claimed.withState(IntentState.HANDED_OFF, clock.instant()).withHandoffUrl(url);
+
+        assertThatThrownBy(() -> repo.update(handedOff, 5, W1)).isInstanceOf(StaleVersionException.class);
+        assertThat(repo.findForSystem(claimed.id()).orElseThrow().handoffUrl()).isEmpty();
+
+        repo.update(handedOff, 0, W1);
+
+        PurchaseIntent stored = repo.findForSystem(claimed.id()).orElseThrow();
+        assertThat(stored.state()).isEqualTo(IntentState.HANDED_OFF);
+        assertThat(stored.handoffUrl()).contains(url);
+        assertThat(repo.find(ALICE, claimed.id()).orElseThrow().handoffUrl()).contains(url);
+    }
+
+    // Covers: 7.2, 10 (handoff_url is empty in every state but HANDED_OFF, whether inserted in that state or moved there)
+    @Test
+    void handoffUrl_isEmpty_inEveryOtherState() {
+        int n = 0;
+        for (IntentState state : IntentState.values()) {
+            if (state == IntentState.HANDED_OFF) {
+                continue;
+            }
+            PurchaseIntent inserted = inState(proposed("i" + n, ALICE, "d" + n), state);
+            repo.insert(inserted);
+            assertThat(repo.findForSystem(inserted.id()).orElseThrow().handoffUrl()).as(state.name()).isEmpty();
+            n++;
+        }
+        PurchaseIntent claimed = insertAndClaim("moved", ALICE, "dm", W1);
+        repo.update(claimed.withState(IntentState.REJECTED, clock.instant()), 0, W1);
+        assertThat(repo.findForSystem(claimed.id()).orElseThrow().handoffUrl()).isEmpty();
     }
 
     private List<MerchantAttempt> twoSentAttempts(PurchaseIntent claimed) {

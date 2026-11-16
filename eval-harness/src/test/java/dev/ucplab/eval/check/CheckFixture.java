@@ -87,7 +87,7 @@ final class CheckFixture {
                 dev.ucplab.core.merchant.MerchantEntry.LAB_FINGERPRINT, "dedupe-1",
                 List.of(new ProposedLine("item_123", 2)), "buyer@eval.example", state, 6,
                 storedSession.map(SessionId::new), Optional.of(snapshot.hash()), 0,
-                state == IntentState.COMPLETED ? Optional.of(ORDER) : Optional.empty(), Optional.empty(),
+                state == IntentState.COMPLETED ? Optional.of(ORDER) : Optional.empty(), Optional.empty(), Optional.empty(),
                 Optional.empty(), cancelPending, Optional.empty(), Optional.empty(), T0, at(400));
         return new RunEvidence("S0", 0, 1000, 0, owner, Optional.ofNullable(aborted), proposed,
                 List.of(new RunEvidence.Persisted(intent, attempts, events, approvalRows)), orders, sessions, log,

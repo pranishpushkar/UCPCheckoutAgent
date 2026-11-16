@@ -32,5 +32,17 @@ public enum TransitionEvent {
     APPROVAL_INVALID,
     MERCHANT_NOT_OWNED,
     MERCHANT_CHANGED,
-    COMPLETE_UNAVAILABLE
+    COMPLETE_UNAVAILABLE,
+    /** 7.2 requires_escalation (handoff). */
+    REQUIRES_ESCALATION,
+    /** 7.2 hand_off. */
+    HAND_OFF,
+    /** 7.2 hand_off_changed. */
+    HAND_OFF_CHANGED,
+    /** 7.2 hand_off_gone. */
+    HAND_OFF_GONE,
+    /** 7.2 hand_off_refused. */
+    HAND_OFF_REFUSED,
+    /** 7.2 hand_off_unexpected. */
+    HAND_OFF_UNEXPECTED
 }
