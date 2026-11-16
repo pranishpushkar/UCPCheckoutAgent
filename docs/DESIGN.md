@@ -846,13 +846,13 @@ Port parity: every port with more than one implementation, test doubles included
 
 jqwik was removed. Its author asks that it not be used with AI coding agents, and its output includes a message telling agents to ignore its test results, which conflicts with a workflow where an agent must act on real test failures. Property tests use plain JUnit 5 instead.
 
-- **Generator.** `ScheduleGenerator(long seed)`, built on `java.util.SplittableRandom`, produces one schedule: the user's actions (propose, approve, reject), per-call faults (not sent, commit then drop the response, delay past the timeout, duplicate) and merchant-side events (price change, stock change), all within fixed bounds.
+- **Generator.** `ScheduleGenerator(long seed)`, built on `java.util.SplittableRandom`, produces one schedule: the user's actions (propose, approve, reject), per-call faults (not sent, commit then drop the response, delay past the timeout, duplicate) and merchant-side events (price change, stock change) and registry flips (the merchant's entry becomes not owned, or changes completion, shop_domain or transport, or returns to the original), drawn last, all within fixed bounds.
 - **Runner.** Each property runs at least 10,000 schedules per `./mvnw verify`. `-Dproperty.tries=N` overrides the count. The base seed is fixed by default so builds are reproducible; `-Dproperty.seed=<n>` sets it, and `-Dproperty.seed=random` picks one and prints it.
 - **On failure.** Report the seed and the full schedule, then shrink: repeatedly remove single entries and keep any shorter schedule that still fails, up to 1,000 attempts. Report the smallest failing schedule and its seed.
 - **Replay.** `-Dproperty.seed=<seed> -Dproperty.tries=1` reproduces one run exactly.
 - **Determinism.** No wall clock and no shared static state. `Clock` and `IdGenerator` are fakes driven by the schedule.
 - **Merchant strictness.** `FaultyMerchantModel` also has a strict mode in which each idempotency key can create its own order, as a merchant without per-session protection might. Every property runs in both modes, so I1 detects key misuse directly instead of only through I3 and I7.
-- **Bounds.** The generator's limits are constants in `ScheduleGenerator`, documented in its Javadoc: up to 3 baskets and 40 entries per schedule, faults on the first 6 calls of each kind, up to 2 crashes and 4 decisions per basket, proxy holds of 1 to 30 s, and waits of up to 11 minutes.
+- **Bounds.** The generator's limits are constants in `ScheduleGenerator`, documented in its Javadoc: up to 3 baskets and 40 entries per schedule, faults on the first 6 calls of each kind, up to 2 crashes and 4 decisions per basket, proxy holds of 1 to 30 s, waits of up to 11 minutes, and in one schedule in 4, up to 3 registry flips.
 - **Reach check.** A committed test confirms that generated schedules reach every terminal state, include crashes and same-key resends, and hit the P8 cap, so the property counts are meaningful.
 
 ## 15. Repository, stack and build
