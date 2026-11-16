@@ -1410,7 +1410,11 @@ public record CheckoutView(SessionId id, CheckoutStatus status, String currency,
     List<LineView> lines, long subtotalMinor, long taxMinor, long totalMinor,
     Optional<OrderRef> order, List<MerchantMessage> messages,
     Optional<FulfillmentView> fulfillment, long fulfillmentMinor,
-    boolean fulfillmentOffered) {}   // offered: the profile the call went out under lists dev.ucp.shopping.fulfillment; set by the gateway   // H1 C5; the buyer field (Optional<Buyer>) sits before messages in the code
+    boolean fulfillmentOffered, Optional<ContinueUrl> continueUrl) {}   // offered: the profile the call went out under lists dev.ucp.shopping.fulfillment; set by the gateway   // H1 C5; the buyer field (Optional<Buyer>) sits before messages in the code
+   // continueUrl: the answer's continue_url as the merchant sent it; the orchestrator checks it against I12 before it is stored (7.2 hand_off). H5
+
+/** A merchant's continue_url. It carries an access key (?key=), so toString shows the scheme and host only (I8). */
+public record ContinueUrl(URI value) {}
 
 /** The shipping part of a quote. Destinations are ids and a country only: an address is never parsed (9.2). */
 public record FulfillmentView(List<Method> methods) {
@@ -1438,7 +1442,7 @@ public interface IntentRepository {
   Optional<PurchaseIntent> findForSystem(IntentId id);               // RecoveryWorker and eval harness only
   Optional<PurchaseIntent> findActiveByDedupeKey(String dedupeKey);
   void insert(PurchaseIntent intent);                              // fails on an active dedupe conflict
-  void update(PurchaseIntent intent, long expectedVersion, String leaseOwner); // throws StaleVersionException or LeaseLostException
+  void update(PurchaseIntent intent, long expectedVersion, String leaseOwner); // throws StaleVersionException or LeaseLostException; writes handoff_url in the same fenced write as the move to HANDED_OFF (7.2 hand_off, 10)
   void appendEvent(IntentId id, IntentEvent event);
   void recordAttempt(MerchantAttempt attempt, PurchaseIntent intent, long expectedVersion, String leaseOwner); // one transaction (7.3 step 3)
   void resolveAttempt(AttemptId id, AttemptStatus status, Optional<Integer> httpStatus, Optional<String> responseJson);
@@ -1512,7 +1516,13 @@ public interface MerchantRegistry {
   MerchantProfile profile(MerchantId id);   // cached up to 5 min (section 20), refreshed on a 4xx or schema mismatch
 }
 
-public record MerchantEntry(MerchantId id, URI baseUrl, String displayName, MerchantStatus status) {}
+public record MerchantEntry(MerchantId id, URI baseUrl, String displayName, MerchantStatus status,
+    Transport transport, Completion completion, boolean owned, Optional<String> shopDomain) {}
+    // owned: the resolved value (I12: true by default only on a loopback host); shopDomain: present for every MCP merchant (19). H5
+
+public enum Transport { REST, MCP }
+
+public enum Completion { AGENT, HANDOFF }
 
 public enum MerchantStatus { ACTIVE, SUSPENDED }
 ```
