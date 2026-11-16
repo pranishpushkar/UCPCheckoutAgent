@@ -30,7 +30,7 @@ The central design choice: **the LLM plans, a deterministic executor transacts.*
 
 ### Non-goals
 
-- N1. Real payments, real cards or AP2 mandates. A mock payment handler is used.
+- N1. Real payments, real cards or AP2 mandates. A mock payment handler is used. At a merchant whose `completion` is `handoff` (section 19) the agent never completes: the buyer pays on the merchant's own page (`continue_url`).
 - N2. Merchant-side identity linking (OAuth to the merchant) and message signatures. Signing users in to this system is in scope (section 18).
 - N3. Returns and refunds. Multiple merchants are in scope (section 19).
 - N4. Connecting to Google's live surfaces (AI Mode, Gemini app). This is a self-contained simulation.
@@ -113,16 +113,17 @@ These are the properties the evaluation checks. Each must be enforced in code an
 | ID | Invariant |
 | --- | --- |
 | I1 | An intent produces at most one order |
-| I2 | Any order matches the approved snapshot: same merchant, items, quantities and currency, and a total not above the approved maximum |
-| I3 | `COMPLETING` is reachable only from `APPROVED`, with a valid, unexpired, unconsumed approval whose hash matches the current quote |
+| I2 | Any order the agent completes matches the approved snapshot: same merchant, items, quantities and currency, and a total not above the approved maximum. At a handoff merchant (section 19) the agent completes no order: the approval covers the items, quantities, currency and the quoted subtotal, and the buyer accepts the final total on the merchant's page |
+| I3 | `COMPLETING` is reachable only from `APPROVED`, with a valid, unexpired, unconsumed approval whose hash matches the current quote. `HANDED_OFF` is reachable only from `APPROVED`, under the same approval conditions |
 | I4 | After the first `complete` request is sent, the intent's merchant session id never changes and no new session is created for that intent |
 | I5 | Every non-terminal intent reaches a terminal state, or `ESCALATED`, within its deadline (liveness). The deadline for each state is set in 7.6 |
-| I6 | The model's tool set contains no operation that can complete, cancel or approve |
+| I6 | The model's tool set contains no operation that can complete, cancel or approve. The model never sees a `continue_url` or a merchant checkout id that carries an access key |
 | I7 | A `complete` retry under the same approval reuses the same idempotency key and a byte-identical body. A new approval after a re-quote gets a new key; its frozen body may be byte-identical to the previous one, because it holds only the payment instrument (7.4) |
-| I8 | Secrets, tokens and card credentials are never written to logs, events or traces |
+| I8 | Secrets, tokens and card credentials are never written to logs, events or traces. This includes a merchant checkout id or URL that carries an access key (`?key=`), the buyer IP and the merchant access token: they are masked wherever an event, log or trace would show them |
 | I9 | Tenant isolation: a user can read, approve or act on only their own intents, approvals and runs |
 | I10 | Only the intent's owner, with a sign-in no older than maxApprovalAuthAge, can approve it, and the approval records decided\_by |
 | I11 | An intent belongs to exactly one merchant for its whole life; merchant\_id never changes |
+| I12 | A create, update, complete or cancel is sent only to a merchant whose registry entry says `owned: true`, and for an MCP merchant only to the endpoint whose host equals the entry's `shop_domain`. A `continue_url` is accepted only if it is `https` on that host. The orchestrator checks this before the first write of the step. `owned` defaults to `true` only for a merchant on a loopback host (the lab merchants); any other entry without `owned: true` refuses startup (19, 26.5) |
 
 ## 5. Architecture
 
@@ -229,7 +230,7 @@ Exactly these five. A test asserts the tool list (I6).
 | `search_catalog` | `query: string`, `max_results: int (1..10)` | `items[{merchant_id, item_id, title, price_minor, currency, in_stock}]`, and `unavailable[merchant_id]` when a merchant timed out or failed | Asks all active merchants in parallel, 2 s each, and merges round-robin in registry order. When every merchant failed the result is `{"error":"unavailable"}`. Backed by the merchant catalog. In M2, switch to UCP Catalog search (`POST /catalog/search`, `/catalog/lookup`, `/catalog/product`; **VERIFY** the Catalog REST spec at https://ucp.dev/latest/specification/shopping/catalog/rest/). The reference merchant does not serve these yet; M2 adds them to `merchant/` as one additive commit before `CatalogClient` (2.2, section 16) |
 | `get_product` | `item_id` | one item with description | The description is untrusted text |
 | `propose_purchase` | merchant\_id, `items[{item_id, quantity 1..5}]`, `rationale (max 300 chars)` | `{intent_id, state, quote?}` | Creates the intent and obtains the quote. Returns `AWAITING_APPROVAL` or a failure state. It does not buy |
-| `get_purchase_status` | `intent_id` | `{state, order_id?, failure_reason?}` | Read only |
+| `get_purchase_status` | `intent_id` | `{state, order_id?, failure_reason?}` | Read only. For `HANDED_OFF` it returns the fixed text "handed to the store for payment", never the `continue_url` (I6) |
 | `ask_user` | `question` | the user's answer | Used for ambiguity. Blocks with a timeout (default 5 minutes); on timeout the run ends with outcome `user_timeout` and no further tool call |
 
 ### 6.3 Run budgets \[CONTRACT\]
@@ -261,11 +262,11 @@ The supporting types live in `agent-core` (`dev.ucplab.core.agent`, JDK only): `
 ```java
 public enum IntentState {
   PROPOSED, QUOTING, AWAITING_APPROVAL, APPROVED, COMPLETING, RECONCILING,
-  COMPLETED, REJECTED, FAILED_NOT_CHARGED, ESCALATED
+  COMPLETED, HANDED_OFF, REJECTED, FAILED_NOT_CHARGED, ESCALATED
 }
 ```
 
-Terminal states: `COMPLETED`, `REJECTED`, `FAILED_NOT_CHARGED`, `ESCALATED`. `FAILED_NOT_CHARGED` means the merchant has provably created no order. `ESCALATED` means the outcome could not be established and a human must look.
+Terminal states: `COMPLETED`, `HANDED_OFF`, `REJECTED`, `FAILED_NOT_CHARGED`, `ESCALATED`. `FAILED_NOT_CHARGED` means the merchant has provably created no order. `ESCALATED` means the outcome could not be established and a human must look. `HANDED_OFF` means the buyer has the merchant's `continue_url` and the agent's part is over: the agent created no order and will create none. What the buyer does on the merchant's page is not tracked (order reads are not in H5).
 
 ### 7.2 Transitions \[CONTRACT\]
 
@@ -299,6 +300,14 @@ Any event that is not in this table for the current state is a programming error
 | QUOTING | shipping selection needed | a create or update answer is `incomplete` and offers fulfillment | QUOTING | PUT update (a revision of its own, its own key) that selects the next of method, destination and option, chosen by `FulfillmentPolicy`. Not a re-quote: `requote_count` does not change. Whether the merchant offers fulfillment is read from the view (`fulfillmentOffered`, set by the gateway from the profile the call went out under), never by a discovery inside a step. An answer with more than one method or group is `fulfillment_unsupported` and ends QUOTING as exhausted, because the snapshot (9.2) names one method and one group. Repeated, each built from the previous response, until `ready_for_complete` |
 | QUOTING | create_rejected | none | FAILED\_NOT\_CHARGED | no side effect: the merchant answered a create with every item unavailable (200, `ucp.status` error, no session id), so no session exists and nothing is cancelled. The gateway reports it as `CallOutcome.Rejected` (Appendix B, 8.1) |
 | COMPLETING | protocol\_error | none | RECONCILING | a `ProtocolError` on `complete` never settles the outcome, so it is never FAILED\_NOT\_CHARGED. Reconciliation reads the session and decides |
+| QUOTING | quote\_ready (handoff) | the merchant's `completion` is `handoff`; the answer's status is `incomplete` or `ready_for_complete`; every message is `recoverable` or a buyer code (`buyer_identity_contact_method_required`, `delivery_address_required` and the like); the lines match the proposal; policy allows the items and subtotal | AWAITING\_APPROVAL | create approval and snapshot hash over items, quantities, currency and subtotal (I2) |
+| QUOTING | requires\_escalation (handoff) | the merchant's `completion` is `handoff` and a create or update answers `requires_escalation` | AWAITING\_APPROVAL | as the row above: at a handoff merchant the buyer finishing on the merchant's page is the plan, not a failure (8.1's rule stands for `agent` merchants) |
+| APPROVED | hand\_off | the merchant's `completion` is `handoff`; a GET of the session shows the approved lines, currency and subtotal, and a `continue_url` that passes I12 | HANDED\_OFF | store `continue_url` as `handoff_url` (10); event `handed_off` with the host only |
+| APPROVED | hand\_off\_changed | the GET shows other lines, currency or subtotal | QUOTING | re-quote on the same session, requote\_count + 1, a new approval is required. Only while requote\_count is below the P8 cap; at the cap, REJECTED with failure\_reason price\_unstable, cancel session |
+| APPROVED | hand\_off\_gone | the GET shows `canceled`, or the session is not found | FAILED\_NOT\_CHARGED | failure\_reason `session_gone`; nothing to cancel |
+| APPROVED | hand\_off read not\_sent or uncertain | none | APPROVED | try again on the next pass; the APPROVED deadline (7.6) applies. ESCALATED is never needed: no money can have moved |
+
+**Handoff merchants \[CONTRACT\].** At a merchant whose `completion` is `handoff` (19) `send_complete` is never taken: APPROVED leads only to the `hand_off` rows above, and no `complete` attempt is ever written, so I1, I4 and I7 hold trivially. The `approval_invalid` row applies before the GET exactly as before `complete`. The existing AWAITING\_APPROVAL rows (rejected or expired: REJECTED, cancel session) and the QUOTING failure rows apply unchanged. Every existing row keeps its meaning for `completion: agent`.
 
 **A definitive failure answer to `complete` \[CONTRACT\].** When `complete` is answered with `Ok`, the status is neither `completed` nor `complete_in_progress`, and at least one message has type `error`, the merchant has said it did not charge: the intent goes to FAILED\_NOT\_CHARGED through the existing COMPLETING `payment_declined` row (cancel the session), with the first error code as `failure_reason`. The earlier branches still come first: `completed` with an order is COMPLETED, and `incomplete` (a price change or an incomplete checkout) is a re-quote. An `Ok` with no error message and no terminal status still goes to RECONCILING. A response with status `complete_in_progress` always reconciles, whatever its messages.
 
@@ -366,7 +375,7 @@ A `RecoveryWorker` runs every 5 s and once at startup. It selects intents in `QU
 
 **What the worker picks up \[CONTRACT\].** Besides `QUOTING`, `COMPLETING` and `RECONCILING`, each pass also handles:
 
-- `APPROVED`: calls `advance`, which sends `complete`. Without this, a crash between approval and the first `complete` would leave the intent stuck. An `APPROVED` intent whose approval is still `PENDING` (a crash inside `ApprovalService.decide`, after the intent write and before the approval write) has its approval moved to `APPROVED` by a fenced write before `complete` is sent.
+- `APPROVED`: calls `advance`, which sends `complete`. Without this, a crash between approval and the first `complete` would leave the intent stuck. An `APPROVED` intent whose approval is still `PENDING` (a crash inside `ApprovalService.decide`, after the intent write and before the approval write) has its approval moved to `APPROVED` by a fenced write before `complete` is sent. At a handoff merchant `advance` makes the GET of the `hand_off` rows (7.2) instead, and never sends `complete`. An `APPROVED` handoff intent still there at its deadline (the liveness bounds below) moves to `REJECTED` with reason `handoff_timeout` and `cancel_pending` set, in one fenced write.
 - `AWAITING_APPROVAL` past the approval's `expires_at`: moves the intent to `REJECTED` with reason `approval_expired` in a fenced write, then marks the approval `EXPIRED`. The intent is written first, so a crash between the two writes leaves a terminal intent, never an `AWAITING_APPROVAL` intent with an expired approval. Expiry acts only on intents still in `AWAITING_APPROVAL` (`RecoveryScan.approvalsDue`, Appendix B).
 - Any intent with `cancel_pending` set, which happens when `REJECTED` or `FAILED_NOT_CHARGED` owes a best-effort cancel: sends `cancel` under the key `cancel/0` (7.4), clears the flag on any definitive answer, and gives up after 3 attempts. `cancel_pending` is a persisted field of the intent, set in the same write as the move to the terminal state. A failed cancel never changes the intent's state.
 - `COMPLETING` with a `complete` attempt left `SENT` or `UNCERTAIN` goes to `RECONCILING` and sends nothing. `complete` is resent only after a `get` shows `ready_for_complete` and the quiet period (7.5) has elapsed. A resend that reconciliation approved is continued only by the process that made that `get`; a worker that takes over or restarts reads again first.
@@ -375,7 +384,7 @@ A `RecoveryWorker` runs every 5 s and once at startup. It selects intents in `QU
 
 | State | Must leave it within |
 |---|---|
-| `PROPOSED`, `QUOTING`, `APPROVED` | One worker pass plus at most 4 attempts of a single call and their backoff (8.2): about 26 s for create or update (4 × 5 s timeouts plus backoff), 10 s for the first complete |
+| `PROPOSED`, `QUOTING`, `APPROVED` | One worker pass plus at most 4 attempts of a single call and their backoff (8.2): about 26 s for create or update (4 × 5 s timeouts plus backoff), 10 s for the first complete. At a handoff merchant, `APPROVED` has the same bound for each GET, and 5 minutes from the approval in all, after which it ends `REJECTED` with `handoff_timeout` |
 | `AWAITING_APPROVAL` | The approval's `expires_at` (10 minutes) |
 | `COMPLETING`, `RECONCILING` | The reconciliation deadline (60 s per complete key, 7.5) |
 
@@ -429,7 +438,9 @@ The port is in Appendix B. The key idea is that every call returns one of four o
 
 A mutating call can have created or changed state before an invalid answer arrives, so a body the client cannot read never settles an outcome. When in doubt, classify as `Uncertain`. Wrongly calling something `NotSent` is the dangerous mistake. In particular, anything ambiguous on `complete` is `Uncertain`.
 
-The 2026-04-08 and 2026-08-25 schemas have a sixth checkout status, `requires_escalation` (buyer handoff). `CheckoutStatus.REQUIRES_ESCALATION` is parsed only: a view with it is not completable by the agent, a mutating call that returns it is not `Uncertain`. A create or an update that returns it ends QUOTING as FAILED\_NOT\_CHARGED with the fixed reason `requires_escalation` (cancel owed). A `complete` that returns it, or a reconciliation read that shows it, is not proof of no charge: the intent reconciles, nothing is resent, and it ends ESCALATED at the deadline. There is no new state or behaviour for it until M6c.
+The 2026-04-08 and 2026-08-25 schemas have a sixth checkout status, `requires_escalation` (buyer handoff). `CheckoutStatus.REQUIRES_ESCALATION` is parsed only: a view with it is not completable by the agent, a mutating call that returns it is not `Uncertain`. A create or an update that returns it ends QUOTING as FAILED\_NOT\_CHARGED with the fixed reason `requires_escalation` (cancel owed). A `complete` that returns it, or a reconciliation read that shows it, is not proof of no charge: the intent reconciles, nothing is resent, and it ends ESCALATED at the deadline. At a merchant with `completion: handoff` a create or update that returns it is a quote (7.2, the handoff rows); at an `agent` merchant the rule above stands.
+
+**Merchant messages and the model.** A merchant `messages[]` entry reaches the model only as its `code` and `severity`, both as fixed values; its `content` is merchant text and never reaches the model (9.3).
 
 ### 8.2 Retry matrix \[CONTRACT\]
 
@@ -465,7 +476,9 @@ One circuit breaker and one rate limiter per merchant (by `MerchantId`, shared b
 
 - A new `Request-Id` for every HTTP attempt: UUID-formatted text built from the injected `IdGenerator`. Log it with the attempt id.
 - `Idempotency-Key` is sent on every create, update, complete and cancel, never on get. A retry reuses the key and the body bytes.
-- `UCP-Agent` comes from configuration.
+- The agent identifies itself with its profile URL and the negotiated version (26.2): as the `UCP-Agent` header over REST, and as `meta["ucp-agent"].profile` in the JSON-RPC arguments over MCP. Both come from configuration. The answer's version follows the agent profile's version (H5 spike, 2026-11-16), so the hosted agent profile declares the agent's default version, 2026-08-25.
+- Over MCP, a call is a JSON-RPC 2.0 `tools/call` (`create_checkout`, `get_checkout`, `update_checkout`, `cancel_checkout`, `search_catalog`). The result is read from `result.structuredContent` only, never from `result.content[].text`, which is never logged. A JSON-RPC `error` object is classified like an HTTP error of 8.1 (an `AuthenticationFailed` is a 4xx: `ProtocolError`, not retried). The idempotency key travels in `meta["idempotency-key"]`, with the same rules as the `Idempotency-Key` header.
+- To a merchant whose registry entry says `requires_buyer_ip: true`, every call carries `Shopify-Buyer-IP`. Its value is the operator setting `BUYER_IP`, read from the environment and accepted only in the `local` profile (19); it is masked in every log (I8).
 - Mutating bodies use canonical JSON (keys sorted by UTF-16 code units, as String.compareTo does and as RFC 8785 specifies; no extra whitespace) so a replay is byte-identical.
 - `complete` carries its payment in `payment.instruments[]` (`id`, `handler_id`, `type`, `credential`), as the 2026-08-25 schema requires. It sends no line items or buyer.
 - An update (full replacement) sends the line item ids from the last `CheckoutView` the intent saw (taken from its last stored response, never fetched) and resends every buyer field of that view (`email`, `first_name`, `last_name`, `phone_number`), because an update replaces the whole session.
@@ -480,6 +493,7 @@ One circuit breaker and one rate limiter per merchant (by `MerchantId`, shared b
 - `discover` retries like `get` (8.2) and is cached per gateway. The profile must show a version the merchant is pinned to and the agent supports (26.2), the capability `dev.ucp.shopping.checkout`, and the payment handler the registry entry names for that merchant (`handler_missing` otherwise). If discovery fails or the check fails, no create is sent to that merchant.
 - The checkout endpoint a profile declares must be on the merchant's base host and port or on a host and port the registry lists for that merchant (`endpoint_hosts`, section 19), with the base URL's scheme. The operator, not the profile, decides which hosts may carry checkout traffic, so a profile cannot point the client at another server. A profile that names any other host fails discovery with `endpoint_not_allowed`.
 - Discovery also confirms the payment handler the agent's instrument uses for this merchant (`mock_pay_1` for the lab merchants; a profile without it fails with `handler_missing`). The gateway's required handler id and the `handlerId` of the merchant's instrument must be equal, and a mismatch refuses to build the stack. Discovery also refreshes the cached profile on a 4xx of a create (section 20).
+- An MCP merchant's gateway reads its endpoint from the profile's `ucp.services["dev.ucp.shopping"]` entry whose `transport` is `mcp`. That endpoint must pass I12 (its host equals `shop_domain`) as well as the `endpoint_hosts` rule above. A handoff merchant's profile need not name a payment handler the agent holds (`payment_handlers` may be empty); `handler_missing` applies only to `completion: agent`.
 
 ## 9. Policy and approval
 
@@ -543,7 +557,8 @@ CREATE TABLE purchase_intent (
   buyer_email TEXT NOT NULL,            -- from AuthContext, never from the model (18.1)
   state TEXT NOT NULL,
   version INTEGER NOT NULL,
-  session_id TEXT,                      -- merchant checkout id; immutable once a complete attempt exists (I4)
+  session_id TEXT,                      -- merchant checkout id; immutable once a complete attempt exists (I4); may carry an access key (?key=), so masked wherever shown (I8)
+  handoff_url TEXT,                     -- the merchant's continue_url, set once on HANDED_OFF; returned only to the owner (23.2), never logged, never in an event (migration V8)
   approved_snapshot_hash TEXT,
   requote_count INTEGER NOT NULL DEFAULT 0, -- P8
   order_id TEXT,
@@ -558,6 +573,7 @@ CREATE TABLE purchase_intent (
 CREATE UNIQUE INDEX ux_intent_active_dedupe ON purchase_intent(dedupe_key)
   WHERE state NOT IN ('COMPLETED','REJECTED','FAILED_NOT_CHARGED','ESCALATED');
 -- I11: a trigger (migration V7) refuses any update of purchase_intent.merchant_id.
+-- V8 adds handoff_url and rebuilds ux_intent_active_dedupe with HANDED_OFF among the terminal states.
 
 CREATE TABLE intent_event (
   intent_id TEXT NOT NULL,
@@ -882,6 +898,7 @@ Effort figures are estimates in hours.
 | M6a Multiple merchants | Merchant registry, discovery check, per-merchant breaker and rate limit, fan-out search, catalog file option for the merchant, three merchants in Compose | S20, S21, S22 pass. I11 enforced in the repository | 8 to 10 |
 | M6b Sign-in and tenancy | OIDC sign-in, sessions, CSRF, AuthContext, owner-scoped repositories, recent-sign-in approvals, per-user lab sandboxes | S18, S19 pass. ArchUnit rule: no intent, approval or run repository method without a UserId, except the system methods used by RecoveryWorker | 8 to 12 |
 | H3 Robustness | Port-parity contracts for every port with more than one implementation; mutation testing (PIT) of the ★ paths (ADR 0009) | A mutation report with zero survivors on the ★ paths (equivalents listed in `docs/mutation/equivalents.md` and approved), generated by the manual workflow; the port-parity list complete | none |
+| H5 Real merchant (M6c) | A spike at the owner's Shopify development store; these contract changes; an MCP gateway; the handoff path (`HANDED_OFF`); I12; a live run at the owner's store with the secret scan | One live run at the owner's store ends `HANDED_OFF` and its session is then cancelled; I12 and the handoff rows of 7.2 tested; no secret, key or buyer IP in any committed file, log or trace; `./mvnw verify` needs no network | 15 to 22 |
 | M7 Stretch | OTel dashboards, A2A exposure, UCP Order capability and webhooks for reconciliation, Cloud Run demo deployment (21.2). Conformance is revisited here with the order capability, webhooks and the simulation hook (docs/conformance.md, R3) | none required | none |
 
 Total about 90 to 115 hours for M0 to M6b.
@@ -1035,7 +1052,9 @@ Only `sub`, `email` and `auth_time` are kept. The ID token itself is not stored.
 
 In production the agent talks to many independent merchants, each with its own inventory, prices and rules. The lab models this with several merchant instances.
 
-**Registry.** Merchants are listed in `merchants.yaml` (id, name, URL, status, and optionally `endpoint_hosts`, `ucp_versions`, `payment_handler` with the instrument shape (`type`, `credential_type`, `token_ref`: the token itself never in the file), `lab_url`, `transport: rest` and `completion: agent`) and held in memory; there is no `merchant` table before M7. A merchant is ACTIVE when its file status is `active` and its last discovery check passed; otherwise the registry reports it SUSPENDED with a fixed reason. Only ACTIVE merchants are used for new intents. This replaces the plain allowlist in P1. A SUSPENDED merchant is re-checked on demand, at most every 30 s, by a single caller (one wins a compare-and-set and no lock is held across the network call); every other caller gets the last known status without waiting. A merchant removed from the file while any intent is in flight refuses startup.
+**Registry.** Merchants are listed in `merchants.yaml` (id, name, URL, status, and optionally `endpoint_hosts`, `ucp_versions`, `payment_handler` with the instrument shape (`type`, `credential_type`, `token_ref`: the token itself never in the file), `lab_url`, `transport` (`rest`, or `mcp` from H5) and `completion` (`agent`, or `handoff` from H5)) and held in memory; there is no `merchant` table before M7. A merchant is ACTIVE when its file status is `active` and its last discovery check passed; otherwise the registry reports it SUSPENDED with a fixed reason. Only ACTIVE merchants are used for new intents. This replaces the plain allowlist in P1. A SUSPENDED merchant is re-checked on demand, at most every 30 s, by a single caller (one wins a compare-and-set and no lock is held across the network call); every other caller gets the last known status without waiting. A merchant removed from the file while any intent is in flight refuses startup.
+
+**Real merchants (H5) \[CONTRACT\].** An entry may also carry `owned`, `shop_domain`, `credential_ref` and `requires_buyer_ip`. `owned: true` states that the operator owns the store (26.5); it is required for any merchant that is not on a loopback host (I12). `shop_domain` is the store's host, which the MCP endpoint and every `continue_url` must match (I12). `credential_ref` names the client credentials as `env:NAME` (26.4). `requires_buyer_ip: true` makes every call carry the buyer IP (8.4). Startup refuses: a merchant with `transport: mcp` and no `credential_ref` or no `shop_domain`; a non-loopback merchant without `owned: true`; and `requires_buyer_ip: true` in any profile but `local`, or with no `BUYER_IP` set. In `local` the lab has one user, the owner, so `BUYER_IP` is the owner's own address, given knowingly. The per-user path is production work (22).
 
 **Discovery check.** Before a merchant is used for a new intent, fetch `/.well-known/ucp` and confirm: a compatible spec version (the highest in the merchant's pin that the agent supports and the profile declares, 26.2), the checkout capability, and the payment handler the registry entry names for the merchant. If any check fails, the merchant is skipped for new intents. In-flight intents keep reconciling against the stored profile.
 
@@ -1060,6 +1079,7 @@ Correctness comes before speed here: the most dangerous bug is acting on stale s
 | Checkout sessions and quotes | **Never** | The approval binds to the merchant's live quote |
 | Reconciliation reads | **Never** | Reconciliation exists to observe the merchant's true current state |
 | Intents, approvals, leases | **Never** | The database is the source of truth across instances |
+| Merchant access token (H5) | Held, not cached | A credential, not a cached read: kept in memory with its expiry, refreshed before it ends by one caller at a time (no lock held across the network call), never written, never logged |
 
 The merchant's stored idempotency results are a correctness mechanism, not a cache, and must not be described or tuned as one. Gemini context caching is out of scope at this scale.
 
@@ -1117,6 +1137,8 @@ The transaction core (write-ahead attempts, deterministic idempotency keys, reco
 | Trust | Plain HTTP between local services | TLS everywhere, request and response signatures, replay protection |
 | Operations | Traces, metrics, logs | SLOs per merchant and per tenant, alerting, on-call runbooks |
 | Data | Kept indefinitely | Retention limits, deletion on request, privacy review |
+| Buyer IP (H5) | The owner's own address, from `BUYER_IP`, `local` profile only | The end user's address from their request, forwarded only to the merchant they buy from, kept with the intent until it is terminal and erased in the same write |
+| After a handoff (H5) | Not tracked: the buyer finishes on the merchant's page | Order reads or webhooks to learn the outcome; the agent profile hosted at a stable URL; agent completion at a real store needs N1 lifted |
 
 The README should state this plainly: a production-grade transaction core inside a lab-scoped system.
 
@@ -1145,9 +1167,9 @@ Messages are held in the serving instance's memory only (21.3): they are never s
 | Method and path | Response |
 | --- | --- |
 | `GET /api/intents?state=&cursor=&limit=` | The caller's intents, newest first, cursor-paginated (limit 1 to 50, default 20) |
-| `GET /api/intents/{id}` | `{id, merchant_id, state, failure_reason?, order_id?, quote?, approval?: {status, expires_at}, created_at}` |
+| `GET /api/intents/{id}` | `{id, merchant_id, state, failure_reason?, order_id?, handoff_url?, quote?, approval?: {status, expires_at}, created_at}`. `handoff_url` only in state `HANDED_OFF`, only to the owner (I9) |
 | `GET /api/intents/{id}/events` | The intent's events in order. Payloads are redacted (I8) |
-| `GET /api/intents/{id}/approval` | The pending approval for the owner only: `{snapshot, expires_at, token}`; the snapshot's `merchant_id` is the merchant's. 404 if none is pending |
+| `GET /api/intents/{id}/approval` | The pending approval for the owner only: `{snapshot, expires_at, token}`; the snapshot's `merchant_id` is the merchant's. For a handoff merchant it also carries `completion: "handoff"` and the fixed sentence "Shipping and tax are added by the store; you see the final total before you pay there." 404 if none is pending |
 | `POST /api/intents/{id}/approval` | Body `{token, decision: "approve" or "reject"}`. 200 with the new state; 401 `reauth_required`; 409 `approval_not_pending` (already decided, expired or consumed, or a token that does not verify against the pending approval, such as one from before a re-quote: `ApprovalDecision.InvalidToken`); 404 for anyone but the owner |
 
 The approval token is delivered only through `GET /api/intents/{id}/approval` to the owner's session. It never appears in a tool result, a prompt or a log (I6, I8). That response, like every `/api` response, carries `Cache-Control: no-store`; request and response bodies are never logged.
@@ -1295,11 +1317,11 @@ Real stores already expose UCP, so the agent can in principle talk to them. This
 | Stage | Status | What it needs |
 | --- | --- | --- |
 | 1. Discovery and catalog search at real stores | Possible where stores allow anonymous agent access | Registry entry and the discovery check. Read-only |
-| 2. Create and update checkout sessions | Possible where the merchant allows it | Possibly an API key and signed requests (26.3, 26.4). No money moves |
+| 2. Create and update checkout sessions | Done in H5 at the owner's Shopify development store (handoff, 7.2) | Client credentials (26.4), the buyer IP (8.4) and I12. No money moves |
 | 3. Complete a purchase | Not possible with the mock handler | A payment handler the merchant accepts, with real credentials and verifiable user consent (non-goal N1) |
 | 4. Recognised platform at large merchants | Out of scope | Business onboarding and allowlisting by each merchant or commerce platform |
 
-The recommended real integration for this project is a store you own: for example a development WooCommerce site with a UCP plugin and its payment provider in test mode, added to the registry next to the lab merchants. **VERIFY** that the payment provider's test mode works through the plugin's UCP checkout before relying on it.
+The real integration for this project is a store the owner owns: a Shopify development store, private, reached over its UCP MCP endpoint and added to the registry next to the lab merchants with `completion: handoff` (19). The H5 spike (`docs/interop/shopify-spike.md`) recorded what that store answers. The buyer finishes on the store's page; the agent never completes there (N1).
 
 ### 26.2 Version negotiation \[CONTRACT\]
 
@@ -1307,6 +1329,7 @@ The recommended real integration for this project is a store you own: for exampl
 - The registry pins the versions each merchant may use (`ucp_versions`, default `[2026-08-25]`). The discovery check picks the highest version that is in the pin, in the agent's set, and declared by the merchant's profile, and keeps it with the cached profile (and in `merchant.ucp_version` where that column exists). If there is none, the merchant is skipped (`incompatible_version`). A pin that names a version outside the agent's set refuses to build.
 - Every request carries `UCP-Agent: profile="<url>"; version="<that version>"`. The version sent is the negotiated one and is never newer than the version the merchant's profile declares. A reconciliation read on a cached profile uses the version that profile was negotiated at.
 - Each supported version has its own contract tests. A version is added to the set only when its tests pass.
+- A merchant may declare other versions, each at its own profile URL (`supported_versions`). Over MCP the agent profile's version decides the answer's version (H5 spike), so the version the agent negotiates is the one its profile declares (8.4).
 - **VERIFY** how UCP itself expresses version negotiation in the profile and headers before implementing this.
 
 ### 26.3 Request signing
@@ -1315,11 +1338,11 @@ Some merchants require signed requests (HTTP Message Signatures, RFC 9421). Supp
 
 ### 26.4 Per-merchant credentials
 
-API keys or client credentials are stored as secrets (Secret Manager or `.env`), referenced by `merchant.credential_ref`, read at request time, and never logged.
+API keys or client credentials are referenced by `credential_ref: env:NAME` (19), read from the environment at startup (locally loaded from the macOS Keychain, never from a file), exchanged for an access token held in memory (20), and never logged.
 
 ### 26.5 Ground rule
 
-Never create sessions or orders at a store you do not own or have not been invited to test, even if its UCP access is open. Use your own stores or a merchant's official sandbox.
+Never create sessions or orders at a store you do not own or have not been invited to test, even if its UCP access is open. Use your own stores or a merchant's official sandbox. Enforced by I12.
 
 ## Appendix A. Merchant contract (provided module) \[CONTRACT\]
 
