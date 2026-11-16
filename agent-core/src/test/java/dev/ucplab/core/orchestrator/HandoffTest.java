@@ -193,6 +193,71 @@ class HandoffTest {
                 + "\"guard\":\"QUOTE_POLICY_ALLOWS\",\"to\":\"AWAITING_APPROVAL\"}");
     }
 
+    /** {@code first}, then {@code then}, on the same answer. */
+    private static UnaryOperator<CallOutcome<CheckoutView>> both(UnaryOperator<CallOutcome<CheckoutView>> first,
+            UnaryOperator<CheckoutView> then) {
+        return o -> view(Optional.empty(), then).apply(first.apply(o));
+    }
+
+    // Covers: 7.2 requires_escalation (handoff), 8.1, H5 C8 (an update that answers requires_escalation at a handoff
+    // merchant opens the approval too: the re-quote after hand_off_changed, through the same row)
+    @Test
+    void requiresEscalation_onTheUpdate_atAHandoffMerchant_opensTheApproval() {
+        Lab.Worker worker = lab.worker("w", new RewritingGateway(lab.merchant)
+                .rewrite(MerchantCall.GET, view(Optional.of(URL), v -> total(v, v.totalMinor() + 1)))
+                .rewrite(MerchantCall.UPDATE, as(CheckoutStatus.REQUIRES_ESCALATION, false)));
+        IntentId id = approved(worker);
+
+        assertThat(lab.drive(worker, id)).isEqualTo(IntentState.AWAITING_APPROVAL);
+        assertThat(lab.intents.attempts(id)).extracting(a -> a.op())
+                .containsExactly(AttemptOp.CREATE, AttemptOp.GET, AttemptOp.UPDATE);
+        assertThat(transitions(id)).contains("{\"event\":\"REQUIRES_ESCALATION\",\"from\":\"QUOTING\","
+                + "\"guard\":\"QUOTE_POLICY_ALLOWS\",\"to\":\"AWAITING_APPROVAL\"}");
+        neverCompleted(id);
+    }
+
+    // Covers: 7.2 requires_escalation (handoff), I2, Q2, H5 C8 (the row holds but for the status: lines that are not the
+    // proposal's are refused as for any quote, never approved)
+    @Test
+    void requiresEscalation_atAHandoffMerchant_withOtherLines_isRefused() {
+        Lab.Worker worker = lab.worker("w", new RewritingGateway(lab.merchant).rewrite(MerchantCall.CREATE,
+                both(as(CheckoutStatus.REQUIRES_ESCALATION, false),
+                        v -> withLines(v, List.of(v.lines().getFirst(), v.lines().getFirst())))));
+        IntentId id = worker.orchestrator().propose(lab.alice(), SHOP, TWO_SHIRTS, "buy").intentId();
+
+        assertThat(lab.drive(worker, id)).isEqualTo(IntentState.FAILED_NOT_CHARGED);
+        assertThat(lab.intent(id).failureReason()).contains("quote_lines_differ");
+        assertThat(lab.approvals.findLatestForSystem(id)).isEmpty();
+    }
+
+    // Covers: 7.2 requires_escalation (handoff), 9.1 P2, H5 C8 (the row holds but for the status: a total the policy
+    // refuses is refused, never approved)
+    @Test
+    void requiresEscalation_atAHandoffMerchant_overTheCap_isRefusedByPolicy() {
+        Lab.Worker worker = lab.worker("w", new RewritingGateway(lab.merchant).rewrite(MerchantCall.CREATE,
+                both(as(CheckoutStatus.REQUIRES_ESCALATION, false), v -> total(v, 1_000_000))));
+        IntentId id = worker.orchestrator().propose(lab.alice(), SHOP, TWO_SHIRTS, "buy").intentId();
+
+        assertThat(lab.drive(worker, id)).isEqualTo(IntentState.FAILED_NOT_CHARGED);
+        assertThat(lab.intent(id).failureReason()).hasValueSatisfying(r -> assertThat(r).startsWith("policy_"));
+        assertThat(lab.approvals.findLatestForSystem(id)).isEmpty();
+    }
+
+    // Covers: 7.2 requires_escalation (handoff), 8.1, H5 C8 (the row holds but for the status: a message that is neither
+    // recoverable nor one of the three buyer codes makes it no quote, as at quote_ready (handoff))
+    @Test
+    void requiresEscalation_atAHandoffMerchant_withABlockingMessage_isNoQuote() {
+        MerchantMessage blocking = new MerchantMessage("error", "payment_required", Optional.empty(), "x",
+                Optional.of("requires_buyer_input"));
+        Lab.Worker worker = lab.worker("w", new RewritingGateway(lab.merchant).rewrite(MerchantCall.CREATE,
+                as(CheckoutStatus.REQUIRES_ESCALATION, false, blocking)));
+        IntentId id = worker.orchestrator().propose(lab.alice(), SHOP, TWO_SHIRTS, "buy").intentId();
+
+        assertThat(lab.drive(worker, id)).isEqualTo(IntentState.FAILED_NOT_CHARGED);
+        assertThat(lab.intent(id).failureReason()).contains("quote_retries_exhausted");
+        assertThat(lab.approvals.findLatestForSystem(id)).isEmpty();
+    }
+
     // Covers: 7.2 (8.1's rule stands for agent merchants: requires_escalation ends QUOTING there)
     @Test
     void requiresEscalation_atAnAgentMerchant_stillEndsQuoting() {
