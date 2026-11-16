@@ -1172,6 +1172,8 @@ Messages are held in the serving instance's memory only (21.3): they are never s
 | `GET /api/intents/{id}/approval` | The pending approval for the owner only: `{snapshot, expires_at, token}`; the snapshot's `merchant_id` is the merchant's. For a handoff merchant it also carries `completion: "handoff"` and the fixed sentence "Shipping and tax are added by the store; you see the final total before you pay there." 404 if none is pending |
 | `POST /api/intents/{id}/approval` | Body `{token, decision: "approve" or "reject"}`. 200 with the new state; 401 `reauth_required`; 409 `approval_not_pending` (already decided, expired or consumed, or a token that does not verify against the pending approval, such as one from before a re-quote: `ApprovalDecision.InvalidToken`); 404 for anyone but the owner |
 
+The snapshot an answer in 23.2 shows never carries the session id (I8). The hash (9.2) is computed over the full snapshot, session id included, and the approval is decided by token alone.
+
 The approval token is delivered only through `GET /api/intents/{id}/approval` to the owner's session. It never appears in a tool result, a prompt or a log (I6, I8). That response, like every `/api` response, carries `Cache-Control: no-store`; request and response bodies are never logged.
 
 ### 23.3 Lab controls (profiles `local` and `demo` only)
