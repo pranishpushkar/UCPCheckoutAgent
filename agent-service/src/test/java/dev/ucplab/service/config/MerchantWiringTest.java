@@ -112,7 +112,8 @@ class MerchantWiringTest {
         return new MerchantWiring.GatewayParts(ucp, new CircuitBreakers(ucp, clock), clock, d -> { },
                 new SplittableRandom(1), new SequentialIdGenerator("w"), () -> call -> {
                     throw new java.io.IOException("no network in this test");
-                }, ServiceProperties.DEFAULT_TOKEN_ENDPOINT, Optional.of(new BuyerIp("203.0.113.5")), Environment.of(env));
+                }, ServiceProperties.DEFAULT_TOKEN_ENDPOINT,
+                ServiceProperties.DEFAULT_AGENT_VERSION, Optional.of(new BuyerIp("203.0.113.5")), Environment.of(env));
     }
 
     // Covers: 19, 8.5, 26.4, H5 C6 (transport picks the gateway: rest builds UcpHttpGateway and its CatalogClient; mcp
@@ -145,7 +146,8 @@ class MerchantWiringTest {
                 d -> { }, new SplittableRandom(1), new SequentialIdGenerator("w"), () -> call -> {
                     sent.add(call.headers());
                     throw new java.io.IOException("no network in this test");
-                }, ServiceProperties.DEFAULT_TOKEN_ENDPOINT, Optional.of(new BuyerIp("203.0.113.5")),
+                }, ServiceProperties.DEFAULT_TOKEN_ENDPOINT,
+                ServiceProperties.DEFAULT_AGENT_VERSION, Optional.of(new BuyerIp("203.0.113.5")),
                 Environment.of(Map.of("SHOPIFY_CLIENT", "client-1:secret-1")));
 
         for (boolean asks : new boolean[] {true, false}) {

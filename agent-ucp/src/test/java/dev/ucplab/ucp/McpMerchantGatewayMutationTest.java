@@ -56,12 +56,13 @@ class McpMerchantGatewayMutationTest {
         TokenProvider tokens = new TokenProvider(URI.create("https://api.shopify.com/auth/access_token"), credentials,
                 setup.tokenEndpoint, clock, Duration.ofMinutes(10), Duration.ofMinutes(1), Duration.ofSeconds(5));
         return new McpMerchantGateway(entry, config, store, breakers, clock, d -> { }, new SplittableRandom(3),
-                new SequentialIdGenerator("m"), endpointHosts, "mock_pay_1", versions, tokens, credentials, Optional.empty());
+                new SequentialIdGenerator("m"), endpointHosts, "mock_pay_1", versions, "2026-04-08", tokens, credentials,
+                Optional.empty());
     }
 
     private McpMerchantGateway gateway(MerchantEntry entry, Set<String> endpointHosts) {
         return gateway(noRetries(), new CircuitBreakers(noRetries(), clock), entry, new ClientCredentials("client-1", "secret-1"),
-                endpointHosts, Set.of("2026-08-25"));
+                endpointHosts, Set.of("2026-04-08"));
     }
 
     private McpMerchantGateway gateway() {
@@ -90,7 +91,7 @@ class McpMerchantGatewayMutationTest {
         assertThatThrownBy(() -> gateway(CONFIG, b, entry(Completion.HANDOFF), c, Set.of(), Set.of("1999-01-01")))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("unsupported UCP version 1999-01-01");
         assertThatThrownBy(() -> gateway(UcpConfig.defaults("ucplab-agent/1.0"), b, entry(Completion.HANDOFF), c, Set.of(),
-                Set.of("2026-08-25"))).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("names no profile");
+                Set.of("2026-04-08"))).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("names no profile");
     }
 
     // Covers: 8.5 (a gateway answers for its own merchant only). Kills McpMerchantGateway.discover:181 RemoveConditional
@@ -185,7 +186,7 @@ class McpMerchantGatewayMutationTest {
     // and :358
     @Test
     void theReCheck_refusesEveryCall_toAnEndpointNotAllowed_andSendsNothing() {
-        MerchantProfile off = new MerchantProfile(SHOP, "2026-08-25",
+        MerchantProfile off = new MerchantProfile(SHOP, "2026-04-08",
                 URI.create("https://other-store.myshopify.com/api/ucp/mcp"), Set.of(UcpHttpGateway.CHECKOUT_CAPABILITY),
                 Set.of());
         McpMerchantGateway g = gateway().withUncheckedProfile(off);
@@ -243,7 +244,7 @@ class McpMerchantGatewayMutationTest {
     private CircuitBreakers openedBreakers() {
         CircuitBreakers shared = new CircuitBreakers(noRetries(), clock);
         McpMerchantGateway opener = gateway(noRetries(), shared, entry(Completion.HANDOFF),
-                new ClientCredentials("client-1", "secret-1"), Set.of(), Set.of("2026-08-25"));
+                new ClientCredentials("client-1", "secret-1"), Set.of(), Set.of("2026-04-08"));
         for (int i = 0; i < noRetries().breakerThreshold(); i++) {
             store.raw("create_checkout", 500, "{}");
             assertThat(opener.create(ONE_BOARD, CREATE_KEY)).isInstanceOf(CallOutcome.Uncertain.class);
@@ -259,7 +260,7 @@ class McpMerchantGatewayMutationTest {
         CircuitBreakers breakers = openedBreakers();
         int before = store.sent().size();
         McpMerchantGateway g = gateway(noRetries(), breakers, entry(Completion.HANDOFF),
-                new ClientCredentials("client-1", "secret-1"), Set.of(), Set.of("2026-08-25"));
+                new ClientCredentials("client-1", "secret-1"), Set.of(), Set.of("2026-04-08"));
         store.answer("cancel_checkout", "cancel_checkout.json").answer("get_checkout", "cancel_checkout.json");
 
         assertThat(g.create(ONE_BOARD, CREATE_KEY)).isInstanceOfSatisfying(CallOutcome.NotSent.class,
@@ -310,7 +311,7 @@ class McpMerchantGatewayMutationTest {
     @Test
     void aRefusedCatalogRead_isScrubbed() {
         McpMerchantGateway g = gateway(noRetries(), new CircuitBreakers(noRetries(), clock), entry(Completion.HANDOFF),
-                new ClientCredentials("client-1", "Sekret9"), Set.of(), Set.of("2026-08-25"));
+                new ClientCredentials("client-1", "Sekret9"), Set.of(), Set.of("2026-04-08"));
         store.error("search_catalog", -32602, "Sekret9");
 
         assertThat(g.read("search_catalog", Map.of("catalog", Map.of("query", "x"))))

@@ -2,6 +2,7 @@ package dev.ucplab.ucp.mcp;
 
 import static dev.ucplab.ucp.mcp.McpTransportTest.PROFILE;
 import static dev.ucplab.ucp.mcp.McpTransportTest.RPC_ID;
+import static dev.ucplab.ucp.mcp.McpTransportTest.VERSION;
 import static dev.ucplab.ucp.mcp.McpTransportTest.reply;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -33,10 +34,10 @@ import org.junit.jupiter.api.Test;
  */
 class McpMutationTest {
 
-    private static final String CONTENT = "{\"id\":\"chk_1\"}";
+    private static final String CONTENT = "{\"id\":\"chk_1\",\"ucp\":{\"version\":\"2026-04-08\"}}";
 
     private static HttpReply unwrap(int status, String body) {
-        return McpTransport.unwrap(RPC_ID, reply(status, body));
+        return McpTransport.unwrap(RPC_ID, VERSION, reply(status, body));
     }
 
     private static String text(HttpReply reply) {
@@ -67,7 +68,7 @@ class McpMutationTest {
     void aCallWithoutABody_isRefused_andNotSent() {
         Recording store = new Recording(200);
 
-        assertThatThrownBy(() -> new McpTransport(store).send(call())).isInstanceOf(IllegalArgumentException.class)
+        assertThatThrownBy(() -> new McpTransport(store, VERSION).send(call())).isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("an MCP call has a JSON-RPC body");
         assertThat(store.calls).isEmpty();
     }
@@ -124,6 +125,18 @@ class McpMutationTest {
         assertThat(unwrap(200, rpc(",\"result\":{\"structuredContent\":5}")).body()).isEmpty();
         assertThat(text(unwrap(200, rpc(",\"result\":{\"isError\":false,\"structuredContent\":" + CONTENT + "}"))))
                 .isEqualTo(CONTENT);
+    }
+
+    // Covers: 26.2, 8.1 (an answer is read only at the version this transport speaks: one at another version, one
+    // with no ucp object, or with a ucp that is not an object, is unreadable). H5 C10
+    @Test
+    void aResult_isReadOnlyAtTheNegotiatedVersion() {
+        assertThat(unwrap(200, rpc(",\"result\":{\"structuredContent\":{\"id\":\"chk_1\",\"ucp\":{\"version\":\"2026-08-25\"}}}"))
+                .body()).isEmpty();
+        assertThat(unwrap(200, rpc(",\"result\":{\"structuredContent\":{\"id\":\"chk_1\"}}")).body()).isEmpty();
+        assertThat(unwrap(200, rpc(",\"result\":{\"structuredContent\":{\"id\":\"chk_1\",\"ucp\":\"2026-04-08\"}}")).body())
+                .isEmpty();
+        assertThat(text(unwrap(200, rpc(",\"result\":{\"structuredContent\":" + CONTENT + "}")))).isEqualTo(CONTENT);
     }
 
     // ---------------------------------------------------------------- statusOf

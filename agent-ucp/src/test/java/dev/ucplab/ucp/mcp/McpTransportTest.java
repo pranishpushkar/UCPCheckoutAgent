@@ -51,6 +51,8 @@ class McpTransportTest {
     static final URI ENDPOINT = URI.create("https://example-dev.myshopify.com/api/ucp/mcp");
     static final IdempotencyKey KEY = new IdempotencyKey("11111111-2222-8333-8444-555555555555");
     static final String RPC_ID = "rpc-1";
+    /** The version of the recorded answers (26.2): the agent profile the spike sent. */
+    static final String VERSION = "2026-04-08";
 
     static String fixture(String name) {
         try (InputStream in = McpTransportTest.class.getResourceAsStream("/shopify/" + name)) {
@@ -87,11 +89,11 @@ class McpTransportTest {
     }
 
     static CallOutcome<CheckoutView> classify(AttemptOp op, HttpReply reply) {
-        return CLASSIFIER.classify(op, McpTransport.unwrap(RPC_ID, reply));
+        return CLASSIFIER.classify(op, McpTransport.unwrap(RPC_ID, VERSION, reply));
     }
 
     static String code(HttpReply reply) {
-        return (String) LenientJson.readObject(new String(McpTransport.unwrap(RPC_ID, reply).body(),
+        return (String) LenientJson.readObject(new String(McpTransport.unwrap(RPC_ID, VERSION, reply).body(),
                 StandardCharsets.UTF_8)).get("code");
     }
 
@@ -117,7 +119,7 @@ class McpTransportTest {
     }
 
     static RetryExecutor executor(HttpTransport inner, List<Duration> sleeps) {
-        return new RetryExecutor(UcpConfig.defaults("profile=\"" + PROFILE + "\""), new McpTransport(inner), CLASSIFIER,
+        return new RetryExecutor(UcpConfig.defaults("profile=\"" + PROFILE + "\""), new McpTransport(inner, VERSION), CLASSIFIER,
                 Gate.NONE, sleeps::add, new SplittableRandom(42), new SequentialIdGenerator("req-"));
     }
 

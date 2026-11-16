@@ -114,4 +114,17 @@ class ProfileParserMutationTest {
         assertThat(p.merchant()).isEqualTo(SHOP);
         assertThat(p.ucpVersion()).isEqualTo("2026-08-25");
     }
+
+    // Covers: 26.2, H5 C10 (the versions a merchant also speaks are the non-blank keys of supported_versions; a profile
+    // without it, or with it not an object, declares none). Kills ProfileParser.supportedVersions:94 RemoveConditional
+    @Test
+    void supportedVersions_areTheNonBlankKeys() {
+        String endpoint = "{\"dev.ucp.shopping\":[" + rest("https://shop.example/ucp") + "]}";
+        String base = "{\"ucp\":{\"version\":\"2026-08-25\",\"services\":" + endpoint;
+
+        assertThat(parse(base + ",\"supported_versions\":{\"2026-04-08\":\"https://shop.example/u/1\",\" \":\"x\",\"\":\"y\"}}}")
+                .supportedVersions()).containsExactly("2026-04-08");
+        assertThat(parse(base + ",\"supported_versions\":[\"2026-04-08\"]}}").supportedVersions()).isEmpty();
+        assertThat(parse(base + "}}").supportedVersions()).isEmpty();
+    }
 }

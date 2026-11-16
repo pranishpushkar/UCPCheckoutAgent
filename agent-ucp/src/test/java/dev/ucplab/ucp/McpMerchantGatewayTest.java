@@ -94,7 +94,7 @@ class McpMerchantGatewayTest {
                 tokenEndpoint, clock, Duration.ofMinutes(10), Duration.ofMinutes(1), Duration.ofSeconds(5));
         return new McpMerchantGateway(entry, CONFIG, store, new CircuitBreakers(CONFIG, clock), clock, d -> { },
                 new SplittableRandom(3), new SequentialIdGenerator("m"), endpointHosts, "mock_pay_1",
-                Set.of("2026-08-25"), tokens, credentials, ip);
+                Set.of("2026-04-08"), "2026-04-08", tokens, credentials, ip);
     }
 
     McpMerchantGateway gateway(Optional<BuyerIp> ip) {
@@ -197,11 +197,11 @@ class McpMerchantGatewayTest {
         assertThat(ok(g.cancel(RECORDED, CANCEL_KEY)).continueUrl()).isEmpty();
     }
 
-    // Covers: 26.2, 8.5 (a profile at a version the merchant is not pinned to fails discovery)
+    // Covers: 26.2, 8.5 (a profile that declares the agent's version neither as its version nor in supported_versions
+    // fails discovery)
     @Test
-    void discover_refusesAVersionTheMerchantIsNotPinnedTo() {
-        store.profile(McpStore.fixture("store_profile.json").replace("\"version\": \"2026-08-25\"",
-                "\"version\": \"2026-01-23\""));
+    void discover_refusesAProfileThatDoesNotDeclareTheAgentsVersion() {
+        store.profile(McpStore.fixture("store_profile.json").replaceFirst("\"2026-04-08\": \"[^\"]*\"", "\"2026-03-01\": \"x\""));
 
         assertThatThrownBy(() -> gateway().discover(SHOP)).isInstanceOfSatisfying(DiscoveryFailedException.class,
                 e -> assertThat(e.reason()).isEqualTo(UcpHttpGateway.INCOMPATIBLE_VERSION));

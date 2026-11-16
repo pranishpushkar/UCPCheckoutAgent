@@ -80,6 +80,13 @@
             <type>test-jar</type>
             <scope>test</scope>
         </dependency>
+        <!-- H5 C10: McpStore and the Shopify recordings, so a configuration is shown working end to end. -->
+        <dependency>
+            <groupId>dev.ucplab</groupId>
+            <artifactId>agent-ucp</artifactId>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>dev.ucplab</groupId>
             <artifactId>agent-persistence</artifactId>

@@ -160,4 +160,43 @@ class ServicePropertiesH5Test {
                     .hasMessage(ServiceProperties.TOKEN_ENDPOINT_INVALID).message().doesNotContain(CANARY);
         }
     }
+
+    // Covers: 26.2, 8.4, H5 C10 (the agent profile and its version are settings: by default the hosted profile at
+    // 2026-08-25; set, Shopify's 2026-04-08 sample at 2026-04-08)
+    @Test
+    void agentProfileAndVersion_defaultToTheHostedProfile_andCanBeSet() throws IOException {
+        ServiceProperties defaults = ServiceProperties.from(Environment.of(withStore("local", false)));
+        assertThat(defaults.ucpAgent()).isEqualTo("profile=\"https://ucplab.dev/agent\"");
+        assertThat(defaults.ucpAgentVersion()).isEqualTo("2026-08-25");
+
+        Map<String, String> env = withStore("local", false);
+        env.put("UCP_AGENT_PROFILE", "https://shopify.dev/ucp/agent-profiles/2026-04-08/valid-with-capabilities.json");
+        env.put("UCP_AGENT_VERSION", "2026-04-08");
+        ServiceProperties set = ServiceProperties.from(Environment.of(env));
+        assertThat(set.ucpAgent())
+                .isEqualTo("profile=\"https://shopify.dev/ucp/agent-profiles/2026-04-08/valid-with-capabilities.json\"");
+        assertThat(set.ucpAgentVersion()).isEqualTo("2026-04-08");
+    }
+
+    // Covers: 26.2, 19, I8 (startup refuses an agent version outside the agent's set, and an agent profile that is not
+    // https with a host or has user info; neither reason holds the value)
+    @Test
+    void agentProfileAndVersion_refusals() throws IOException {
+        for (String version : java.util.List.of("2026-01-23", "2026-04-08x", CANARY)) {
+            Map<String, String> env = withStore("local", false);
+            env.put("UCP_AGENT_VERSION", version);
+            assertThatThrownBy(() -> ServiceProperties.from(Environment.of(env))).as(version)
+                    .hasMessage(ServiceProperties.AGENT_VERSION_UNSUPPORTED).message().doesNotContain(CANARY);
+        }
+        for (String value : java.util.List.of("http://agent.example/" + CANARY, "https://user:" + CANARY + "@agent.example/p",
+                "https:///p-" + CANARY, "https://agent example/" + CANARY, "file:/tmp/" + CANARY)) {
+            Map<String, String> env = withStore("local", false);
+            env.put("UCP_AGENT_PROFILE", value);
+            assertThatThrownBy(() -> ServiceProperties.from(Environment.of(env))).as(value)
+                    .hasMessage(ServiceProperties.AGENT_PROFILE_INVALID).message().doesNotContain(CANARY);
+        }
+        Map<String, String> query = withStore("local", false);
+        query.put("UCP_AGENT_PROFILE", "https://agent.example/profile.json?v=2026-04-08");
+        assertThat(ServiceProperties.from(Environment.of(query)).ucpAgent()).contains("?v=2026-04-08");
+    }
 }

@@ -51,8 +51,10 @@ import java.util.regex.Pattern;
  * rules of {@code get} and no {@code Authorization}; it is cached for 5 minutes (section 20) as over REST. The endpoint
  * is the {@code ucp.services["dev.ucp.shopping"]} entry whose {@code transport} is {@code mcp}. It must be on
  * {@code shop_domain} (I12) and on the base URL's host and port or one the registry lists ({@code endpoint_hosts}), with
- * the base URL's scheme ({@code endpoint_not_allowed}); the profile must name a version the merchant is pinned to and the
- * agent speaks (26.2) and the checkout capability; {@code handler_missing} applies only to {@code completion: agent}.
+ * the base URL's scheme ({@code endpoint_not_allowed}); the merchant is spoken to in the agent profile's version only,
+ * which must be pinned for it and declared by its profile, as {@code version} or in {@code supported_versions} (26.2),
+ * and every answer must be at that version ({@link McpTransport}); the profile must offer the checkout capability;
+ * {@code handler_missing} applies only to {@code completion: agent}.
  * Before every call, a get and a catalog read included, the endpoint is checked again, locally, with no I/O (8.5, I8).
  *
  * <p><b>Calls.</b> Each is one JSON-RPC {@code tools/call} ({@link McpEnvelope}) through {@link RetryExecutor}, over
@@ -85,7 +87,7 @@ public final class McpMerchantGateway implements MerchantGateway {
         }
     }
 
-    private record Cached(MerchantProfile profile, Instant fetchedAt, String version) {}
+    private record Cached(MerchantProfile profile, Instant fetchedAt) {}
 
     /** A profile read: the profile it cached, or why there is none. The caller never reads the cache back. */
     private sealed interface Refreshed {
@@ -100,6 +102,8 @@ public final class McpMerchantGateway implements MerchantGateway {
     private final Set<String> allowedHostPorts;
     private final String paymentHandlerId;
     private final Set<String> ucpVersions;
+    /** The one version this merchant is spoken in: the agent profile's (26.2, 8.4). */
+    private final String agentVersion;
     private final URI agentProfile;
     private final Clock clock;
     private final IdGenerator ids;
@@ -116,16 +120,20 @@ public final class McpMerchantGateway implements MerchantGateway {
      * @param endpointHosts {@code host[:port]} strings besides the base URL's that the profile's endpoint may use (8.5)
      * @param paymentHandlerId the handler a {@code completion: agent} entry's profile must list (19)
      * @param ucpVersions the versions the operator pins for this merchant (26.2), each one the agent supports
+     * @param agentVersion {@code UCP_AGENT_VERSION}, the version the agent profile in {@code config} declares (26.2):
+     *     the one version every call to this merchant is spoken in, and every answer must be at
      * @param tokens the merchant's access tokens (20, 26.4)
      * @param credentials the client credentials behind {@code tokens}, only so they are scrubbed (26.4)
      * @param buyerIp the operator's {@code BUYER_IP}, present exactly when the entry says {@code requires_buyer_ip}
-     * @throws IllegalArgumentException if the entry is not an MCP entry, a version is not supported, or the
+     * @throws IllegalArgumentException if the entry is not an MCP entry, a pinned or the agent's version is not
+     *     supported, or the
      *     configuration's {@code UCP-Agent} names no profile
      */
     public McpMerchantGateway(
             MerchantEntry merchant, UcpConfig config, HttpTransport transport, CircuitBreakers breakers, Clock clock,
             Sleeper sleeper, RandomGenerator random, IdGenerator ids, Set<String> endpointHosts,
-            String paymentHandlerId, Set<String> ucpVersions, TokenProvider tokens, ClientCredentials credentials,
+            String paymentHandlerId, Set<String> ucpVersions, String agentVersion, TokenProvider tokens,
+            ClientCredentials credentials,
             Optional<BuyerIp> buyerIp) {
         this.merchant = Objects.requireNonNull(merchant, "merchant");
         if (merchant.transport() != Transport.MCP) {
@@ -144,6 +152,10 @@ public final class McpMerchantGateway implements MerchantGateway {
             }
         }
         this.ucpVersions = pinned;
+        if (!UcpHttpGateway.SUPPORTED_VERSIONS.contains(Objects.requireNonNull(agentVersion, "agentVersion"))) {
+            throw new IllegalArgumentException("unsupported UCP version " + agentVersion);
+        }
+        this.agentVersion = agentVersion;
         Matcher profile = AGENT_PROFILE.matcher(config.ucpAgent());
         if (!profile.find()) {
             throw new IllegalArgumentException("the UCP-Agent setting names no profile (8.4)");
@@ -169,7 +181,7 @@ public final class McpMerchantGateway implements MerchantGateway {
         this.discovery = new RetryExecutor(config, new StoreHeaders(transport, Optional.empty(), buyerIp),
                 new FailureClassifier(clock), gate, sleeper, random, ids);
         this.tools = new RetryExecutor(config,
-                new StoreHeaders(new McpTransport(transport), Optional.of(tokens), buyerIp),
+                new StoreHeaders(new McpTransport(transport, agentVersion), Optional.of(tokens), buyerIp),
                 new FailureClassifier(clock), gate, sleeper, random, ids);
     }
 
@@ -205,13 +217,12 @@ public final class McpMerchantGateway implements MerchantGateway {
             case RetryExecutor.Fetched.Body b -> {
                 try {
                     MerchantProfile profile = ProfileParser.parse(merchant.id(), b.reply().body(), "mcp");
-                    // The constructor refuses a pinned version the agent does not support.
-                    Optional<Problem> problem = ucpVersions.contains(profile.ucpVersion())
+                    Optional<Problem> problem = spoken(profile)
                             ? incompatible(profile) : Optional.of(Problem.of(UcpHttpGateway.INCOMPATIBLE_VERSION));
                     if (problem.isPresent()) {
                         yield new Refreshed.Refused(problem.get());
                     }
-                    Cached fresh = new Cached(profile, clock.instant(), profile.ucpVersion());
+                    Cached fresh = new Cached(profile, clock.instant());
                     cache.set(fresh);
                     yield new Refreshed.Fresh(fresh);
                 } catch (IllegalArgumentException e) {
@@ -220,6 +231,15 @@ public final class McpMerchantGateway implements MerchantGateway {
                 }
             }
         };
+    }
+
+    /**
+     * 26.2 over MCP: the agent's version is pinned for this merchant, and the merchant's profile declares it, as its
+     * {@code version} or in {@code supported_versions}. The constructor refuses a version the agent does not support.
+     */
+    private boolean spoken(MerchantProfile p) {
+        return ucpVersions.contains(agentVersion)
+                && (agentVersion.equals(p.ucpVersion()) || p.supportedVersions().contains(agentVersion));
     }
 
     private Optional<Problem> incompatible(MerchantProfile p) {
@@ -321,7 +341,7 @@ public final class McpMerchantGateway implements MerchantGateway {
         }
         ApiCall call = new ApiCall(op, "POST", endpoint, key,
                 Optional.of(McpEnvelope.toolCall(ids, tool, args, agentProfile, key)), op == AttemptOp.GET,
-                Optional.of(profile.version()));
+                Optional.of(agentVersion));
         CallOutcome<CheckoutView> outcome = withToken(token).scrub(tools.execute(call));
         if (op == AttemptOp.GET && unauthorized(outcome)) {
             // A read refused for its token: the token is dropped (StoreHeaders); one more run with a new one (C5, 8.2).
@@ -364,7 +384,7 @@ public final class McpMerchantGateway implements MerchantGateway {
         }
         ApiCall call = new ApiCall(AttemptOp.GET, "POST", endpoint, Optional.empty(),
                 Optional.of(McpEnvelope.toolCall(ids, tool, args, agentProfile, Optional.empty())), false,
-                Optional.of(profile.version()));
+                Optional.of(agentVersion));
         RetryExecutor.Fetched fetched = scrubbed(withToken(token), tools.fetch(call));
         if (fetched instanceof RetryExecutor.Fetched.Failed f && unauthorized(f.outcome())) {
             fetched = scrubbed(withToken(token), scrubbed(withToken(tokens.current()), tools.fetch(call)));
@@ -393,7 +413,7 @@ public final class McpMerchantGateway implements MerchantGateway {
      * tests.
      */
     McpMerchantGateway withUncheckedProfile(MerchantProfile profile) {
-        cache.set(new Cached(Objects.requireNonNull(profile, "profile"), clock.instant(), profile.ucpVersion()));
+        cache.set(new Cached(Objects.requireNonNull(profile, "profile"), clock.instant()));
         return this;
     }
 

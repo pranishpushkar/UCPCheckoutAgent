@@ -26,7 +26,8 @@ import java.util.regex.Pattern;
  *       {@code {"code":...}} from the JSON-RPC error, so 8.1's table applies and no merchant text passes.
  *   <li>A 200 or 201 holding a JSON-RPC {@code error} becomes the status its code stands for, with the same code body.
  *   <li>A 200 or 201 holding a {@code result} becomes a 200 whose body is {@code result.structuredContent}. A result
- *       with {@code isError: true} or no {@code structuredContent}, a different {@code id}, neither or both of
+ *       with {@code isError: true} or no {@code structuredContent}, one whose {@code structuredContent.ucp.version} is
+ *       not the version this transport speaks (26.2), a different {@code id}, neither or both of
  *       {@code result} and {@code error}, or a body that is not JSON become an empty body, which every parser refuses
  *       (8.1, last row).
  * </ul>
@@ -42,9 +43,12 @@ public final class McpTransport implements HttpTransport {
     private static final byte[] UNREADABLE = new byte[0];
 
     private final HttpTransport next;
+    private final String version;
 
-    public McpTransport(HttpTransport next) {
+    /** @param version the UCP version negotiated for the merchant (26.2): every answer must be at it */
+    public McpTransport(HttpTransport next, String version) {
         this.next = Objects.requireNonNull(next, "next");
+        this.version = Objects.requireNonNull(version, "version");
     }
 
     @Override
@@ -59,10 +63,10 @@ public final class McpTransport implements HttpTransport {
             }
         });
         HttpReply reply = next.send(new HttpCall(call.method(), call.uri(), headers, call.body(), call.timeout()));
-        return unwrap(rpcId, reply);
+        return unwrap(rpcId, version, reply);
     }
 
-    static HttpReply unwrap(Object rpcId, HttpReply reply) {
+    static HttpReply unwrap(Object rpcId, String version, HttpReply reply) {
         Map<String, Object> root;
         try {
             root = LenientJson.readObject(new String(reply.body(), StandardCharsets.UTF_8));
@@ -82,7 +86,8 @@ public final class McpTransport implements HttpTransport {
             return new HttpReply(statusOf(e), reply.headers(), codeBody(e));
         }
         if (result instanceof Map<?, ?> r && !Boolean.TRUE.equals(r.get("isError"))
-                && r.get("structuredContent") instanceof Map<?, ?> content) {
+                && r.get("structuredContent") instanceof Map<?, ?> content
+                && content.get("ucp") instanceof Map<?, ?> ucp && version.equals(ucp.get("version"))) {
             return new HttpReply(200, reply.headers(), McpJson.write(content).getBytes(StandardCharsets.UTF_8));
         }
         // TODO(VERIFY 8): how the store answers a business refusal (isError, a JSON-RPC error, or messages in

@@ -88,7 +88,7 @@ final class MerchantWiring {
 
     /** What a gateway is built from besides the merchant's settings (8.5, 26.4). */
     record GatewayParts(UcpConfig ucp, CircuitBreakers breakers, Clock clock, Sleeper sleeper, RandomGenerator random,
-                        IdGenerator ids, Supplier<HttpTransport> transports, URI tokenEndpoint,
+                        IdGenerator ids, Supplier<HttpTransport> transports, URI tokenEndpoint, String agentVersion,
                         Optional<BuyerIp> buyerIp, Environment environment) {
 
         /** The environment holds the credentials and the buyer IP: shown by neither (I8). */
@@ -122,7 +122,8 @@ final class MerchantWiring {
         TokenProvider tokens = new TokenProvider(p.tokenEndpoint(), credentials, p.transports().get(), p.clock(),
                 TOKEN_DEFAULT_LIFETIME, TOKEN_REFRESH_MARGIN, p.ucp().requestTimeout());
         return new McpMerchantGateway(entry, p.ucp(), p.transports().get(), p.breakers(), p.clock(), p.sleeper(),
-                p.random(), p.ids(), s.endpointHosts(), requiredHandler(s), s.ucpVersions(), tokens, credentials,
+                p.random(), p.ids(), s.endpointHosts(), requiredHandler(s), s.ucpVersions(), p.agentVersion(), tokens,
+                credentials,
                 s.requiresBuyerIp() ? p.buyerIp() : Optional.empty());
     }
 

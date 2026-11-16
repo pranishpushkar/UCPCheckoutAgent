@@ -17,8 +17,8 @@ import java.util.Set;
 
 /**
  * Reads a {@code /.well-known/ucp} profile (2.1): {@code ucp.version}, the endpoint of a transport at
- * {@code ucp.services["dev.ucp.shopping"][transport=rest|mcp].endpoint} (8.5), the keys of {@code ucp.capabilities} and the ids
- * in {@code ucp.payment_handlers}. Unknown fields are ignored (8.4).
+ * {@code ucp.services["dev.ucp.shopping"][transport=rest|mcp].endpoint} (8.5), the keys of {@code ucp.capabilities}, the ids
+ * in {@code ucp.payment_handlers} and the keys of {@code ucp.supported_versions} (26.2). Unknown fields are ignored (8.4).
  */
 final class ProfileParser {
 
@@ -53,7 +53,8 @@ final class ProfileParser {
         if (!(ucp.get("version") instanceof String version) || version.isBlank()) {
             throw new IllegalArgumentException("ucp.version missing");
         }
-        return new MerchantProfile(merchant, version, endpoint(ucp, transport), capabilities(ucp), handlers(ucp));
+        return new MerchantProfile(merchant, version, endpoint(ucp, transport), capabilities(ucp), handlers(ucp),
+                supportedVersions(ucp));
     }
 
     private static URI endpoint(Map<?, ?> ucp, String transport) {
@@ -80,6 +81,20 @@ final class ProfileParser {
         Set<String> out = new LinkedHashSet<>();
         if (ucp.get("capabilities") instanceof Map<?, ?> caps) {
             caps.keySet().forEach(k -> out.add(String.valueOf(k)));
+        }
+        return out;
+    }
+
+    /** The keys of {@code ucp.supported_versions} (26.2): each a version the merchant also speaks, at its own URL. */
+    private static Set<String> supportedVersions(Map<?, ?> ucp) {
+        Set<String> out = new LinkedHashSet<>();
+        if (ucp.get("supported_versions") instanceof Map<?, ?> versions) {
+            for (Object k : versions.keySet()) {
+                String v = String.valueOf(k);
+                if (!v.isBlank()) {
+                    out.add(v);
+                }
+            }
         }
         return out;
     }

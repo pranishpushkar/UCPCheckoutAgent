@@ -74,8 +74,6 @@ import org.springframework.context.annotation.Configuration;
 @Configuration(proxyBeanMethods = false)
 public class StackConfiguration {
 
-    /** Sent as {@code UCP-Agent} on every merchant call (8.4). */
-    static final String UCP_AGENT = "profile=\"https://ucplab.dev/agent\"";
     /** The label of the cursor key, derived from the approval secret (m6-plan Stage 2 review, point 1). */
     static final byte[] CURSOR_KEY_LABEL = "intent-cursor/v1".getBytes(StandardCharsets.US_ASCII);
     private static final int POOL_SIZE = 4;
@@ -174,9 +172,10 @@ public class StackConfiguration {
         return codec;
     }
 
+    /** {@code UCP-Agent} on every merchant call is UCP_AGENT_PROFILE's (8.4, 26.2). */
     @Bean
-    UcpConfig ucpConfig() {
-        return UcpConfig.defaults(UCP_AGENT);
+    UcpConfig ucpConfig(ServiceProperties properties) {
+        return UcpConfig.defaults(properties.ucpAgent());
     }
 
     /**
@@ -225,7 +224,8 @@ public class StackConfiguration {
                                              Clock clock, RandomGenerator random, IdGenerator ids,
                                              Environment environment) {
         return new MerchantWiring.GatewayParts(ucp, breakers, clock, Sleeper.THREAD, random, ids,
-                () -> new JdkHttpTransport(ucp), properties.shopifyTokenEndpoint(), properties.buyerIp(), environment);
+                () -> new JdkHttpTransport(ucp), properties.shopifyTokenEndpoint(), properties.ucpAgentVersion(), properties.buyerIp(),
+                environment);
     }
 
     /** Status from discovery (19): the startup check asks every merchant at once, and a failing one starts SUSPENDED. */
