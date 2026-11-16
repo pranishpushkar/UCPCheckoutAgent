@@ -560,7 +560,7 @@ CREATE TABLE purchase_intent (
   state TEXT NOT NULL,
   version INTEGER NOT NULL,
   session_id TEXT,                      -- merchant checkout id; immutable once a complete attempt exists (I4); may carry an access key (?key=), so masked wherever shown (I8)
-  handoff_url TEXT,                     -- the merchant's continue_url, set once on HANDED_OFF; returned only to the owner (23.2), never logged, never in an event (migration V8)
+  handoff_url TEXT,                     -- the merchant's continue_url, set once on HANDED_OFF; returned only to the owner (23.2), never logged, never in an event (migration V9)
   approved_snapshot_hash TEXT,
   requote_count INTEGER NOT NULL DEFAULT 0, -- P8
   order_id TEXT,
@@ -575,8 +575,8 @@ CREATE TABLE purchase_intent (
 CREATE UNIQUE INDEX ux_intent_active_dedupe ON purchase_intent(dedupe_key)
   WHERE state NOT IN ('COMPLETED','REJECTED','FAILED_NOT_CHARGED','ESCALATED');
 -- I11: a trigger (migration V7) refuses any update of purchase_intent.merchant_id.
--- V8 adds handoff_url and rebuilds ux_intent_active_dedupe with HANDED_OFF among the terminal states.
--- V8 also adds merchant_fingerprint, filling existing rows with {"completion":"agent","owned":true,"transport":"rest"}: the only entry an intent from before H5 can still run under, since an entry off loopback without owned: true refuses startup.
+-- V8 adds merchant_fingerprint, filling existing rows with {"completion":"agent","owned":true,"transport":"rest"}: the only entry an intent from before H5 can still run under, since an entry off loopback without owned: true refuses startup.
+-- V9 adds handoff_url and rebuilds ux_intent_active_dedupe with HANDED_OFF among the terminal states.
 
 CREATE TABLE intent_event (
   intent_id TEXT NOT NULL,
