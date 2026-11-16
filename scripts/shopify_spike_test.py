@@ -69,7 +69,8 @@ class Fake(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             url = "http://insecure.example/x" if Fake.bad_url else "https://%s/checkouts/cn/secret-path?key=canary-key-444" % STORE
-            payload = {} if Fake.no_id else {"id": "chk_1", "continue_url": url, "status": "incomplete"}
+            payload = {} if Fake.no_id else {"id": "gid://shopify/Checkout/chk_1?key=canary-idkey-555", "continue_url": url,
+                                             "status": "incomplete"}
             if Fake.flat:
                 self.reply(payload)
             else:
@@ -78,7 +79,9 @@ class Fake(http.server.BaseHTTPRequestHandler):
             self.mcp({})
 
     def mcp(self, content):
-        self.reply({"jsonrpc": "2.0", "id": 1, "result": {"structuredContent": content}})
+        # As Shopify answers (2026-11-16): the payload twice, as structuredContent and as a JSON string in content[].text.
+        self.reply({"jsonrpc": "2.0", "id": 1, "result": {
+            "content": [{"type": "text", "text": json.dumps(content)}], "isError": False, "structuredContent": content}})
 
     def reply(self, obj):
         b = json.dumps(obj).encode()
@@ -162,7 +165,8 @@ class SpikeTest(unittest.TestCase):
     def test_a_wrapped_create_is_found_and_canceled(self):
         out = self.run_main(["--i-own-this-store"])
         self.assertIn("canceled", out)
-        self.assertEqual(Fake.bodies["cancel_checkout@" + STORE]["params"]["arguments"]["id"], "chk_1")
+        self.assertEqual(Fake.bodies["cancel_checkout@" + STORE]["params"]["arguments"]["id"],
+                         "gid://shopify/Checkout/chk_1?key=canary-idkey-555")
 
     # H5 fix 2: the older, unwrapped answer is still read.
     def test_a_flat_create_is_still_found_and_canceled(self):
@@ -237,9 +241,11 @@ class SpikeTest(unittest.TestCase):
             self.assertIn("create_checkout.json", names)
             self.assertNotIn("token.json", names)
             text = "".join(open(os.path.join(d, n)).read() for n in names)
-        for canary in list(CANARIES.values())[:3] + ["canary-token-333", "canary-key-444", "secret-path"]:
+        # The answer carries its payload twice (structuredContent and a JSON string in content[].text): both are cut.
+        for canary in list(CANARIES.values())[:3] + ["canary-token-333", "canary-key-444", "secret-path", "canary-idkey-555"]:
             self.assertNotIn(canary, text)
         self.assertIn(STORE, text)
+        self.assertIn("gid://shopify/Checkout/chk_1", text)
 
     # H5 (the first real run): the MCP endpoint is the one the profile names in ucp.services, not a guess.
     def test_the_endpoint_comes_from_the_profiles_services(self):

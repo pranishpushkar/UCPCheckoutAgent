@@ -6,7 +6,6 @@ Secrets come from the environment only and are never printed: every printed or r
 Never run in CI or by an agent."""
 import json
 import os
-import re
 import sys
 import urllib.error
 import urllib.parse
@@ -18,7 +17,7 @@ TOKEN = []          # the access token, once there is one (memory only)
 RECORD = [None]     # the directory --record writes the answers to, if any
 TEST_BASE = os.environ.get("SHOPIFY_SPIKE_TEST_BASE")   # tests only: every call goes to this local URL
 DEFAULT_QUERY = "snowboard"   # the dev store's generated test data has snowboards
-URL_FIELDS = re.compile(r'("(?:continue_url|checkout_url)"\s*:\s*")([^"]*)(")')
+URL_FIELDS = ("continue_url", "checkout_url")   # the path and query of a checkout URL open that checkout
 
 
 def secrets():
@@ -48,14 +47,33 @@ def host_only(url):
     return "%s://%s/..." % (p.scheme, p.hostname) if p.hostname else "<none>"
 
 
+def sanitize(value, key=None):
+    """An answer made safe to keep: walked recursively, JSON held in a string (Shopify sends each payload twice, once as
+    a JSON string in result.content[].text) decoded and walked too, continue_url and checkout_url cut to their host, and
+    any "?key=" (Shopify's checkout ids and URLs carry an access key) masked."""
+    if isinstance(value, dict):
+        return {k: sanitize(v, k) for k, v in value.items()}
+    if isinstance(value, list):
+        return [sanitize(v) for v in value]
+    if isinstance(value, str):
+        if key in URL_FIELDS:
+            return host_only(value)
+        if value.strip()[:1] in ("{", "["):
+            try:
+                return json.dumps(sanitize(json.loads(value)), sort_keys=True)
+            except ValueError:
+                pass
+        if "?key=" in value:
+            return value.split("?key=", 1)[0] + "?key=<redacted>"
+    return value
+
+
 def record(name, answer):
-    """Keeps an answer for the spike report: redacted, with continue_url and checkout_url cut to their host (the path and
-    query of a checkout URL open that checkout). The token answer is never recorded."""
+    """Keeps an answer for the spike report: sanitized and redacted. The token answer is never recorded."""
     if not RECORD[0]:
         return
-    text = URL_FIELDS.sub(lambda m: m.group(1) + host_only(m.group(2)) + m.group(3), json.dumps(answer, indent=2, sort_keys=True))
     with open(os.path.join(RECORD[0], name + ".json"), "w") as f:
-        f.write(redact(text) + "\n")
+        f.write(redact(json.dumps(sanitize(answer), indent=2, sort_keys=True)) + "\n")
 
 
 def content(answer):
