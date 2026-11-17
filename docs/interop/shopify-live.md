@@ -44,10 +44,15 @@ scripts/shopify-live.sh --i-own-this-store --with-buyer-ip --cancel-after       
    - `get_checkout` of the agent's own checkout right after its quote, and again about 60 s later;
    - a probe checkout of the same lines: `create_checkout`, `get_checkout` at once and about 60 s later,
      `update_checkout` with the same lines, then `cancel_checkout`. The probe is never completed.
+   If the quote opens no approval, the script replays the agent's last `create_checkout` or `update_checkout` with
+   the agent's own idempotency key and body, records the request and the store's raw answer, cancels any checkout the
+   answer names, and stops. A store that honours the key answers as it did the first time and creates nothing new.
 5. Shows each approval card and approves it, up to 4 cards (one more than the re-quote cap allows, so a cap that does
    not hold is seen). Waits up to 600 s for the intent to end.
-6. Prints the result: the state, the failure reason if any, approvals given and stored, `requote_count`. Records the
-   agent's attempts (op, status, stored summary) and saves the intent's events and the service log as evidence.
+6. Prints the result: the state, the failure reason if any, approvals given and stored, `requote_count`. On every way
+   out, a failed quote included, saves `intent.json`, `events.json` and `attempts.json` (each attempt's request body and
+   the outcome the service stored, sanitized and redacted) beside the service log, before the temporary database is
+   deleted. Each create or update the script sends is recorded with its request (`<name>.request.json`).
 7. In `HANDED_OFF`, prints the handoff URL **once, to the terminal, for the buyer only**. It is never written to a
    file or log.
 8. With `--cancel-after`, cancels the agent's checkout after you press Enter.

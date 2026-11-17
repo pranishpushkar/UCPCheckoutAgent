@@ -4,7 +4,9 @@ Not part of ./mvnw verify (verify needs no Python)."""
 import io
 import json
 import os
+import shutil
 import signal
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -135,6 +137,87 @@ class ProbeCleanup(unittest.TestCase):
             with open(calls) as f:
                 names = f.read().split()
             self.assertEqual(names[-1], "cancel_checkout", "SIGTERM during the gap left the probe open: %s" % names)
+
+
+
+class FakeApi:
+    """The owner's API for one intent that ended without an approval."""
+
+    def __init__(self, intent, events):
+        self.answers = {"/api/intents/" + intent: {"id": intent, "state": "FAILED_NOT_CHARGED",
+                                                   "failure_reason": "quote_retries_exhausted"},
+                        "/api/intents/%s/events" % intent: {"items": events}}
+
+    def json(self, method, path, body=None):
+        return self.answers[path]
+
+
+def attempts_db(path, intent, rows):
+    with sqlite3.connect(path) as c:
+        c.execute("CREATE TABLE purchase_intent (id TEXT PRIMARY KEY, session_id TEXT, requote_count INTEGER)")
+        c.execute("CREATE TABLE merchant_attempt (id TEXT PRIMARY KEY, intent_id TEXT, seq INTEGER, op TEXT, revision "
+                  "INTEGER, idempotency_key TEXT, request_hash TEXT, request_body TEXT, status TEXT, http_status "
+                  "INTEGER, response_json TEXT, sent_at TEXT, responded_at TEXT)")
+        c.execute("INSERT INTO purchase_intent VALUES (?, NULL, 0)", (intent,))
+        for i, (op, key, body, status, response) in enumerate(rows):
+            c.execute("INSERT INTO merchant_attempt VALUES (?, ?, ?, ?, 0, ?, 'h', ?, ?, NULL, ?, 't0', 't1')",
+                      ("a%d" % i, intent, i + 1, op, key, body, status, response))
+
+
+class FailedQuoteEvidence(unittest.TestCase):
+    """A quote that opens no approval keeps the intent, its events and its attempts, and replays the failing create
+    with its own key so the store's raw answer is recorded, redacted; a checkout the replay names is canceled."""
+
+    INTENT = "01a1ea58-0000-7000-8000-000000000001"
+    KEY = "6f1c2a3b-0000-8000-8000-000000000002"
+    BODY = json.dumps({"buyer": {"email": "alice@local.ucplab.dev"},
+                       "line_items": [{"item": {"id": "gid://shopify/ProductVariant/1"}, "quantity": 1}]})
+
+    def setUp(self):
+        self.work = tempfile.mkdtemp()
+        self.db = os.path.join(self.work, "ucplab.db")
+        attempts_db(self.db, self.INTENT, [("CREATE", self.KEY, self.BODY, "UNCERTAIN",
+                                             json.dumps({"outcome": "uncertain", "cause": "an answer the parser refused"}))])
+        live.remember("canary-cookie-0042")
+        live.spike.RECORD[0] = os.path.join(self.work, "recordings")
+        os.makedirs(live.spike.RECORD[0])
+
+    def tearDown(self):
+        live.spike.RECORD[0] = None
+        shutil.rmtree(self.work)
+
+    def test_aFailedQuote_keepsTheIntentItsEventsAndItsAttempts_redacted(self):
+        evidence = os.path.join(self.work, "evidence")
+        os.makedirs(evidence)
+        api = FakeApi(self.INTENT, [{"type": "transition", "payload": "canary-cookie-0042"}])
+        with redirect_stdout(io.StringIO()):
+            live.save_intent_evidence(api, self.db, self.INTENT, evidence)
+        names = sorted(os.listdir(evidence))
+        self.assertEqual(names, ["attempts.json", "events.json", "intent.json"])
+        attempts = json.load(open(os.path.join(evidence, "attempts.json")))
+        self.assertEqual([(a["op"], a["status"]) for a in attempts], [("CREATE", "UNCERTAIN")])
+        self.assertIn("uncertain", json.dumps(attempts))
+        for name in names:
+            self.assertNotIn("canary-cookie-0042", open(os.path.join(evidence, name)).read())
+
+    def test_theFailingCreate_isReplayedWithItsOwnKey_recorded_andItsCheckoutCanceled(self):
+        sent = []
+
+        class Store(FakeStore):
+            def tool(self, step, name, arguments, record_as, mutating=False, key=None):
+                sent.append((name, arguments, key, record_as))
+                return {"id": PROBE, "status": "incomplete", "totals": [],
+                        "messages": [{"code": "x", "severity": "unrecoverable"}]} if name == "create_checkout" else {}
+        store = Store({})
+        store.endpoint = "https://my-dev-store.myshopify.com/api/ucp/mcp"
+        with redirect_stdout(io.StringIO()):
+            live.replay_failed_quote(store, self.db, self.INTENT)
+        self.assertEqual([s[0] for s in sent], ["create_checkout", "cancel_checkout"])
+        name, arguments, key, record_as = sent[0]
+        self.assertEqual(key, self.KEY, "the replay uses the agent's own idempotency key")
+        self.assertEqual(arguments, {"checkout": json.loads(self.BODY)})
+        self.assertEqual(record_as, "agent_create_replay")
+        self.assertEqual(sent[1][1], {"id": PROBE})
 
 
 if __name__ == "__main__":

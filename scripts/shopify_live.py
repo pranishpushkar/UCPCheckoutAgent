@@ -219,19 +219,24 @@ class Store:
         self.headers = {"Authorization": "Bearer " + (tok.get("access_token") or "<token>"),
                         "Shopify-Buyer-IP": os.environ.get("BUYER_IP", "<redacted>")}
 
-    def tool(self, step, name, arguments, record_as, mutating=False):
+    def tool(self, step, name, arguments, record_as, mutating=False, key=None):
+        """One tools/call; a mutating one under `key`, or a fresh one. A create or update's request is recorded beside
+        its answer (record_as + ".request"), redacted like the answer."""
         self.ids += 1
-        meta = dict(self.meta, **({"idempotency-key": str(uuid.uuid4())} if mutating else {}))
+        meta = dict(self.meta, **({"idempotency-key": key or str(uuid.uuid4())} if mutating else {}))
         body = {"jsonrpc": "2.0", "id": self.ids, "method": "tools/call",
                 "params": {"name": name, "arguments": dict(arguments, meta=meta)}}
+        if record_as and not self.dry and name in ("create_checkout", "update_checkout"):
+            spike.record(record_as + ".request", body)
         return spike.content(spike.call(step, "POST", self.endpoint, self.headers, body, self.dry, record_as))
 
 
 def totals_line(name, checkout):
     """One redacted line of what the comparison needs: status, currency and every totals entry by type."""
     totals = {t.get("type"): t.get("amount") for t in checkout.get("totals") or [] if isinstance(t, dict)}
-    return "%s: status %s, currency %s, totals %s" % (name, checkout.get("status"), checkout.get("currency"),
-                                                      json.dumps(totals, sort_keys=True))
+    messages = ["%s/%s" % (m.get("code"), m.get("severity")) for m in checkout.get("messages") or [] if isinstance(m, dict)]
+    return "%s: status %s, currency %s, totals %s, messages %s" % (
+        name, checkout.get("status"), checkout.get("currency"), json.dumps(totals, sort_keys=True), ", ".join(messages))
 
 
 def stop_on_signals():
@@ -310,6 +315,70 @@ def probe_session(store, lines, after_gap, sleep=time.sleep):
         restore_signals(old)
 
 
+ATTEMPT_COLUMNS = ("seq", "op", "revision", "idempotency_key", "status", "http_status", "request_body", "response_json",
+                   "sent_at", "responded_at")
+
+
+def save_intent_evidence(api, db, intent, evidence):
+    """The intent as the owner's API shows it, its events and its merchant attempts (each with its request body and the
+    outcome the service stored), into evidence/, sanitized and redacted. Kept on every way out, a failed quote
+    included; each part on its own, so one that cannot be read does not lose the rest."""
+    def write(name, value):
+        with open(os.path.join(evidence, name), "w") as f:
+            f.write(spike.redact(json.dumps(spike.sanitize(value), indent=2, sort_keys=True)) + "\n")
+    for name, path in (("intent.json", "/api/intents/%s" % intent), ("events.json", "/api/intents/%s/events" % intent)):
+        try:
+            body = api.json("GET", path)
+            if isinstance(body, dict) and body.get("handoff_url"):
+                remember(body["handoff_url"])
+            write(name, body)
+        except Exception as e:
+            say("WARNING: %s not saved: %s" % (name, e))
+    try:
+        rows = db_rows(db, "SELECT %s FROM merchant_attempt WHERE intent_id = ? ORDER BY seq" % ", ".join(ATTEMPT_COLUMNS),
+                       (intent,))
+        write("attempts.json", [dict(zip(ATTEMPT_COLUMNS, r)) for r in rows])
+        for r in rows:
+            a = dict(zip(ATTEMPT_COLUMNS, r))
+            say("attempt %s %s: %s, http %s, %s" % (a["seq"], a["op"], a["status"], a["http_status"],
+                                                   spike.redact(json.dumps(spike.sanitize(a["response_json"])))[:300]))
+    except Exception as e:
+        say("WARNING: attempts.json not saved: %s" % e)
+
+
+def replay_failed_quote(store, db, intent):
+    """The last create or update of a quote that opened no approval, sent again with its own idempotency key and body,
+    so the store's raw answer (which the service keeps only as a summary) is recorded. A store that honours the key
+    answers as it did the first time and creates nothing new; a checkout the answer names is canceled either way (N1)."""
+    rows = db_rows(db, "SELECT op, idempotency_key, request_body FROM merchant_attempt WHERE intent_id = ? "
+                       "AND op IN ('CREATE', 'UPDATE') ORDER BY seq DESC LIMIT 1", (intent,))
+    if not rows:
+        say("no create or update to replay: the quote failed before any call reached the gateway")
+        return
+    op, key, body = rows[0]
+    checkout = json.loads(body) if body else {}
+    if not store.endpoint:
+        store.open()
+    if op == "CREATE":
+        tool, name, arguments = "create_checkout", "agent_create_replay", {"checkout": checkout}
+    else:
+        session = (db_row(db, "SELECT session_id FROM purchase_intent WHERE id = ?", (intent,)) or [None])[0]
+        tool, name, arguments = "update_checkout", "agent_update_replay", {"id": session, "checkout": checkout}
+    try:
+        answer = store.tool("%s (replay of the agent's, same key)" % tool, tool, arguments, name, True, key=key)
+    except Exception as e:      # the store's error answer is recorded as name.error by spike.call
+        say("replay answered with an error: %s" % e)
+        return
+    say(totals_line(name, answer))
+    if answer.get("id"):
+        try:
+            canceled = store.tool("cancel_checkout (the replay's checkout)", "cancel_checkout", {"id": answer["id"]},
+                                  "agent_replay_cancel", True)
+            say("replay's checkout canceled (status: %s)" % canceled.get("status"))
+        except Exception as e:      # a checkout left open must be loud
+            say("WARNING: the replay's checkout may be left open: %s" % e)
+
+
 def approve_all(api, intent, db, interactive, auto):
     """Approves each card the run opens, up to MAX_APPROVALS, and returns the settled intent and the count."""
     approvals = 0
@@ -356,6 +425,8 @@ def main(argv):
         say("DRY-RUN service: java -jar %s, environment %s, log to %s/service.log" % (jar, json.dumps(shown, sort_keys=True), evidence))
         say("DRY-RUN wait for %s/readyz; sign in as %s; POST /api/runs {\"message\": %s}" % (base, USER, json.dumps(query)))
         say("DRY-RUN wait for AWAITING_APPROVAL; read the agent's checkout id from the temporary database (memory only)")
+        say("DRY-RUN if the quote opens no approval: replay the agent's last create or update with its own key and body, "
+            "record request and answer, cancel any checkout the answer names, then stop")
         store.open()
         store.tool("get_checkout (the agent's checkout, right after its quote)", "get_checkout", {"id": "<agent checkout>"},
                    "agent_get_checkout_0s")
@@ -378,6 +449,7 @@ def main(argv):
             say("DRY-RUN --cancel-after: after the owner has seen the store's page, cancel the agent's checkout")
             store.tool("cancel_checkout (the agent's checkout, VERIFY 5)", "cancel_checkout", {"id": "<agent checkout>"},
                        "agent_cancel_checkout", True)
+        say("DRY-RUN on every way out: save intent.json, events.json and attempts.json (redacted) to %s" % evidence)
         say("DRY-RUN stop the service; delete the temporary directory")
         return 0
 
@@ -391,12 +463,14 @@ def main(argv):
     tmp = tempfile.mkdtemp(prefix="ucplab-live-")
     proc = None
     log = None
+    api = None
+    intent = None
+    db = os.path.join(tmp, "ucplab.db")
     try:
         with open(os.path.join(tmp, "merchants.yaml"), "w") as f:
             f.write(merchants_yaml(domain))
         with open(os.path.join(tmp, "policy.yaml"), "w") as f:
             f.write(POLICY_YAML)
-        db = os.path.join(tmp, "ucplab.db")
         log = open(os.path.join(evidence, "service.log"), "w")
         proc = subprocess.Popen(["java", "-jar", jar], env=service_env(os.environ, tmp, port), stdout=log,
                                 stderr=subprocess.STDOUT, cwd=tmp)
@@ -419,6 +493,7 @@ def main(argv):
         body = wait_state(api, intent, ("AWAITING_APPROVAL",) + TERMINAL, QUOTE_TIMEOUT)
         say("intent %s %s" % (intent, body.get("state")))
         if body.get("state") != "AWAITING_APPROVAL":
+            replay_failed_quote(store, db, intent)
             raise SystemExit("stopped: the quote did not open an approval (%s, %s)" % (body.get("state"),
                                                                                      body.get("failure_reason")))
         session = (db_row(db, "SELECT session_id FROM purchase_intent WHERE id = ?", (intent,)) or [None])[0]
@@ -444,10 +519,6 @@ def main(argv):
                                                     "WHERE intent_id = ? ORDER BY seq", (intent,))]
         spike.record("agent_attempts", {"intent_state": state, "failure_reason": body.get("failure_reason"),
                                         "approvals": approvals, "requote_count": requotes, "attempts": attempts})
-        events = api.json("GET", "/api/intents/%s/events" % intent)
-        with open(os.path.join(evidence, "events.json"), "w") as f:
-            f.write(spike.redact(json.dumps(events, indent=2, sort_keys=True)) + "\n")
-
         url = body.get("handoff_url")
         if state == "HANDED_OFF" and url:
             remember(url)
@@ -461,6 +532,8 @@ def main(argv):
         return 0
     finally:
         ignore_signals()
+        if intent and api:
+            save_intent_evidence(api, db, intent, evidence)
         if proc and proc.poll() is None:
             proc.terminate()
             try:
