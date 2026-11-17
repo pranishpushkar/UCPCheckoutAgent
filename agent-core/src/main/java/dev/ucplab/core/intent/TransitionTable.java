@@ -55,6 +55,8 @@ public final class TransitionTable {
             row(QUOTING, TransitionEvent.OBSERVED_COMPLETE_IN_PROGRESS, TransitionGuard.NONE, RECONCILING, SideEffect.NONE),
             // A create with every item unavailable has no session: nothing to cancel.
             row(QUOTING, TransitionEvent.CREATE_REJECTED, TransitionGuard.NONE, FAILED_NOT_CHARGED, SideEffect.NONE),
+            // A refused update: the session exists, so its cancel is owed (8.1, error envelope).
+            row(QUOTING, TransitionEvent.UPDATE_REJECTED, TransitionGuard.NONE, FAILED_NOT_CHARGED, SideEffect.CANCEL_SESSION_BEST_EFFORT),
             // A ProtocolError on complete does not settle the outcome: reconcile, never FAILED_NOT_CHARGED.
             row(COMPLETING, TransitionEvent.PROTOCOL_ERROR, TransitionGuard.NONE, RECONCILING, SideEffect.NONE),
             // The approval behind an APPROVED intent is not usable (I3): nothing is sent, a human must look.

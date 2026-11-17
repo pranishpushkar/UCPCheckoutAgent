@@ -1,0 +1,148 @@
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"ucp\":{\"capabilities\":{\"dev.shopify.catalog\":[{\"extends\":[\"dev.ucp.shopping.catalog.search\",\"dev.ucp.shopping.catalog.lookup\"],\"requires\":{\"protocol\":{\"min\":\"2026-04-08\"}},\"schema\":\"https://shopify.dev/ucp/schemas/2026-04-08/shopify_catalog.json\",\"spec\":\"https://shopify.dev/docs/agents/catalog/storefront-catalog\",\"version\":\"2026-04-08\"}],\"dev.ucp.shopping.cart\":[{\"schema\":\"https://ucp.dev/2026-04-08/schemas/shopping/cart.json\",\"spec\":\"https://ucp.dev/2026-04-08/specification/cart\",\"version\":\"2026-04-08\"}],\"dev.ucp.shopping.catalog.lookup\":[{\"schema\":\"https://ucp.dev/2026-04-08/schemas/shopping/catalog_lookup.json\",\"spec\":\"https://ucp.dev/2026-04-08/specification/catalog\",\"version\":\"2026-04-08\"}],\"dev.ucp.shopping.catalog.search\":[{\"schema\":\"https://ucp.dev/2026-04-08/schemas/shopping/catalog_search.json\",\"spec\":\"https://ucp.dev/2026-04-08/specification/catalog\",\"version\":\"2026-04-08\"}],\"dev.ucp.shopping.checkout\":[{\"schema\":\"https://ucp.dev/2026-04-08/schemas/shopping/checkout.json\",\"spec\":\"https://ucp.dev/2026-04-08/specification/checkout\",\"version\":\"2026-04-08\"}],\"dev.ucp.shopping.discount\":[{\"extends\":[\"dev.ucp.shopping.checkout\",\"dev.ucp.shopping.cart\"],\"requires\":{\"protocol\":{\"min\":\"2026-04-08\"}},\"schema\":\"https://ucp.dev/2026-04-08/schemas/shopping/discount.json\",\"spec\":\"https://ucp.dev/2026-04-08/specification/discount\",\"version\":\"2026-04-08\"}],\"dev.ucp.shopping.fulfillment\":[{\"config\":{\"allows_method_combinations\":[[\"shipping\"]],\"allows_multi_destination\":{\"shipping\":false}},\"extends\":[\"dev.ucp.shopping.checkout\",\"dev.ucp.shopping.cart\"],\"requires\":{\"protocol\":{\"min\":\"2026-04-08\"}},\"schema\":\"https://ucp.dev/2026-04-08/schemas/shopping/fulfillment.json\",\"spec\":\"https://ucp.dev/2026-04-08/specification/fulfillment\",\"version\":\"2026-04-08\"}],\"dev.ucp.shopping.order\":[{\"schema\":\"https://ucp.dev/2026-04-08/schemas/shopping/order.json\",\"spec\":\"https://ucp.dev/2026-04-08/specification/order/\",\"version\":\"2026-04-08\"}]},\"payment_handlers\":{\"dev.shopify.card\":[{\"config\":{\"payment_methods\":[{\"enabled_card_brands\":[\"bogus\"],\"type\":\"card\"}]},\"id\":\"shopify.card\",\"schema\":\"https://shopify.dev/ucp/card-payment-handler/2026-01-15/schema.json\",\"spec\":\"https://shopify.dev/ucp/card-payment-handler/2026-01-15/spec.md\",\"version\":\"2026-01-15\"}]},\"services\":{\"dev.ucp.shopping\":[]},\"status\":\"error\",\"version\":\"2026-04-08\"},\"messages\":[{\"code\":\"buyer_identity_email_is_invalid\",\"content\":\"Email is invalid\",\"content_type\":\"plain\",\"path\":\"$.buyer.email\",\"severity\":\"unrecoverable\",\"type\":\"error\"}],\"continue_url\":\"https://example-dev.myshopify.com\"}"
+      }
+    ],
+    "isError": true,
+    "structuredContent": {
+      "ucp": {
+        "capabilities": {
+          "dev.shopify.catalog": [
+            {
+              "extends": [
+                "dev.ucp.shopping.catalog.search",
+                "dev.ucp.shopping.catalog.lookup"
+              ],
+              "requires": {
+                "protocol": {
+                  "min": "2026-04-08"
+                }
+              },
+              "schema": "https://shopify.dev/ucp/schemas/2026-04-08/shopify_catalog.json",
+              "spec": "https://shopify.dev/docs/agents/catalog/storefront-catalog",
+              "version": "2026-04-08"
+            }
+          ],
+          "dev.ucp.shopping.cart": [
+            {
+              "schema": "https://ucp.dev/2026-04-08/schemas/shopping/cart.json",
+              "spec": "https://ucp.dev/2026-04-08/specification/cart",
+              "version": "2026-04-08"
+            }
+          ],
+          "dev.ucp.shopping.catalog.lookup": [
+            {
+              "schema": "https://ucp.dev/2026-04-08/schemas/shopping/catalog_lookup.json",
+              "spec": "https://ucp.dev/2026-04-08/specification/catalog",
+              "version": "2026-04-08"
+            }
+          ],
+          "dev.ucp.shopping.catalog.search": [
+            {
+              "schema": "https://ucp.dev/2026-04-08/schemas/shopping/catalog_search.json",
+              "spec": "https://ucp.dev/2026-04-08/specification/catalog",
+              "version": "2026-04-08"
+            }
+          ],
+          "dev.ucp.shopping.checkout": [
+            {
+              "schema": "https://ucp.dev/2026-04-08/schemas/shopping/checkout.json",
+              "spec": "https://ucp.dev/2026-04-08/specification/checkout",
+              "version": "2026-04-08"
+            }
+          ],
+          "dev.ucp.shopping.discount": [
+            {
+              "extends": [
+                "dev.ucp.shopping.checkout",
+                "dev.ucp.shopping.cart"
+              ],
+              "requires": {
+                "protocol": {
+                  "min": "2026-04-08"
+                }
+              },
+              "schema": "https://ucp.dev/2026-04-08/schemas/shopping/discount.json",
+              "spec": "https://ucp.dev/2026-04-08/specification/discount",
+              "version": "2026-04-08"
+            }
+          ],
+          "dev.ucp.shopping.fulfillment": [
+            {
+              "config": {
+                "allows_method_combinations": [
+                  [
+                    "shipping"
+                  ]
+                ],
+                "allows_multi_destination": {
+                  "shipping": false
+                }
+              },
+              "extends": [
+                "dev.ucp.shopping.checkout",
+                "dev.ucp.shopping.cart"
+              ],
+              "requires": {
+                "protocol": {
+                  "min": "2026-04-08"
+                }
+              },
+              "schema": "https://ucp.dev/2026-04-08/schemas/shopping/fulfillment.json",
+              "spec": "https://ucp.dev/2026-04-08/specification/fulfillment",
+              "version": "2026-04-08"
+            }
+          ],
+          "dev.ucp.shopping.order": [
+            {
+              "schema": "https://ucp.dev/2026-04-08/schemas/shopping/order.json",
+              "spec": "https://ucp.dev/2026-04-08/specification/order/",
+              "version": "2026-04-08"
+            }
+          ]
+        },
+        "payment_handlers": {
+          "dev.shopify.card": [
+            {
+              "config": {
+                "payment_methods": [
+                  {
+                    "enabled_card_brands": [
+                      "bogus"
+                    ],
+                    "type": "card"
+                  }
+                ]
+              },
+              "id": "shopify.card",
+              "schema": "https://shopify.dev/ucp/card-payment-handler/2026-01-15/schema.json",
+              "spec": "https://shopify.dev/ucp/card-payment-handler/2026-01-15/spec.md",
+              "version": "2026-01-15"
+            }
+          ]
+        },
+        "services": {
+          "dev.ucp.shopping": []
+        },
+        "status": "error",
+        "version": "2026-04-08"
+      },
+      "messages": [
+        {
+          "code": "buyer_identity_email_is_invalid",
+          "content": "Email is invalid",
+          "content_type": "plain",
+          "path": "$.buyer.email",
+          "severity": "unrecoverable",
+          "type": "error"
+        }
+      ],
+      "continue_url": "https://example-dev.myshopify.com"
+    }
+  }
+}

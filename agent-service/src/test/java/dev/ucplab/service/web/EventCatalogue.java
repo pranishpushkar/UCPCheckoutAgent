@@ -28,6 +28,8 @@ public final class EventCatalogue {
             Map.entry("reconcile_wait", Set.of("reason")),
             Map.entry("fulfillment_selection_needed", Set.of("status")),
             Map.entry("fulfillment_unsupported", Set.of("reason")),
+            // 7.2 create_rejected, update_rejected: the refusal's bounded codes, never its content (I8).
+            Map.entry("quote_refused", Set.of("codes")),
             Map.entry("escalated", Set.of("attempts")),
             Map.entry("merchant_changed", Set.of("from")),
             Map.entry("merchant_not_owned", Set.of("from")),

@@ -48,13 +48,13 @@ class ShopifyFixturesTest {
         return Stream.concat(forbidden, hosts).toList();
     }
 
-    // Covers: I8, H5 F (the folder holds exactly the five stripped answers and the README; the global catalog, other
+    // Covers: I8, H5 F (the folder holds exactly the six stripped answers and the README; the global catalog, other
     // stores' products and text, was never copied)
     @Test
     void folder_holdsExactlyTheStrippedAnswers() throws IOException {
         assertThat(files()).map(p -> p.getFileName().toString()).containsExactly(
                 "README.md", "cancel_checkout.json", "catalog_search_store.error.json", "catalog_search_store.json",
-                "create_checkout.json", "store_profile.json");
+                "create_checkout.json", "create_checkout_refused.json", "store_profile.json");
     }
 
     // Covers: I8, I12, H5 F (no file holds a real checkout key, a cart permalink, a store host but the placeholder, an IP

@@ -12,6 +12,7 @@ import dev.ucplab.core.merchant.CheckoutStatus;
 import dev.ucplab.core.merchant.CheckoutView;
 import dev.ucplab.core.merchant.FrozenBody;
 import dev.ucplab.core.merchant.IdempotencyKey;
+import dev.ucplab.core.merchant.MerchantMessage;
 import dev.ucplab.ucp.ApiCall;
 import dev.ucplab.ucp.FailureClassifier;
 import dev.ucplab.ucp.Gate;
@@ -351,6 +352,71 @@ class McpTransportTest {
                         .isInstanceOf(CallOutcome.Uncertain.class);
             }
             assertThat(classify(AttemptOp.GET, reply(200, answer))).isInstanceOf(CallOutcome.ProtocolError.class);
+        }
+    }
+
+    /** The store's recorded refusal (H5 Stage 3): isError, a UCP error envelope in structuredContent, no id. */
+    static String refusedAnswer() {
+        Map<String, Object> answer = new LinkedHashMap<>(LenientJson.readObject(fixture("create_checkout_refused.json")));
+        answer.put("id", RPC_ID);
+        return McpJson.write(answer);
+    }
+
+    // Covers: 8.4 (tool errors: an isError result whose structuredContent is a UCP error envelope is a business
+    // refusal, read as over REST), 8.1 (the error-envelope row: Rejected for a create or an update, never retried),
+    // VERIFY 8 (answered in H5 Stage 3)
+    @Test
+    void aToolError_withAUcpErrorEnvelope_isPassedThrough() {
+        for (AttemptOp op : List.of(AttemptOp.CREATE, AttemptOp.UPDATE)) {
+            assertThat(classify(op, reply(200, refusedAnswer()))).as(op.name())
+                    .isInstanceOfSatisfying(CallOutcome.Rejected.class, r -> assertThat(r.messages())
+                            .singleElement().satisfies(m -> {
+                                assertThat(((MerchantMessage) m).code()).isEqualTo("buyer_identity_email_is_invalid");
+                                assertThat(((MerchantMessage) m).severity()).contains("unrecoverable");
+                            }));
+        }
+        assertThat(classify(AttemptOp.GET, reply(200, refusedAnswer()))).isInstanceOf(CallOutcome.ProtocolError.class);
+        assertThat(classify(AttemptOp.CANCEL, reply(200, refusedAnswer()))).isInstanceOf(CallOutcome.Uncertain.class);
+        assertThat(classify(AttemptOp.COMPLETE, reply(200, refusedAnswer()))).isInstanceOf(CallOutcome.Uncertain.class);
+    }
+
+    // Covers: 8.4 (only a UCP error envelope passes a tool error through: each part of it checked, the rest become the
+    // empty body every parser refuses, so no merchant text passes). Kills McpTransport.refusal:47-49
+    @Test
+    void aToolError_passesOnlyAsAWholeEnvelope_theRestBecomesAnEmptyBody() {
+        String refused = refusedAnswer();
+        String messages = "\"messages\":[{\"code\":\"buyer_identity_email_is_invalid\",\"content\":\"Email is invalid\","
+                + "\"content_type\":\"plain\",\"path\":\"$.buyer.email\",\"severity\":\"unrecoverable\",\"type\":\"error\"}]";
+        assertThat(refused).contains(messages);
+        assertThat(McpTransport.unwrap(RPC_ID, VERSION, reply(200, refused)).body()).isNotEmpty();
+        Map<String, String> broken = new LinkedHashMap<>();
+        broken.put("status not error", refused.replace("\"status\":\"error\"", "\"status\":\"success\""));
+        broken.put("no messages", refused.replace(messages, "\"note\":[]"));
+        broken.put("messages not a list", refused.replace(messages, "\"messages\":\"x\""));
+        broken.put("a message not an object", refused.replace(messages, "\"messages\":[\"x\"]"));
+        broken.put("a message with no code", refused.replace(messages, "\"messages\":[{\"type\":\"error\"}]"));
+        broken.put("a code not text", refused.replace(messages, "\"messages\":[{\"code\":5}]"));
+        broken.put("a blank code", refused.replace(messages, "\"messages\":[{\"code\":\" \"}]"));
+        broken.forEach((why, answer) -> {
+            assertThat(answer).as(why).isNotEqualTo(refused);
+            assertThat(McpTransport.unwrap(RPC_ID, VERSION, reply(200, answer)).body()).as(why).isEmpty();
+        });
+    }
+
+    // Covers: 8.4 (any other isError result stays unreadable: an envelope at another version, one without a coded
+    // message, or one whose status is not error)
+    @Test
+    void aToolError_withoutAUsableEnvelope_staysUnreadable() {
+        String refused = refusedAnswer();
+        List<String> answers = List.of(
+                refused.replace("\"version\":\"" + VERSION + "\"", "\"version\":\"2026-01-23\""),
+                refused.replace("\"code\":\"buyer_identity_email_is_invalid\"", "\"code\":\"\""),
+                refused.replace("\"status\":\"error\"", "\"status\":\"success\""));
+        for (String answer : answers) {
+            assertThat(answer).isNotEqualTo(refused);
+            for (AttemptOp op : MUTATING) {
+                assertThat(classify(op, reply(200, answer))).as(op.name()).isInstanceOf(CallOutcome.Uncertain.class);
+            }
         }
     }
 

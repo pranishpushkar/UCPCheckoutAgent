@@ -25,6 +25,7 @@ import dev.ucplab.core.intent.StepResult;
 import dev.ucplab.core.merchant.CallOutcome;
 import dev.ucplab.core.merchant.CheckoutStatus;
 import dev.ucplab.core.merchant.CheckoutView;
+import dev.ucplab.core.merchant.MerchantMessage;
 import dev.ucplab.core.merchant.FrozenBody;
 import dev.ucplab.core.merchant.FulfillmentView;
 import dev.ucplab.core.merchant.IdempotencyKey;
@@ -701,10 +702,10 @@ class OrchestratorQuoteMutationTest {
     }
 
     // Covers: 8.1, 7.2. Kills DefaultOrchestrator.onQuoteOutcome:638 and :643 and rejectedReason:1353 / :1354 (NO_COVERAGE): a
-    // Rejected create ends the intent with the code the merchant gave (or create_rejected); a Rejected answer to an update
-    // cannot settle anything, so it ends as exhausted
+    // Rejected create ends the intent with the code the merchant gave (or create_rejected); a Rejected update ends
+    // update_rejected, whatever its code (7.2 update_rejected, H5 Stage 3)
     @Test
-    void aRejectedAnswer_endsACreateWithItsCode_andAnUpdateAsExhausted() {
+    void aRejectedAnswer_endsACreateWithItsCode_andAnUpdateAsUpdateRejected() {
         for (String code : List.of("out_of_stock", "item_unavailable", "something_else")) {
             lab = new Lab();
             w = lab.worker("worker-a", new RewritingGateway(lab.merchant).rewrite(MerchantCall.CREATE,
@@ -727,7 +728,26 @@ class OrchestratorQuoteMutationTest {
         w.orchestrator().advance(id);
         w.orchestrator().advance(id);
         assertThat(lab.intent(id).state()).isEqualTo(IntentState.FAILED_NOT_CHARGED);
-        assertThat(lab.intent(id).failureReason()).contains("quote_retries_exhausted");
+        assertThat(lab.intent(id).failureReason()).contains("update_rejected");
+    }
+
+    // Covers: 7.2 create_rejected, update_rejected, I8 (the quote_refused event names a refusal's codes only: lower-cased,
+    // bare codes of at most 64 characters, at most 10; anything else a merchant put there is dropped). Kills
+    // DefaultOrchestrator.refusalCodes (the filter)
+    @Test
+    void theRefusalsCodes_areBareCodesOnly_atMostTen() {
+        List<MerchantMessage> messages = new java.util.ArrayList<>(List.of(error("Buyer_Email_Is_Invalid"),
+                error("has a space"), error("x".repeat(65)), error("ok_" + "y".repeat(61)), error("")));
+        for (int i = 0; i < 12; i++) {
+            messages.add(error("code_" + i));
+        }
+
+        List<String> codes = DefaultOrchestrator.refusalCodes(messages);
+
+        assertThat(codes).hasSize(10);
+        assertThat(codes.subList(0, 2)).containsExactly("buyer_email_is_invalid", "ok_" + "y".repeat(61));
+        assertThat(codes.subList(2, 10)).containsExactly("code_0", "code_1", "code_2", "code_3", "code_4", "code_5",
+                "code_6", "code_7");
     }
 
     // Covers: 8.1, 8.2, 7.2. Kills DefaultOrchestrator.onQuoteOutcome:645, :650, :656 (NO_COVERAGE) and isRetryable:1358: a

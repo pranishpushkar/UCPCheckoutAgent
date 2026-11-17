@@ -79,7 +79,10 @@ class TransitionTableTest {
             row(32, "APPROVED", "UNCERTAIN", "NONE", "APPROVED", "NONE"),
             row(33, "APPROVED", "HAND_OFF_REFUSED", "NONE", "FAILED_NOT_CHARGED", "CANCEL_SESSION"),
             row(34, "APPROVED", "HAND_OFF_UNEXPECTED", "NONE", "ESCALATED", "ESCALATION_EVENT"),
-            row(35, "APPROVED", "HANDOFF_TIMEOUT", "NONE", "REJECTED", "CANCEL_SESSION"));
+            row(35, "APPROVED", "HANDOFF_TIMEOUT", "NONE", "REJECTED", "CANCEL_SESSION"),
+            // Added in H5 Stage 3 (8.1): "QUOTING | update_rejected | none | FAILED_NOT_CHARGED | ... cancel_pending".
+            // DESIGN lists it after create_rejected (row 23); numbered last so the rows above keep their numbers.
+            row(36, "QUOTING", "UPDATE_REJECTED", "NONE", "FAILED_NOT_CHARGED", "CANCEL_SESSION_BEST_EFFORT"));
 
     static Stream<Arguments> expectedRows() {
         return EXPECTED.stream();

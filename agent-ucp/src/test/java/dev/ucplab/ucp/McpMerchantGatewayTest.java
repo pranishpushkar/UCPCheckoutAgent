@@ -288,6 +288,19 @@ class McpMerchantGatewayTest {
         assertThat(v.order()).isEmpty();
     }
 
+    // Covers: 8.1 (the error-envelope row), 8.2, 8.4 (the store's recorded refusal of a create, H5 Stage 3: Rejected
+    // with its code, sent once, as a definite answer is never retried)
+    @Test
+    void aRefusedCreate_isRejected_sentOnce_withItsCode() {
+        store.answer("create_checkout", "create_checkout_refused.json");
+
+        CallOutcome<CheckoutView> out = gateway().create(ONE_BOARD, CREATE_KEY);
+
+        assertThat(out).isInstanceOfSatisfying(CallOutcome.Rejected.class, r -> assertThat(r.messages())
+                .extracting(m -> ((MerchantMessage) m).code()).containsExactly("buyer_identity_email_is_invalid"));
+        assertThat(store.toolCalls()).hasSize(1);
+    }
+
     // Covers: 8.1, 7.2 (a create answered requires_escalation is an Ok with that status)
     @Test
     void create_answeredRequiresEscalation_isOkWithThatStatus() {

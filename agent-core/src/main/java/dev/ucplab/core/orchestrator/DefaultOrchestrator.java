@@ -76,6 +76,7 @@ import java.time.Instant;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -85,6 +86,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.random.RandomGenerator;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -129,6 +131,10 @@ public final class DefaultOrchestrator implements Orchestrator {
     static final String PAYMENT_INVALID = "payment_invalid";
     static final String QUOTE_RETRIES_EXHAUSTED = "quote_retries_exhausted";
     static final String CREATE_REJECTED_REASON = "create_rejected";
+    static final String UPDATE_REJECTED_REASON = "update_rejected";
+    /** The most codes an event names (7.2 create_rejected, update_rejected). */
+    static final int MAX_EVENT_CODES = 10;
+    private static final Pattern BARE_CODE = Pattern.compile("[a-z0-9_]{1,64}");
     static final String QUANTITY_ADJUSTED = "quantity_adjusted";
     static final String QUOTE_LINES_DIFFER = "quote_lines_differ";
     static final String APPROVAL_EXPIRED = "approval_expired";
@@ -738,13 +744,12 @@ public final class DefaultOrchestrator implements Orchestrator {
                 // An answer that is neither a quote nor a known failure: retry under the same key until exhausted.
                 yield exhaustQuoting(base, attempt, AttemptStatus.RESPONDED, http, summary);
             }
-            case CallOutcome.Rejected<CheckoutView> r when create -> finish(written, attempt, AttemptStatus.RESPONDED,
-                    Optional.of(r.httpStatus()), Optional.of(describe(r)), move(written, TransitionEvent.CREATE_REJECTED),
-                    rejectedReason(r));
-            // Rejected is valid only for create (8.1). On an update it cannot settle anything, so it is retried
-            // like an answer that is neither a quote nor a known failure.
-            case CallOutcome.Rejected<CheckoutView> r -> exhaustQuoting(written, attempt, AttemptStatus.RESPONDED,
-                    Optional.of(r.httpStatus()), Optional.of(describe(r)));
+            // 8.1's error envelope: the merchant refused, so the outcome is known and nothing is retried. A refused
+            // create has no session; a refused update's session is cancelled (the row's side effect).
+            case CallOutcome.Rejected<CheckoutView> r when create -> refused(written, attempt, r,
+                    move(written, TransitionEvent.CREATE_REJECTED), rejectedReason(r));
+            case CallOutcome.Rejected<CheckoutView> r -> refused(written, attempt, r,
+                    move(written, TransitionEvent.UPDATE_REJECTED), UPDATE_REJECTED_REASON);
             case CallOutcome.ProtocolError<CheckoutView> e when isRetryable(e) -> exhaustQuoting(written, attempt,
                     AttemptStatus.RESPONDED, Optional.of(e.httpStatus()), Optional.of(describe(e)));
             case CallOutcome.ProtocolError<CheckoutView> e -> {
@@ -828,6 +833,24 @@ public final class DefaultOrchestrator implements Orchestrator {
             Optional<String> response) {
         return finish(base, attempt, status, http, response, move(base, TransitionEvent.RETRIES_EXHAUSTED),
                 QUOTE_RETRIES_EXHAUSTED);
+    }
+
+    /** A refusal in an error envelope (7.2 create_rejected, update_rejected): event quote_refused with its codes only. */
+    private Step refused(PurchaseIntent base, MerchantAttempt attempt, CallOutcome.Rejected<CheckoutView> r, Move m,
+                         String failureReason) {
+        Step step = finish(base, attempt, AttemptStatus.RESPONDED, Optional.of(r.httpStatus()), Optional.of(describe(r)),
+                m, failureReason);
+        event(base.id(), "quote_refused", Map.of("codes", refusalCodes(r.messages())));
+        return step;
+    }
+
+    /**
+     * The codes of a refusal, for its event: at most {@link #MAX_EVENT_CODES}, each lower-cased and kept only if it is a
+     * bare code of at most 64 characters (8.1); never a message's content (I8).
+     */
+    static List<String> refusalCodes(List<MerchantMessage> messages) {
+        return messages.stream().map(m -> m.code().toLowerCase(Locale.ROOT)).filter(c -> BARE_CODE.matcher(c).matches())
+                .limit(MAX_EVENT_CODES).toList();
     }
 
     /** Resolves the attempt and moves to a terminal state with a failure reason, in one write. */

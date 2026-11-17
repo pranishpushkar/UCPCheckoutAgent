@@ -135,7 +135,9 @@ public final class FailureClassifier {
         return switch (parsed) {
             case CheckoutParser.Parsed.Checkout c ->
                     new CallOutcome.Ok<>(reply.status(), c.view(), c.view().messages());
-            case CheckoutParser.Parsed.CreateRejected r when op == AttemptOp.CREATE && reply.status() == 200 ->
+            // 8.1's error-envelope row: a refused create or update (no session id) is a definite answer.
+            case CheckoutParser.Parsed.CreateRejected r
+                    when (op == AttemptOp.CREATE || op == AttemptOp.UPDATE) && reply.status() == 200 ->
                     new CallOutcome.Rejected<>(reply.status(), r.messages());
             case CheckoutParser.Parsed.CreateRejected r -> invalid(op, reply.status(), "unexpected create-rejected envelope");
             case CheckoutParser.Parsed.Invalid i -> invalid(op, reply.status(), i.reason());

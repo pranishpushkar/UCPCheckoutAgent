@@ -10,6 +10,7 @@ in `./mvnw verify` reads these files; none goes to the network.
 | `catalog_search_store.json` | the store's own MCP catalog search, cut to 3 of its 10 products | 2026-04-08 |
 | `create_checkout.json` | MCP `create_checkout` for one variant, no buyer | 2026-04-08 |
 | `cancel_checkout.json` | MCP `cancel_checkout` of that checkout | 2026-04-08 |
+| `create_checkout_refused.json` | MCP `create_checkout` refused (`isError`, a UCP error envelope, no id): the buyer email `buyer_identity_email_is_invalid`, recorded by the live run on 2026-11-17 | 2026-04-08 |
 | `catalog_search_store.error.json` | HTTP 422, JSON-RPC -32000: the search sent without the buyer IP header | none (an error) |
 
 ## The strip
@@ -21,6 +22,9 @@ in `./mvnw verify` reads these files; none goes to the network.
   recorded.
 - Media are removed: the `media` lists and line items' `image_url`.
 - In each MCP answer, `content[].text` is the stripped `structuredContent` serialized again, as Shopify sends it.
+- `create_checkout_refused.json` keeps the recorded messages; its `ucp` block is `create_checkout.json`'s with
+  `status: error` (the recorded block differed only in `payment_handlers`), and its `continue_url` is the
+  placeholder host.
 
 ## Rules
 

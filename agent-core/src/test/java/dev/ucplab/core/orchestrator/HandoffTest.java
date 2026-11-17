@@ -198,6 +198,25 @@ class HandoffTest {
                 .contains("\"buyer\":{\"email\":\"" + lab.alice().email() + "\"}");
     }
 
+    // Covers: 7.2 create_rejected (a refused create, as the store refused the Stage 3 rerun's: FAILED_NOT_CHARGED,
+    // create_rejected; no session, so no cancel and no orphan probe; event quote_refused with the code only), I8
+    @Test
+    void aRefusedCreate_endsCreateRejected_withItsCode_andNoProbe() {
+        MerchantMessage refused = new MerchantMessage("error", "buyer_identity_email_is_invalid",
+                Optional.of("$.buyer.email"), "Email is invalid", Optional.of("unrecoverable"));
+        Lab.Worker worker = lab.worker("w", new RewritingGateway(lab.merchant).rewrite(MerchantCall.CREATE,
+                always(new CallOutcome.Rejected<>(200, List.of(refused)))));
+        IntentId id = worker.orchestrator().propose(lab.alice(), SHOP, TWO_SHIRTS, "buy").intentId();
+
+        assertThat(lab.drive(worker, id)).isEqualTo(IntentState.FAILED_NOT_CHARGED);
+
+        assertThat(lab.intent(id).failureReason()).contains("create_rejected");
+        assertThat(lab.intent(id).cancelPending()).isFalse();
+        assertThat(lab.intents.attempts(id)).extracting(a -> a.op()).containsExactly(AttemptOp.CREATE);
+        assertThat(events(id, "quote_refused")).containsExactly("{\"codes\":[\"buyer_identity_email_is_invalid\"]}");
+        assertThat(events(id, "quote_refused").getFirst()).doesNotContain("Email is invalid");
+    }
+
     // Covers: 7.2 quote_ready (handoff) (a ready_for_complete answer with no blocking message is a quote at a handoff
     // merchant too: the lab merchant answers incomplete there since no email is sent (8.4), so this is forced)
     @Test
