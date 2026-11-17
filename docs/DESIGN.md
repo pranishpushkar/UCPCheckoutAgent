@@ -1338,6 +1338,8 @@ Real stores already expose UCP, so the agent can in principle talk to them. This
 
 The real integration for this project is a store the owner owns: a Shopify development store, private, reached over its UCP MCP endpoint and added to the registry next to the lab merchants with `completion: handoff` (19). The H5 spike (`docs/interop/shopify-spike.md`) recorded what that store answers. The buyer finishes on the store's page; the agent never completes there (N1).
 
+**What the live run settled (H5 Stage 3, VERIFY 5, answered).** `cancel_checkout` works on a handed-off checkout: after the owner had opened its `continue_url`, the cancel answered HTTP 200 with status `canceled`, so the best-effort cancels of 7.6 reach a checkout the buyer was sent to. The `continue_url` has the form `https://<store>/cart/c/<token>?key=<key>`, where `<token>` is the checkout id's; it is the buyer's way into the checkout and is stored as `handoff_url` only (10, I8). The checkout's `expires_at` is 30 days after it was last read or written (every `get_checkout` moved it), so an untouched handed-off checkout stays open about 30 days; a cancel ends it at once.
+
 ### 26.2 Version negotiation \[CONTRACT\]
 
 - The agent declares a set of supported UCP versions: 2026-08-25 and, after H1, 2026-04-08.
