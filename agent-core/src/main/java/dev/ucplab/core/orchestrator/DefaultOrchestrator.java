@@ -557,7 +557,7 @@ public final class DefaultOrchestrator implements Orchestrator {
         String body;
         Supplier<CallOutcome<CheckoutView>> call;
         if (create) {
-            CreateCheckout request = new CreateCheckout(intent.lines(), Optional.of(intent.buyerEmail()));
+            CreateCheckout request = new CreateCheckout(intent.lines(), buyerEmailFor(intent));
             body = CheckoutWire.createBody(request);
             call = () -> merchant.create(request, key);
         } else {
@@ -566,7 +566,7 @@ public final class DefaultOrchestrator implements Orchestrator {
             // intent stored (8.4). Nothing is fetched: one merchant call per step.
             Optional<QuoteShape> last = lastQuoteShape(attempts);
             // A re-quote repeats the shipping selection the last response showed (full replacement, 8.4).
-            UpdateCheckout request = UpdateCheckout.from(intent.lines(), Buyer.ofEmail(intent.buyerEmail()), last)
+            UpdateCheckout request = UpdateCheckout.from(intent.lines(), buyerFor(intent), last)
                     .withFulfillment(FulfillmentSteps.carry(last.flatMap(QuoteShape::fulfillment)));
             body = CheckoutWire.updateBody(request);
             call = () -> merchant.update(session, request, key);
@@ -658,8 +658,7 @@ public final class DefaultOrchestrator implements Orchestrator {
         MerchantGateway merchant = gateway(intent);
         SessionId session = requireSession(intent);
         IdempotencyKey key = IdempotencyKey.derive(intent.id(), MutatingOp.UPDATE, updates);
-        UpdateCheckout request = UpdateCheckout.from(intent.lines(), Buyer.ofEmail(intent.buyerEmail()),
-                lastQuoteShape(attempts)).withFulfillment(Optional.of(selection));
+        UpdateCheckout request = UpdateCheckout.from(intent.lines(), buyerFor(intent), lastQuoteShape(attempts)).withFulfillment(Optional.of(selection));
         Optional<Step> refused = refuseSend(intent, attempts);
         if (refused.isPresent()) {
             return refused.get();
@@ -1409,7 +1408,7 @@ public final class DefaultOrchestrator implements Orchestrator {
             return stopProbing(intent, "orphan_probe_gave_up", Map.of("probes", probes));
         }
         MerchantAttempt original = creates.get(0);
-        CreateCheckout request = new CreateCheckout(intent.lines(), Optional.of(intent.buyerEmail()));
+        CreateCheckout request = new CreateCheckout(intent.lines(), buyerEmailFor(intent));
         FrozenBody frozen = original.requestBody().orElse(null);
         IdempotencyKey key = original.idempotencyKey().orElse(null);
         if (frozen == null || key == null || !frozen.json().equals(CheckoutWire.createBody(request))) {
@@ -1637,6 +1636,19 @@ public final class DefaultOrchestrator implements Orchestrator {
 
     // ---------------------------------------------------------------- handoff (7.2, 19)
     // Kept at the end of the class: a lambda here does not renumber the earlier ones the mutation equivalents name.
+
+    /**
+     * The buyer email a create or update sends (8.4): none at a handoff merchant, where the buyer gives it on the
+     * merchant's page. The orphan probe rebuilds its create by the same rule, so the body stays byte-identical (I7).
+     */
+    private Optional<String> buyerEmailFor(PurchaseIntent intent) {
+        return handoff(intent) ? Optional.empty() : Optional.of(intent.buyerEmail());
+    }
+
+    /** As {@link #buyerEmailFor}, as the buyer an update starts from (the view's own fields are added to it). */
+    private Buyer buyerFor(PurchaseIntent intent) {
+        return new Buyer(buyerEmailFor(intent), Optional.empty(), Optional.empty(), Optional.empty());
+    }
 
     /** Whether the merchant's {@code completion} is {@code handoff} (19). */
     private boolean handoff(PurchaseIntent intent) {

@@ -19,6 +19,7 @@ import dev.ucplab.core.merchant.CallOutcome;
 import dev.ucplab.core.merchant.CheckoutStatus;
 import dev.ucplab.core.merchant.CheckoutView;
 import dev.ucplab.core.merchant.CreateCheckout;
+import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantGateway;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantProfile;
@@ -89,6 +90,28 @@ class OrphanProbeTest {
         assertThat(attempts(id, AttemptOp.CANCEL)).hasSize(1);
         assertThat(intent.cancelPending()).isFalse();
         assertNothingWasEverCompleted();
+    }
+
+    // Covers: 7.6 (M3 note), 8.4, I7 (at a handoff merchant the probe rebuilds the create by the same no-buyer rule, so
+    // its body is byte-identical to the frozen one and it is sent: it learns the session and cancels it)
+    @Test
+    void aHandoffProbe_resendsTheFrozenBodyByteForByte() {
+        MerchantEntry handoff = HandoffTest.HANDOFF;
+        lab.entries = id -> id.equals(SHOP) ? Optional.of(handoff) : Optional.empty();
+        Lab.Worker atTheStore = lab.worker("worker-h");
+        lab.merchant.addRule(FaultRule.nth(MerchantCall.CREATE, 1, new Fault.CommitThenDrop()));
+        IntentId id = lab.propose(atTheStore, TWO_SHIRTS).intentId();
+        assertThat(lab.intent(id).state()).isEqualTo(FAILED_NOT_CHARGED);
+
+        assertThat(lab.drive(atTheStore, id)).isEqualTo(FAILED_NOT_CHARGED);
+
+        List<MerchantAttempt> creates = attempts(id, AttemptOp.CREATE);
+        assertThat(creates).hasSize(2);
+        assertThat(creates).extracting(a -> a.requestBody().orElseThrow()).containsOnly(creates.get(0).requestBody().orElseThrow());
+        assertThat(creates.get(0).requestBody().orElseThrow().json()).doesNotContain("\"buyer\"");
+        assertThat(lab.merchant.session(lab.intent(id).sessionId().orElseThrow()).orElseThrow().status())
+                .isEqualTo(CheckoutStatus.CANCELED);
+        assertThat(lab.intent(id).cancelPending()).isFalse();
     }
 
     // Covers: 7.6 (M3 note), I1 (create UNCERTAIN after an answer that was not NotSent: the same probe and cancel)

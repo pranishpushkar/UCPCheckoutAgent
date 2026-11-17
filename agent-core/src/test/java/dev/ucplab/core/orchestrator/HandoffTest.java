@@ -82,6 +82,11 @@ class HandoffTest {
                 v.order(), v.buyer(), v.messages(), v.fulfillment(), v.fulfillmentMinor(), v.fulfillmentOffered());
     }
 
+    static CheckoutView withoutMessages(CheckoutView v) {
+        return new CheckoutView(v.id(), v.status(), v.currency(), v.lines(), v.subtotalMinor(), v.taxMinor(), v.totalMinor(),
+                v.order(), v.buyer(), List.of(), v.fulfillment(), v.fulfillmentMinor(), v.fulfillmentOffered());
+    }
+
     static CheckoutView total(CheckoutView v, long total) {
         return new CheckoutView(v.id(), v.status(), v.currency(), v.lines(), v.subtotalMinor(), v.taxMinor(), total,
                 v.order(), v.buyer(), v.messages(), v.fulfillment(), v.fulfillmentMinor(), v.fulfillmentOffered());
@@ -138,6 +143,70 @@ class HandoffTest {
 
         assertThat(lab.drive(worker, id)).isEqualTo(IntentState.FAILED_NOT_CHARGED);
         assertThat(lab.intent(id).failureReason()).contains("quote_retries_exhausted");
+    }
+
+    /** The bodies of the intent's creates and updates, in order, as frozen and sent. */
+    private List<String> sentBodies(IntentId id) {
+        return lab.intents.attempts(id).stream().filter(a -> a.op() == AttemptOp.CREATE || a.op() == AttemptOp.UPDATE)
+                .map(a -> a.requestBody().orElseThrow().json()).toList();
+    }
+
+    // Covers: 8.4 (no buyer identity at a handoff merchant), 19, I8 (the create and the re-quote's update send no buyer:
+    // the buyer gives it on the merchant's page; H5 Stage 3, where the store refused the local sign-in's email)
+    @Test
+    void aHandoffCreateAndUpdate_sendNoBuyer() {
+        Lab.Worker worker = lab.worker("w", new RewritingGateway(lab.merchant).rewrite(MerchantCall.GET,
+                view(Optional.of(URL), v -> total(v, v.totalMinor() + 1))));
+        IntentId id = approved(worker);
+        worker.orchestrator().advance(id);
+        assertThat(lab.drive(worker, id)).isEqualTo(IntentState.AWAITING_APPROVAL);
+
+        assertThat(lab.intents.attempts(id)).extracting(a -> a.op()).contains(AttemptOp.CREATE, AttemptOp.UPDATE);
+        assertThat(sentBodies(id)).isNotEmpty().allSatisfy(body -> {
+            assertThat(body).doesNotContain("\"buyer\"");
+            assertThat(body).doesNotContain(lab.alice().email());
+        });
+    }
+
+    // Covers: 8.4, 9.1 (a handoff merchant that needs shipping: the selection updates send no buyer either. The lab
+    // merchant says "buyer email is required" while it has none, and a selection is sent only on an answer without
+    // messages, so the rewrite drops them)
+    @Test
+    void aHandoffSelectionUpdate_sendsNoBuyer() {
+        lab.merchant.enableFulfillment();
+        UnaryOperator<CallOutcome<CheckoutView>> noMessages = outcome -> outcome instanceof CallOutcome.Ok<CheckoutView> ok
+                ? new CallOutcome.Ok<>(ok.httpStatus(), withoutMessages(ok.value()), List.of()) : outcome;
+        Lab.Worker worker = lab.worker("w", new RewritingGateway(lab.merchant).rewrite(MerchantCall.CREATE, noMessages)
+                .rewrite(MerchantCall.UPDATE, noMessages));
+        IntentId id = worker.orchestrator().propose(lab.alice(), SHOP, TWO_SHIRTS, "buy").intentId();
+        for (int i = 0; i < 20 && lab.intent(id).state() == IntentState.QUOTING; i++) {
+            worker.orchestrator().advance(id);
+        }
+
+        assertThat(lab.intents.attempts(id)).filteredOn(a -> a.op() == AttemptOp.UPDATE).isNotEmpty();
+        assertThat(sentBodies(id)).allSatisfy(body -> assertThat(body).doesNotContain("\"buyer\""));
+    }
+
+    // Covers: 8.4 (an agent merchant still receives buyer.email: only handoff merchants drop it)
+    @Test
+    void anAgentMerchantCreate_stillSendsTheEmail() {
+        lab.entries = null;
+        Lab.Worker worker = lab.worker("w");
+        IntentId id = worker.orchestrator().propose(lab.alice(), SHOP, TWO_SHIRTS, "buy").intentId();
+
+        assertThat(sentBodies(id)).first().asString()
+                .contains("\"buyer\":{\"email\":\"" + lab.alice().email() + "\"}");
+    }
+
+    // Covers: 7.2 quote_ready (handoff) (a ready_for_complete answer with no blocking message is a quote at a handoff
+    // merchant too: the lab merchant answers incomplete there since no email is sent (8.4), so this is forced)
+    @Test
+    void quoteReady_atAHandoffMerchant_acceptsAReadyForCompleteAnswer() {
+        Lab.Worker worker = lab.worker("w", new RewritingGateway(lab.merchant).rewrite(MerchantCall.CREATE,
+                as(CheckoutStatus.READY_FOR_COMPLETE, false)));
+        IntentId id = worker.orchestrator().propose(lab.alice(), SHOP, TWO_SHIRTS, "buy").intentId();
+
+        assertThat(lab.drive(worker, id)).isEqualTo(IntentState.AWAITING_APPROVAL);
     }
 
     // Covers: 7.2 quote_ready (handoff) (a ready_for_complete answer is held to the same message rule: one with a
@@ -366,7 +435,8 @@ class HandoffTest {
             assertThat(g.requestHash()).isEmpty();
             assertThat(g.status()).isEqualTo(dev.ucplab.core.intent.AttemptStatus.RESPONDED);
             assertThat(g.revision()).isZero();
-            assertThat(g.responseJson()).contains("{\"hand_off\":\"changed\",\"status\":\"ready_for_complete\","
+            // The lab merchant is ready only once it holds an email (Appendix A); none is sent here (8.4).
+            assertThat(g.responseJson()).contains("{\"hand_off\":\"changed\",\"status\":\"incomplete\","
                     + "\"total_minor\":5401}");
         });
         lab.drive(worker, id);
