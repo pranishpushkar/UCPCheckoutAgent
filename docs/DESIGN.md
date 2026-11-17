@@ -472,7 +472,7 @@ Connect timeout 2 s. Request timeout 5 s, except `complete` at 10 s.
 
 One circuit breaker and one rate limiter per merchant (by `MerchantId`, shared by that merchant's checkout and catalog calls), held in memory and driven by the injected `Clock`. A merchant may use more than one host (8.5), so the host and port are not the key.
 
-- **Failures** are `NotSent`, `Uncertain` and 5xx. A 4xx, a 429, and business messages are not failures.
+- **Failures \[CONTRACT\]** are counted per HTTP attempt: an attempt with no reply (`NotSent`, a timeout, a reset) and a 5xx. An attempt the host answered with any other status is not a failure, even when its body cannot be read (the call is still `Uncertain`, 8.1): a 4xx, a 429, a refusal (`Rejected`, 8.1) and business messages reset the count.
 - It opens after 5 consecutive failures, stays open 30 s, then allows one probe.
 - A call rejected by the open breaker is `NotSent`. An open breaker blocks new quoting.
 - `get` calls used for reconciliation bypass it.

@@ -68,7 +68,22 @@ public final class RetryExecutor {
 
     private sealed interface Attempt {
 
-        record Result(CallOutcome<CheckoutView> outcome) implements Attempt {}
+        /** {@code status}: the HTTP status the host answered with, empty when no reply came. */
+        record Result(CallOutcome<CheckoutView> outcome, Optional<Integer> status) implements Attempt {
+
+            Result(CallOutcome<CheckoutView> outcome) {
+                this(outcome, Optional.empty());
+            }
+
+            /**
+             * 8.3: an Uncertain outcome the host answered with a status below 500 (a body it could not read, a status 8.1
+             * does not list) is not a breaker failure: the host is alive. Every other outcome is recorded as it is, so
+             * the rate limiter still sees a 429's Retry-After.
+             */
+            boolean answeredUnreadably() {
+                return outcome instanceof CallOutcome.Uncertain<CheckoutView> && status.filter(s -> s < 500).isPresent();
+            }
+        }
 
         record Replied(HttpReply reply) implements Attempt {}
     }
@@ -101,6 +116,7 @@ public final class RetryExecutor {
             Attempt result = once(call, raw);
             if (!call.bypassGate()) {
                 switch (result) {
+                    case Attempt.Result r when r.answeredUnreadably() -> gate.recordReplied();
                     case Attempt.Result r -> gate.record(r.outcome());
                     case Attempt.Replied r -> gate.recordReplied();
                 }
@@ -184,7 +200,7 @@ public final class RetryExecutor {
             if (raw && (reply.status() == 200 || reply.status() == 201)) {
                 return new Attempt.Replied(reply);
             }
-            return new Attempt.Result(classifier.classify(call.op(), reply));
+            return new Attempt.Result(classifier.classify(call.op(), reply), Optional.of(reply.status()));
         } catch (IOException | RuntimeException e) {
             return new Attempt.Result(classifier.classify(call.op(), e));
         }

@@ -545,4 +545,61 @@ class RetryExecutorTest {
         e.initCause(new java.nio.channels.UnresolvedAddressException());
         return e;
     }
+
+    private static HttpReply unreadable() {
+        return new HttpReply(200, Map.of(), "not json".getBytes(StandardCharsets.UTF_8));
+    }
+
+    // Covers: 8.3 (failures are counted per HTTP attempt, and an attempt the host answered is not one, even when its
+    // body cannot be read: two creates answered unreadably, 8 attempts, leave the breaker closed; each call is still
+    // Uncertain, 8.1. H5 Stage 3: one unreadable create and its probe opened the breaker for the store)
+    @Test
+    void anUnreadable2xx_isUncertain_butNotABreakerFailure() {
+        CircuitBreaker breaker = new CircuitBreaker(CONFIG, Clock.fixed(Instant.EPOCH, ZoneOffset.UTC));
+        for (int i = 0; i < 8; i++) {
+            transport.then(unreadable());
+        }
+        RetryExecutor executor = executor(CONFIG, breaker);
+
+        for (int call = 0; call < 2; call++) {
+            assertThat(executor.execute(call(AttemptOp.CREATE))).isInstanceOf(CallOutcome.Uncertain.class);
+        }
+
+        assertThat(transport.calls).hasSize(8);
+        assertThat(breaker.state()).isEqualTo(CircuitBreaker.State.CLOSED);
+    }
+
+    // Covers: 8.3 (an unreadable answer resets the count of consecutive failures, as any answer does: four timeouts,
+    // an unreadable answer and three timeouts leave the breaker closed and every attempt sent; without the reset the
+    // fifth failure opens it). Kills RetryExecutor.loop:119 (recordReplied)
+    @Test
+    void anUnreadableAnswer_resetsTheFailureCount() {
+        CircuitBreaker breaker = new CircuitBreaker(CONFIG, Clock.fixed(Instant.EPOCH, ZoneOffset.UTC));
+        transport.then(UNCERTAIN, UNCERTAIN, UNCERTAIN, UNCERTAIN, unreadable(), UNCERTAIN, UNCERTAIN, UNCERTAIN);
+        RetryExecutor executor = executor(CONFIG, breaker);
+
+        executor.execute(call(AttemptOp.CREATE));
+        executor.execute(call(AttemptOp.CREATE));
+
+        assertThat(transport.calls).hasSize(8);
+        assertThat(breaker.state()).isEqualTo(CircuitBreaker.State.CLOSED);
+    }
+
+    // Covers: 8.3 (an attempt with no reply, and a 5xx, are still failures: five in a row open the breaker)
+    @Test
+    void timeoutsAndServerErrors_stillOpenTheBreaker() {
+        for (Object failure : List.of(UNCERTAIN, status(500))) {
+            CircuitBreaker breaker = new CircuitBreaker(CONFIG, Clock.fixed(Instant.EPOCH, ZoneOffset.UTC));
+            transport.script.clear();
+            for (int i = 0; i < 8; i++) {
+                transport.then(failure);
+            }
+            RetryExecutor executor = executor(CONFIG, breaker);
+
+            executor.execute(call(AttemptOp.CREATE));
+            executor.execute(call(AttemptOp.CREATE));
+
+            assertThat(breaker.state()).as(String.valueOf(failure)).isEqualTo(CircuitBreaker.State.OPEN);
+        }
+    }
 }
