@@ -1713,15 +1713,21 @@ public final class DefaultOrchestrator implements Orchestrator {
         return handedOff(intent, decided, url.get());
     }
 
-    /** The GET shows the approved lines, currency and total, as the snapshot holds them (I2). */
+    /**
+     * The GET shows the approved lines, currency and total, as the snapshot holds them (I2). The lines are counted, not
+     * only collected: [A, B, B] is not [A, A, B].
+     */
     private static boolean sameAsApproved(CheckoutView view, ApprovalSnapshot snapshot) {
-        List<SnapshotLine> lines = new java.util.ArrayList<>();
+        Map<SnapshotLine, Integer> shown = new java.util.HashMap<>();
         for (LineView l : view.lines()) {
-            lines.add(new SnapshotLine(l.itemId(), l.quantity(), l.unitPriceMinor()));
+            shown.merge(new SnapshotLine(l.itemId(), l.quantity(), l.unitPriceMinor()), 1, Integer::sum);
+        }
+        Map<SnapshotLine, Integer> approved = new java.util.HashMap<>();
+        for (SnapshotLine l : snapshot.lines()) {
+            approved.merge(l, 1, Integer::sum);
         }
         return view.currency().equals(snapshot.currency()) && view.totalMinor() == snapshot.totalMinor()
-                && lines.size() == snapshot.lines().size()
-                && new java.util.HashSet<>(lines).equals(new java.util.HashSet<>(snapshot.lines()));
+                && shown.equals(approved);
     }
 
     /**

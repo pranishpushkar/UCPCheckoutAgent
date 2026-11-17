@@ -555,6 +555,44 @@ class HandoffTest {
         }
     }
 
+    // Covers: 7.2 hand_off_changed, I2 (the lines are counted: a GET showing [A, B, B] against an approved [A, A, B] is a
+    // change though the number of lines and their set are the same; the approved lines in another order are not)
+    @Test
+    void handOffChanged_countsRepeatedLines() {
+        List<dev.ucplab.core.intent.ProposedLine> basket = List.of(new dev.ucplab.core.intent.ProposedLine("item_123", 2),
+                new dev.ucplab.core.intent.ProposedLine("item_456", 1));
+        for (boolean changed : new boolean[] {true, false}) {
+            Lab one = newLab();
+            one.entries = lab.entries;
+            Lab.Worker worker = one.worker("w", new RewritingGateway(one.merchant)
+                    .rewrite(MerchantCall.CREATE, view(Optional.empty(), oneEach(0, 0, 1)))
+                    .rewrite(MerchantCall.GET, view(Optional.of(URL), changed ? oneEach(0, 1, 1) : oneEach(0, 1, 0))));
+            IntentId id = worker.orchestrator().propose(one.alice(), SHOP, basket, "buy").intentId();
+            assertThat(one.drive(worker, id)).isEqualTo(IntentState.AWAITING_APPROVAL);
+            one.decide(worker, id, true);
+
+            worker.orchestrator().advance(id);
+
+            assertThat(one.intent(id).state()).as(changed ? "[A, B, B] against [A, A, B]" : "[A, B, A] against [A, A, B]")
+                    .isEqualTo(changed ? IntentState.QUOTING : IntentState.HANDED_OFF);
+        }
+    }
+
+    /**
+     * The merchant's lines for item_123 and item_456 as lines of quantity 1 at their own prices, in {@code order}
+     * (0 is item_123, 1 is item_456), with the view's total kept.
+     */
+    private static UnaryOperator<CheckoutView> oneEach(int... order) {
+        return v -> {
+            List<LineView> one = new java.util.ArrayList<>();
+            for (String item : List.of("item_123", "item_456")) {
+                LineView l = v.lines().stream().filter(x -> x.itemId().equals(item)).findFirst().orElseThrow();
+                one.add(new LineView(l.itemId(), 1, l.unitPriceMinor(), l.lineId()));
+            }
+            return withLines(v, java.util.Arrays.stream(order).mapToObj(one::get).toList());
+        };
+    }
+
     /** The view with {@code lines} and its own total kept, so only the lines differ. */
     private static CheckoutView withLines(CheckoutView v, List<LineView> lines) {
         return new CheckoutView(v.id(), v.status(), v.currency(), lines, v.subtotalMinor(), v.taxMinor(), v.totalMinor(),
