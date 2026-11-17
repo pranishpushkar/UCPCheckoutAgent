@@ -132,6 +132,8 @@ public final class DefaultOrchestrator implements Orchestrator {
     static final String QUOTE_RETRIES_EXHAUSTED = "quote_retries_exhausted";
     static final String CREATE_REJECTED_REASON = "create_rejected";
     static final String UPDATE_REJECTED_REASON = "update_rejected";
+    static final String QUOTE_UNSUPPORTED = "quote_unsupported";
+    static final String FULFILLMENT_UNSUPPORTED = "fulfillment_unsupported";
     /** The most codes an event names (7.2 create_rejected, update_rejected). */
     static final int MAX_EVENT_CODES = 10;
     private static final Pattern BARE_CODE = Pattern.compile("[a-z0-9_]{1,64}");
@@ -706,7 +708,8 @@ public final class DefaultOrchestrator implements Orchestrator {
                 if (unsupportedFulfillment(view)) {
                     // One method and one group only (9.2): the snapshot could not name the rest of what was chosen.
                     event(base.id(), "fulfillment_unsupported", Map.of("reason", "more than one method or group"));
-                    yield exhaustQuoting(base, attempt, AttemptStatus.RESPONDED, http, summary);
+                    yield finish(base, attempt, AttemptStatus.RESPONDED, http, summary,
+                            move(base, TransitionEvent.QUOTE_UNSUPPORTED), FULFILLMENT_UNSUPPORTED);
                 }
                 Set<String> codes = codes(view);
                 if (codes.contains(OUT_OF_STOCK)) {
@@ -740,6 +743,13 @@ public final class DefaultOrchestrator implements Orchestrator {
                     yield quoteReady(base, attempt, http, summary, view,
                             view.status() == CheckoutStatus.REQUIRES_ESCALATION
                                     ? TransitionEvent.REQUIRES_ESCALATION : TransitionEvent.QUOTE_READY);
+                }
+                if (handoff(base)) {
+                    // 7.2 quote_unsupported (handoff): readable, but not a quote the buyer can finish from. Not retried.
+                    event(base.id(), "quote_unsupported", Map.of("status", view.status().wire(),
+                            "codes", refusalCodes(blocking(view))));
+                    yield finish(base, attempt, AttemptStatus.RESPONDED, http, summary,
+                            move(base, TransitionEvent.QUOTE_UNSUPPORTED), QUOTE_UNSUPPORTED);
                 }
                 // An answer that is neither a quote nor a known failure: retry under the same key until exhausted.
                 yield exhaustQuoting(base, attempt, AttemptStatus.RESPONDED, http, summary);
@@ -1682,6 +1692,12 @@ public final class DefaultOrchestrator implements Orchestrator {
      * 7.2 quote_ready (handoff) and requires_escalation (handoff): a status the buyer can finish from, and every
      * message recoverable or one of the three buyer codes. The lines and policy are checked as for any quote.
      */
+    /** The messages that keep a handoff answer from being a quote: neither recoverable nor on the allowlist. */
+    private static List<MerchantMessage> blocking(CheckoutView view) {
+        return view.messages().stream().filter(m -> !m.severity().equals(Optional.of("recoverable"))
+                && !HANDOFF_BUYER_CODES.contains(m.code())).toList();
+    }
+
     private static boolean handoffQuote(CheckoutView view) {
         CheckoutStatus s = view.status();
         if (s != CheckoutStatus.INCOMPLETE && s != CheckoutStatus.READY_FOR_COMPLETE

@@ -48,5 +48,7 @@ public enum TransitionEvent {
     /** 7.2 handoff_timeout: 5 minutes since the approval's persisted decision time (7.6). */
     HANDOFF_TIMEOUT,
     /** 7.2 update_rejected: the merchant refused an update with an error envelope (8.1). */
-    UPDATE_REJECTED
+    UPDATE_REJECTED,
+    /** 7.2 quote_unsupported (handoff), and fulfillment_unsupported: a readable answer the agent cannot use. */
+    QUOTE_UNSUPPORTED
 }

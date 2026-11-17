@@ -132,7 +132,7 @@ class HandoffTest {
     }
 
     // Covers: 7.2 quote_ready (handoff) (a message that is neither recoverable nor one of the three buyer codes is no
-    // quote: the answer takes the neither-a-quote-nor-a-known-failure path and QUOTING is exhausted)
+    // quote: the answer ends quote_unsupported)
     @Test
     void quoteReady_atAHandoffMerchant_refusesAnotherMessage() {
         MerchantMessage blocking = new MerchantMessage("error", "payment_required", Optional.empty(), "x",
@@ -142,7 +142,7 @@ class HandoffTest {
         IntentId id = worker.orchestrator().propose(lab.alice(), SHOP, TWO_SHIRTS, "buy").intentId();
 
         assertThat(lab.drive(worker, id)).isEqualTo(IntentState.FAILED_NOT_CHARGED);
-        assertThat(lab.intent(id).failureReason()).contains("quote_retries_exhausted");
+        assertThat(lab.intent(id).failureReason()).contains("quote_unsupported");
     }
 
     /** The bodies of the intent's creates and updates, in order, as frozen and sent. */
@@ -198,6 +198,61 @@ class HandoffTest {
                 .contains("\"buyer\":{\"email\":\"" + lab.alice().email() + "\"}");
     }
 
+    // Covers: 7.2 quote_unsupported (handoff) (a readable quote with a message that is neither recoverable nor on the
+    // allowlist ends quote_unsupported at once, not as exhausted; the session is cancelled; the event names the status
+    // and the blocking code only), 7.6, I8
+    @Test
+    void aQuoteWithAnUnrecoverableMessage_endsQuoteUnsupported_andCancels() {
+        MerchantMessage blocking = new MerchantMessage("error", "payment_required", Optional.empty(), "Pay first",
+                Optional.of("unrecoverable"));
+        // Neither of these blocks: one is recoverable (not on the allowlist), one is on the allowlist (not recoverable).
+        MerchantMessage recoverable = new MerchantMessage("warning", "quantity_note", Optional.empty(), "x",
+                Optional.of("recoverable"));
+        MerchantMessage allowlisted = new MerchantMessage("error", "delivery_address_required", Optional.empty(), "x",
+                Optional.of("requires_buyer_input"));
+        Lab.Worker worker = lab.worker("w", new RewritingGateway(lab.merchant).rewrite(MerchantCall.CREATE,
+                as(CheckoutStatus.INCOMPLETE, false, recoverable, allowlisted, blocking)));
+        IntentId id = worker.orchestrator().propose(lab.alice(), SHOP, TWO_SHIRTS, "buy").intentId();
+
+        assertThat(lab.intent(id).state()).isEqualTo(IntentState.FAILED_NOT_CHARGED);
+        assertThat(lab.intent(id).failureReason()).contains("quote_unsupported");
+        assertThat(lab.intent(id).cancelPending()).isTrue();
+        assertThat(events(id, "quote_unsupported"))
+                .containsExactly("{\"codes\":[\"payment_required\"],\"status\":\"incomplete\"}");
+
+        assertThat(lab.drive(worker, id)).isEqualTo(IntentState.FAILED_NOT_CHARGED);
+        assertThat(lab.merchant.session(lab.intent(id).sessionId().orElseThrow()).orElseThrow().status())
+                .isEqualTo(CheckoutStatus.CANCELED);
+        neverCompleted(id);
+    }
+
+    // Covers: 7.2 quote_unsupported (handoff) (a status the buyer cannot finish from, canceled here, is no quote either)
+    @Test
+    void aQuoteWithAnUnhandledStatus_endsQuoteUnsupported() {
+        Lab.Worker worker = lab.worker("w", new RewritingGateway(lab.merchant).rewrite(MerchantCall.CREATE,
+                as(CheckoutStatus.CANCELED, false)));
+        IntentId id = worker.orchestrator().propose(lab.alice(), SHOP, TWO_SHIRTS, "buy").intentId();
+
+        assertThat(lab.intent(id).state()).isEqualTo(IntentState.FAILED_NOT_CHARGED);
+        assertThat(lab.intent(id).failureReason()).contains("quote_unsupported");
+        assertThat(events(id, "quote_unsupported")).containsExactly("{\"codes\":[],\"status\":\"canceled\"}");
+    }
+
+    // Covers: 7.2 (at an agent merchant an answer that is neither a quote nor a known failure still ends
+    // quote_retries_exhausted: quote_unsupported is for handoff merchants only, follow-up 6 of PR #19)
+    @Test
+    void anAgentMerchant_unusableAnswer_staysQuoteRetriesExhausted() {
+        lab.entries = null;
+        MerchantMessage blocking = new MerchantMessage("error", "payment_required", Optional.empty(), "x",
+                Optional.of("unrecoverable"));
+        Lab.Worker worker = lab.worker("w", new RewritingGateway(lab.merchant).rewrite(MerchantCall.CREATE,
+                as(CheckoutStatus.INCOMPLETE, false, blocking)));
+        IntentId id = worker.orchestrator().propose(lab.alice(), SHOP, TWO_SHIRTS, "buy").intentId();
+
+        assertThat(lab.intent(id).failureReason()).contains("quote_retries_exhausted");
+        assertThat(events(id, "quote_unsupported")).isEmpty();
+    }
+
     // Covers: 7.2 create_rejected (a refused create, as the store refused the Stage 3 rerun's: FAILED_NOT_CHARGED,
     // create_rejected; no session, so no cancel and no orphan probe; event quote_refused with the code only), I8
     @Test
@@ -239,7 +294,7 @@ class HandoffTest {
         IntentId id = worker.orchestrator().propose(lab.alice(), SHOP, TWO_SHIRTS, "buy").intentId();
 
         assertThat(lab.drive(worker, id)).isEqualTo(IntentState.FAILED_NOT_CHARGED);
-        assertThat(lab.intent(id).failureReason()).contains("quote_retries_exhausted");
+        assertThat(lab.intent(id).failureReason()).contains("quote_unsupported");
     }
 
     // Covers: 7.2 quote_ready (handoff) (an unrecoverable buyer code is not enough: every message must be recoverable or
@@ -342,7 +397,7 @@ class HandoffTest {
         IntentId id = worker.orchestrator().propose(lab.alice(), SHOP, TWO_SHIRTS, "buy").intentId();
 
         assertThat(lab.drive(worker, id)).isEqualTo(IntentState.FAILED_NOT_CHARGED);
-        assertThat(lab.intent(id).failureReason()).contains("quote_retries_exhausted");
+        assertThat(lab.intent(id).failureReason()).contains("quote_unsupported");
         assertThat(lab.approvals.findLatestForSystem(id)).isEmpty();
     }
 
@@ -614,7 +669,7 @@ class HandoffTest {
         IntentId id = worker.orchestrator().propose(lab.alice(), SHOP, TWO_SHIRTS, "buy").intentId();
 
         assertThat(lab.drive(worker, id)).isEqualTo(IntentState.FAILED_NOT_CHARGED);
-        assertThat(lab.intent(id).failureReason()).contains("quote_retries_exhausted");
+        assertThat(lab.intent(id).failureReason()).contains("quote_unsupported");
     }
 
     // Covers: 7.2 hand_off_changed, I2 (the currency, the item, or the number of lines differs while the total is the

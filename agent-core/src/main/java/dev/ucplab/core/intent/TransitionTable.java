@@ -55,6 +55,9 @@ public final class TransitionTable {
             row(QUOTING, TransitionEvent.OBSERVED_COMPLETE_IN_PROGRESS, TransitionGuard.NONE, RECONCILING, SideEffect.NONE),
             // A create with every item unavailable has no session: nothing to cancel.
             row(QUOTING, TransitionEvent.CREATE_REJECTED, TransitionGuard.NONE, FAILED_NOT_CHARGED, SideEffect.NONE),
+            // A readable answer the agent cannot use (quote_unsupported at a handoff merchant, fulfillment_unsupported):
+            // the merchant answered, so nothing is retried; its session is cancelled.
+            row(QUOTING, TransitionEvent.QUOTE_UNSUPPORTED, TransitionGuard.NONE, FAILED_NOT_CHARGED, SideEffect.CANCEL_SESSION_BEST_EFFORT),
             // A refused update: the session exists, so its cancel is owed (8.1, error envelope).
             row(QUOTING, TransitionEvent.UPDATE_REJECTED, TransitionGuard.NONE, FAILED_NOT_CHARGED, SideEffect.CANCEL_SESSION_BEST_EFFORT),
             // A ProtocolError on complete does not settle the outcome: reconcile, never FAILED_NOT_CHARGED.

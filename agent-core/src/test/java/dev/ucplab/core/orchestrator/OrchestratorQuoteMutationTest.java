@@ -616,7 +616,7 @@ class OrchestratorQuoteMutationTest {
     }
 
     // Covers: 9.2, 7.2. Kills DefaultOrchestrator.lambda$unsupportedFulfillment$16:539 RemoveConditional_ORDER_IF, onQuoteOutcome:603
-    // area: a merchant that lists more than one group is not supported (the snapshot names one): the quote ends exhausted and
+    // area: a merchant that lists more than one group is not supported (the snapshot names one): the quote ends fulfillment_unsupported and
     // an event says why
     @Test
     void moreThanOneGroup_isUnsupported_andSaidSo() {
@@ -629,7 +629,7 @@ class OrchestratorQuoteMutationTest {
         }
 
         assertThat(lab.intent(id).state()).isEqualTo(IntentState.FAILED_NOT_CHARGED);
-        assertThat(lab.intent(id).failureReason()).contains("quote_retries_exhausted");
+        assertThat(lab.intent(id).failureReason()).contains("fulfillment_unsupported");
         assertThat(events(id, "fulfillment_unsupported")).singleElement()
                 .satisfies(e -> assertThat(e).contains("more than one method or group"));
     }

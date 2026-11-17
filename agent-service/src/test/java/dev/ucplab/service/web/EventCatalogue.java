@@ -30,6 +30,8 @@ public final class EventCatalogue {
             Map.entry("fulfillment_unsupported", Set.of("reason")),
             // 7.2 create_rejected, update_rejected: the refusal's bounded codes, never its content (I8).
             Map.entry("quote_refused", Set.of("codes")),
+            // 7.2 quote_unsupported (handoff): the status and the blocking codes, never message content (I8).
+            Map.entry("quote_unsupported", Set.of("status", "codes")),
             Map.entry("escalated", Set.of("attempts")),
             Map.entry("merchant_changed", Set.of("from")),
             Map.entry("merchant_not_owned", Set.of("from")),
