@@ -22,9 +22,9 @@ scripts/shopify-live.sh --i-own-this-store --with-buyer-ip --cancel-after       
 
 - `--dry-run` reads no Keychain item, makes no network call and starts nothing.
 - `--i-own-this-store` (DESIGN 26.5) and `--with-buyer-ip` (the store refuses every call without the IP) are required.
-- `--cancel-after` cancels the handed-off checkout once you have looked at the store's page (VERIFY 5: whether cancel
-  works on a handed-off checkout). Without it the checkout stays open until you cancel it in the store admin or it
-  expires.
+- `--cancel-after` cancels the handed-off checkout once you have looked at the store's page. It works (VERIFY 5,
+  answered in Stage 3: HTTP 200, status `canceled`). Without it the checkout stays open until you cancel it in the store
+  admin or it expires, about 30 days after it was last read.
 - `--approve` approves each card without asking, for a run with no terminal. Without it the script shows each card and
   asks.
 - `--query` (default `snowboard`), `--port` (default 8080), `--record DIR` and `--evidence DIR` (defaults under
@@ -74,7 +74,8 @@ scripts/shopify-live.sh --i-own-this-store --with-buyer-ip --cancel-after       
 
 The client id or secret, the access token, the buyer IP, the session cookie, the CSRF token, an approval token, the
 approval secret, or the handoff URL. Recorded answers go through the spike's `sanitize()` and `redact()`:
-`continue_url` and `checkout_url` are cut to their host, and every `?key=` is masked. Recordings and evidence go under
+`continue_url` and `checkout_url` are cut to their host, and every `?key=` is masked. The intent's `handoff_url` in
+`intent.json` is cut to its host too. Recordings and evidence go under
 `notes/` (git-ignored). A recording becomes a fixture only after the F strip (store host replaced, ids faked), since
 `ShopifyFixturesTest` scans every file in `agent-ucp/src/test/resources/shopify/`.
 

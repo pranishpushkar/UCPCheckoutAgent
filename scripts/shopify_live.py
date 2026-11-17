@@ -260,7 +260,7 @@ def restore_signals(old):
 def run_probe(store, lines, probe, after_gap, sleep=time.sleep):
     """The probe checkout: create, get at once, get PROBE_GAP s later (after_gap runs between), update with the same
     lines, cancel. probe["id"] is set as soon as the store names the checkout and cleared once it is canceled;
-    probe["sent"] once the create may have reached the store."""
+    probe["sent"] once the create may have reached the store, and cleared with probe["id"] by the cancel."""
     probe["sent"] = True
     created = store.tool("create_checkout (probe, the agent's lines)", "create_checkout",
                          {"checkout": {"line_items": lines}}, "probe_create_checkout", True)
@@ -283,6 +283,7 @@ def run_probe(store, lines, probe, after_gap, sleep=time.sleep):
         canceled = store.tool("cancel_checkout (probe)", "cancel_checkout", {"id": probe["id"]}, "probe_cancel_checkout", True)
         say("probe canceled (status: %s)" % canceled.get("status"))
         probe["id"] = None
+        probe["sent"] = False       # canceled: nothing is left at the store to warn about
 
 
 def finish_probe(store, probe):
@@ -330,7 +331,9 @@ def save_intent_evidence(api, db, intent, evidence):
         try:
             body = api.json("GET", path)
             if isinstance(body, dict) and body.get("handoff_url"):
+                # The buyer's way into the checkout (cart token and key): kept as its host only, as continue_url is.
                 remember(body["handoff_url"])
+                body = dict(body, handoff_url=spike.host_only(body["handoff_url"]))
             write(name, body)
         except Exception as e:
             say("WARNING: %s not saved: %s" % (name, e))

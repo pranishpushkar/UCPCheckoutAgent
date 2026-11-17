@@ -60,6 +60,14 @@ class ProbeCleanup(unittest.TestCase):
         self.assertIsNone(raised)
         self.assertEqual(store.calls.count("cancel_checkout"), 1)
 
+    def test_theHappyPath_isNotLoud(self):
+        # Stage 3: after "probe canceled (status: canceled)" the script also warned that a probe may be open with no id
+        store = FakeStore({"create_checkout": created(), "cancel_checkout": {"status": "canceled"}})
+        out, raised = session(store)
+        self.assertIsNone(raised)
+        self.assertIn("probe canceled (status: canceled)", out)
+        self.assertNotIn("WARNING", out)
+
     def test_anErrorAfterTheCreate_cancels(self):
         store = FakeStore({"create_checkout": created(), "get_checkout": RuntimeError("get_checkout answered HTTP 500")})
         _, raised = session(store)
@@ -220,6 +228,32 @@ class FailedQuoteEvidence(unittest.TestCase):
         self.assertEqual(sent[1][1], {"id": PROBE})
 
 
+
+class HandedOffEvidence(unittest.TestCase):
+    """A handed-off intent's evidence keeps where the buyer was sent (the host) but never the handoff URL itself: its
+    cart token and key are the buyer's way into the checkout (I8; docs/interop/shopify-live.md, What is never written)."""
+
+    INTENT = "01a1eabe-0000-7000-8000-000000000001"
+    URL = "https://my-dev-store.myshopify.com/cart/c/tok123cart?key=canarykey777"
+
+    def setUp(self):
+        self.work = tempfile.mkdtemp()
+        self.db = os.path.join(self.work, "ucplab.db")
+        attempts_db(self.db, self.INTENT, [])
+
+    def tearDown(self):
+        shutil.rmtree(self.work)
+
+    def test_theHandoffUrl_isCutToItsHost(self):
+        api = FakeApi(self.INTENT, [])
+        api.answers["/api/intents/" + self.INTENT] = {"id": self.INTENT, "state": "HANDED_OFF", "handoff_url": self.URL}
+        with redirect_stdout(io.StringIO()):
+            live.save_intent_evidence(api, self.db, self.INTENT, self.work)
+        intent = open(os.path.join(self.work, "intent.json")).read()
+        self.assertNotIn("tok123cart", intent)
+        self.assertNotIn("/cart/c/", intent)
+        self.assertNotIn("canarykey777", intent)
+        self.assertEqual(json.loads(intent)["handoff_url"], "https://my-dev-store.myshopify.com/...")
 
 class OwedCancels(unittest.TestCase):
     """Before the service stops, the script waits, bounded, for the run's owed cancels (7.6) to drain; what is still
