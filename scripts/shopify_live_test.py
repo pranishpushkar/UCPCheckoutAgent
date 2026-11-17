@@ -220,5 +220,76 @@ class FailedQuoteEvidence(unittest.TestCase):
         self.assertEqual(sent[1][1], {"id": PROBE})
 
 
+
+class OwedCancels(unittest.TestCase):
+    """Before the service stops, the script waits, bounded, for the run's owed cancels (7.6) to drain; what is still
+    owed at the bound, or was given up, is named so the owner can cancel it in the store admin, the key masked."""
+
+    OWED = "01a1ea58-0000-7000-8000-00000000000a"
+    ORPHAN = "01a1ea58-0000-7000-8000-00000000000b"
+    SESSION = "gid://shopify/Checkout/tok123?key=canarykey999"
+
+    def setUp(self):
+        self.work = tempfile.mkdtemp()
+        self.db = os.path.join(self.work, "ucplab.db")
+        with sqlite3.connect(self.db) as c:
+            c.execute("CREATE TABLE purchase_intent (id TEXT PRIMARY KEY, session_id TEXT, cancel_pending INTEGER, "
+                      "created_at TEXT)")
+            c.execute("CREATE TABLE intent_event (intent_id TEXT, seq INTEGER, type TEXT, payload_json TEXT, at TEXT)")
+            c.execute("INSERT INTO purchase_intent VALUES (?, ?, 1, 't0')", (self.OWED, self.SESSION))
+            c.execute("INSERT INTO purchase_intent VALUES (?, NULL, 1, 't0')", (self.ORPHAN,))
+
+    def tearDown(self):
+        shutil.rmtree(self.work)
+
+    def clear(self, intent):
+        with sqlite3.connect(self.db) as c:
+            c.execute("UPDATE purchase_intent SET cancel_pending = 0 WHERE id = ?", (intent,))
+
+    def drain(self, sleep, clock):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            left = live.drain_cancels(self.db, [self.OWED, self.ORPHAN], 30, sleep, clock)
+        return out.getvalue(), left
+
+    def test_owedCancels_thatDrain_areWaitedFor_andNothingIsLeft(self):
+        naps = []
+
+        def worker_pass(seconds):      # the service's recovery worker sends both cancels after two naps
+            naps.append(seconds)
+            if len(naps) == 2:
+                self.clear(self.OWED)
+                self.clear(self.ORPHAN)
+        out, left = self.drain(worker_pass, lambda: 0.0)
+        self.assertEqual(len(naps), 2, "the script waited for the worker")
+        self.assertEqual(left, [])
+        self.assertNotIn("WARNING", out)
+
+    def test_atTheBound_theCheckoutsStillOwed_areNamed_withTheirKeyMasked(self):
+        now = [0.0]
+
+        def nap(seconds):
+            now[0] += seconds
+        out, left = self.drain(nap, lambda: now[0])
+        self.assertGreaterEqual(now[0], 30, "it waited the whole bound")
+        self.assertLess(now[0], 32, "and no longer")
+        self.assertEqual(sorted(i for i, _ in left), sorted([self.OWED, self.ORPHAN]))
+        self.assertIn("gid://shopify/Checkout/tok123", out)
+        self.assertNotIn("canarykey999", out, "the checkout's key is never printed")
+        self.assertIn(self.ORPHAN, out)
+        self.assertIn("no checkout id", out)
+
+    def test_aCancelTheWorkerGaveUpOn_isNamed_too(self):
+        self.clear(self.OWED)
+        self.clear(self.ORPHAN)
+        with sqlite3.connect(self.db) as c:
+            c.execute("INSERT INTO intent_event VALUES (?, 1, 'cancel_gave_up', '{}', 't1')", (self.OWED,))
+        out, left = self.drain(lambda s: None, lambda: 0.0)
+        self.assertEqual(left, [])
+        self.assertIn("gave up", out)
+        self.assertIn("gid://shopify/Checkout/tok123", out)
+        self.assertNotIn("canarykey999", out)
+
+
 if __name__ == "__main__":
     unittest.main()

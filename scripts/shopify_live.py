@@ -379,6 +379,45 @@ def replay_failed_quote(store, db, intent):
             say("WARNING: the replay's checkout may be left open: %s" % e)
 
 
+DRAIN_TIMEOUT = 30         # the recovery worker runs every 5 s (7.6); three cancel attempts fit with room
+GAVE_UP = ("cancel_gave_up", "orphan_probe_gave_up")
+
+
+def checkout_named(session):
+    """A checkout as the owner can find it in the store admin: its id with the access key masked (I8)."""
+    return spike.sanitize(session) if session else "no checkout id (a create that may have made one the store never " \
+                                                   "named: look for an open checkout made at the run's time)"
+
+
+def owed_cancels(db, intents):
+    marks = ", ".join("?" * len(intents))
+    return db_rows(db, "SELECT id, session_id FROM purchase_intent WHERE cancel_pending = 1 AND id IN (%s) ORDER BY id"
+                   % marks, tuple(intents))
+
+
+def drain_cancels(db, intents, timeout=DRAIN_TIMEOUT, sleep=time.sleep, clock=time.time):
+    """Before the service stops: waits until none of the run's intents still owes a cancel (7.6), up to `timeout`, so the
+    recovery worker can send them. Names, key masked, every checkout still owed at the bound and every one the worker
+    gave up on, so the owner can cancel it in the store admin. Returns the (intent, session) pairs still owed."""
+    if not intents:
+        return []
+    deadline = clock() + timeout
+    owed = owed_cancels(db, intents)
+    while owed and clock() < deadline:
+        sleep(1)
+        owed = owed_cancels(db, intents)
+    for intent, session in owed:
+        say("WARNING: intent %s still owes a cancel after %d s, of %s: cancel it in the store admin"
+            % (intent, timeout, checkout_named(session)))
+    marks = ", ".join("?" * len(intents))
+    for intent, session, kind in db_rows(
+            db, "SELECT e.intent_id, p.session_id, e.type FROM intent_event e JOIN purchase_intent p ON p.id = e.intent_id "
+                "WHERE e.type IN (?, ?) AND e.intent_id IN (%s) ORDER BY e.intent_id, e.seq" % marks, GAVE_UP + tuple(intents)):
+        say("WARNING: the service gave up (%s) on intent %s, of %s: cancel it in the store admin"
+            % (kind, intent, checkout_named(session)))
+    return owed
+
+
 def approve_all(api, intent, db, interactive, auto):
     """Approves each card the run opens, up to MAX_APPROVALS, and returns the settled intent and the count."""
     approvals = 0
@@ -450,6 +489,8 @@ def main(argv):
             store.tool("cancel_checkout (the agent's checkout, VERIFY 5)", "cancel_checkout", {"id": "<agent checkout>"},
                        "agent_cancel_checkout", True)
         say("DRY-RUN on every way out: save intent.json, events.json and attempts.json (redacted) to %s" % evidence)
+        say("DRY-RUN wait up to %d s for the run's owed cancels to drain; name, key masked, any still owed or given up"
+            % DRAIN_TIMEOUT)
         say("DRY-RUN stop the service; delete the temporary directory")
         return 0
 
@@ -465,6 +506,7 @@ def main(argv):
     log = None
     api = None
     intent = None
+    intents = []
     db = os.path.join(tmp, "ucplab.db")
     try:
         with open(os.path.join(tmp, "merchants.yaml"), "w") as f:
@@ -485,7 +527,7 @@ def main(argv):
             run = api.json("GET", "/api/runs/" + run["run_id"])
         with open(os.path.join(evidence, "run.json"), "w") as f:
             f.write(spike.redact(json.dumps(run, indent=2, sort_keys=True)) + "\n")
-        intents = run.get("intent_ids") or []
+        intents[:] = run.get("intent_ids") or []
         say("run %s %s, intents %s" % (run.get("run_id"), run.get("status"), intents))
         if not intents:
             raise SystemExit("stopped: the run proposed no purchase (see run.json)")
@@ -534,6 +576,11 @@ def main(argv):
         ignore_signals()
         if intent and api:
             save_intent_evidence(api, db, intent, evidence)
+        if proc and proc.poll() is None and intents:
+            try:
+                drain_cancels(db, intents)
+            except Exception as e:      # the service must still be stopped
+                say("WARNING: the owed cancels could not be read: %s" % e)
         if proc and proc.poll() is None:
             proc.terminate()
             try:

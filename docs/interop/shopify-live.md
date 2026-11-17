@@ -56,6 +56,10 @@ scripts/shopify-live.sh --i-own-this-store --with-buyer-ip --cancel-after       
 7. In `HANDED_OFF`, prints the handoff URL **once, to the terminal, for the buyer only**. It is never written to a
    file or log.
 8. With `--cancel-after`, cancels the agent's checkout after you press Enter.
+9. Before stopping the service, waits up to 30 s for the run's owed cancels (7.6: the recovery worker sends each one,
+   every 5 s, up to three times) to drain. A checkout still owed at the bound, or one the service gave up on
+   (`cancel_gave_up`, `orphan_probe_gave_up`), is printed with its key masked, for you to cancel in the store admin.
+   The wait cannot be cut short by Ctrl-C, since it is part of the cleanup.
 
 ## What is sent, and to whom
 
