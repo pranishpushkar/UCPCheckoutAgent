@@ -12,6 +12,7 @@ import json
 import os
 import secrets as random_bytes
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -233,6 +234,82 @@ def totals_line(name, checkout):
                                                       json.dumps(totals, sort_keys=True))
 
 
+def stop_on_signals():
+    """SIGTERM and SIGHUP (a kill, a closed terminal) end the script as Ctrl-C does, so every cleanup runs. Returns the
+    handlers they had."""
+    def stop(signum, frame):
+        raise KeyboardInterrupt("signal %d" % signum)
+    return {s: signal.signal(s, stop) for s in (signal.SIGTERM, signal.SIGHUP)}
+
+
+def ignore_signals():
+    """No signal cuts a cleanup short. Returns the handlers they had."""
+    return {s: signal.signal(s, signal.SIG_IGN) for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+
+
+def restore_signals(old):
+    for s, handler in old.items():
+        signal.signal(s, handler)
+
+
+def run_probe(store, lines, probe, after_gap, sleep=time.sleep):
+    """The probe checkout: create, get at once, get PROBE_GAP s later (after_gap runs between), update with the same
+    lines, cancel. probe["id"] is set as soon as the store names the checkout and cleared once it is canceled;
+    probe["sent"] once the create may have reached the store."""
+    probe["sent"] = True
+    created = store.tool("create_checkout (probe, the agent's lines)", "create_checkout",
+                         {"checkout": {"line_items": lines}}, "probe_create_checkout", True)
+    probe["id"] = created.get("id")
+    say(totals_line("probe create", created))
+    if probe["id"]:
+        say(totals_line("probe get 0 s", store.tool("get_checkout (probe, right after create)", "get_checkout",
+                                                    {"id": probe["id"]}, "probe_get_checkout_0s")))
+        sleep(PROBE_GAP)
+        say(totals_line("probe get 60 s", store.tool("get_checkout (probe, 60 s later)", "get_checkout",
+                                                     {"id": probe["id"]}, "probe_get_checkout_60s")))
+    after_gap()
+    if probe["id"]:
+        got = store.tool("get_checkout (probe, its line ids)", "get_checkout", {"id": probe["id"]}, None)
+        update_lines = [dict({"id": li["id"]} if li.get("id") else {}, item={"id": (li.get("item") or {}).get("id")},
+                             quantity=li.get("quantity")) for li in got.get("line_items") or []]
+        say(totals_line("probe update", store.tool("update_checkout (probe, same lines)", "update_checkout",
+                                                   {"id": probe["id"], "checkout": {"line_items": update_lines}},
+                                                   "probe_update_checkout", True)))
+        canceled = store.tool("cancel_checkout (probe)", "cancel_checkout", {"id": probe["id"]}, "probe_cancel_checkout", True)
+        say("probe canceled (status: %s)" % canceled.get("status"))
+        probe["id"] = None
+
+
+def finish_probe(store, probe):
+    """On the way out: a probe checkout still open is canceled, with no signal able to cut the cancel short; one that
+    cannot be (it failed, or the store never named the checkout) is said out loud."""
+    if probe["id"]:
+        old = ignore_signals()
+        try:
+            store.tool("cancel_checkout (probe, on the way out)", "cancel_checkout", {"id": probe["id"]},
+                       "probe_cancel_checkout", True)
+            probe["id"] = None
+        except BaseException as e:      # a checkout left open must be loud
+            say("WARNING: the probe checkout may be left open: %s" % (str(e) or type(e).__name__))
+        finally:
+            restore_signals(old)
+    elif probe.get("sent"):
+        say("WARNING: a probe checkout may be open at the store, which named no id for it (the create was cut short or "
+            "answered without one): cancel it in the store admin")
+
+
+def probe_session(store, lines, after_gap, sleep=time.sleep):
+    """The probe from create to cancel; a probe still open on the way out, by an error, a timeout, Ctrl-C, SIGTERM or
+    SIGHUP, is canceled."""
+    probe = {"id": None, "sent": False}
+    old = stop_on_signals()
+    try:
+        run_probe(store, lines, probe, after_gap, sleep)
+    finally:
+        finish_probe(store, probe)
+        restore_signals(old)
+
+
 def approve_all(api, intent, db, interactive, auto):
     """Approves each card the run opens, up to MAX_APPROVALS, and returns the settled intent and the count."""
     approvals = 0
@@ -310,9 +387,9 @@ def main(argv):
     os.makedirs(evidence, exist_ok=True)
     spike.RECORD[0] = record
     remember(os.environ["BUYER_IP"])
+    stop_on_signals()
     tmp = tempfile.mkdtemp(prefix="ucplab-live-")
     proc = None
-    probe_id = None
     log = None
     try:
         with open(os.path.join(tmp, "merchants.yaml"), "w") as f:
@@ -352,28 +429,8 @@ def main(argv):
         store.open()
         say(totals_line("agent get 0 s", store.tool("get_checkout (the agent's checkout, right after its quote)",
                                                      "get_checkout", {"id": session}, "agent_get_checkout_0s")))
-        created = store.tool("create_checkout (probe, the agent's lines)", "create_checkout",
-                             {"checkout": {"line_items": lines}}, "probe_create_checkout", True)
-        probe_id = created.get("id")
-        say(totals_line("probe create", created))
-        if probe_id:
-            say(totals_line("probe get 0 s", store.tool("get_checkout (probe, right after create)", "get_checkout",
-                                                        {"id": probe_id}, "probe_get_checkout_0s")))
-            time.sleep(PROBE_GAP)
-            say(totals_line("probe get 60 s", store.tool("get_checkout (probe, 60 s later)", "get_checkout",
-                                                         {"id": probe_id}, "probe_get_checkout_60s")))
-        say(totals_line("agent get 60 s", store.tool("get_checkout (the agent's checkout, 60 s later)", "get_checkout",
-                                                     {"id": session}, "agent_get_checkout_60s")))
-        if probe_id:
-            got = store.tool("get_checkout (probe, its line ids)", "get_checkout", {"id": probe_id}, None)
-            update_lines = [dict({"id": li["id"]} if li.get("id") else {}, item={"id": (li.get("item") or {}).get("id")},
-                                 quantity=li.get("quantity")) for li in got.get("line_items") or []]
-            say(totals_line("probe update", store.tool("update_checkout (probe, same lines)", "update_checkout",
-                                                       {"id": probe_id, "checkout": {"line_items": update_lines}},
-                                                       "probe_update_checkout", True)))
-            canceled = store.tool("cancel_checkout (probe)", "cancel_checkout", {"id": probe_id}, "probe_cancel_checkout", True)
-            say("probe canceled (status: %s)" % canceled.get("status"))
-            probe_id = None
+        probe_session(store, lines, lambda: say(totals_line("agent get 60 s", store.tool(
+            "get_checkout (the agent's checkout, 60 s later)", "get_checkout", {"id": session}, "agent_get_checkout_60s"))))
 
         body, approvals = approve_all(api, intent, db, interactive, "--approve" in argv)
         state = body.get("state")
@@ -403,12 +460,7 @@ def main(argv):
                 say("agent checkout canceled (status: %s)" % canceled.get("status"))
         return 0
     finally:
-        if probe_id:
-            try:
-                store.tool("cancel_checkout (probe, on the way out)", "cancel_checkout", {"id": probe_id},
-                           "probe_cancel_checkout", True)
-            except Exception as e:      # a checkout left open must be loud
-                say("WARNING: the probe checkout may be left open: %s" % e)
+        ignore_signals()
         if proc and proc.poll() is None:
             proc.terminate()
             try:
