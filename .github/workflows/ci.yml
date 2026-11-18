@@ -32,7 +32,9 @@ jobs:
             echo "::error::/dev/shm has $(( ${free_kb:-0} / 1024 )) MiB free; the tests' temp files need at least 2048 MiB (-Dtest.tmpdir=/dev/shm)"
             exit 1
           fi
-      - run: ./mvnw -B -ntp -Dtest.tmpdir=/dev/shm verify
+      # -T 1C: one build thread per core, so modules that do not depend on each other (merchant, fault-proxy, agent-ucp
+      # beside agent-core and agent-persistence) build and test at the same time.
+      - run: ./mvnw -B -ntp -T 1C -Dtest.tmpdir=/dev/shm verify
       - name: /dev/shm after the tests
         if: always()
         run: df -h /dev/shm
