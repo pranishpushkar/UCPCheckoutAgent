@@ -1,7 +1,6 @@
 # H5: one live run at a Shopify development store
 
-Filled in from the Stage 3 run (`scripts/shopify-live.sh`, [shopify-live.md](../interop/shopify-live.md)). Items
-still marked `<…>` are the owner's to fill.
+Filled in from the Stage 3 run (`scripts/shopify-live.sh`, [shopify-live.md](../interop/shopify-live.md)).
 
 ## What ran
 
@@ -37,7 +36,8 @@ The run left nothing open: the probe checkout was canceled, and there were no ow
 
 ## What the buyer saw
 
-The handoff URL opened the store's cart page showing <what you saw, e.g. one Complete Snowboard, Ice, $699.95>; after cancel, <what reloading showed, if you checked>.
+The handoff URL opened the store's cart page showing one snowboard (variant …753174) at $699.95, matching the approval
+card. Not rechecked after the cancel.
 
 **The buyer may not be able to finish.** Every answer carried `delivery_no_delivery_available_for_merchandise_line`
 (recoverable). The development store has no shipping rate for this product, so the store's own checkout may refuse to
@@ -64,11 +64,11 @@ could differ between create and GET. That would show as `hand_off_changed` re-qu
 
 ## The leak scan
 
-`scripts/h5-leak-scan.sh`, over the run's evidence and recordings and the branch `develop..HEAD`:
-
-```
-<paste the scan output here>
-```
+`scripts/h5-leak-scan.sh`: **LEAK SCAN PASSED** over `notes/h5/stage3/evidence` and the recordings, and over
+`develop..HEAD`. It was run twice, with `BUYER_IP` set to the owner's current address and to the first run's address.
+Every check was 0: client secret, client id, buyer IP, the store domain with `/cart/c/`, an unredacted `?key=`,
+`Shopify-Buyer-IP` with a value, and `Authorization: Bearer` with a value. On the branch, 130 `?key=`, 43
+`Shopify-Buyer-IP` and 57 `Bearer` matches are test and doc fakes, reported as info only.
 
 A shape check without secrets, over the evidence and recordings, found no unmasked `?key=`, no buyer IP header with a
 value, no bearer token and no `shpat_` token. It also found one `/cart/c/<token>` URL in `intent.json`. The script
