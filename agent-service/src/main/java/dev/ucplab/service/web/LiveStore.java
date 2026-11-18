@@ -1,5 +1,7 @@
 package dev.ucplab.service.web;
 
+import dev.ucplab.core.merchant.MerchantEntry;
+import java.net.URI;
 import java.util.Optional;
 
 /**
@@ -13,6 +15,6 @@ public final class LiveStore {
 
     /** The store's domain when the merchant is a live store; empty otherwise. */
     public static Optional<String> domain(boolean owned, Optional<String> shopDomain) {
-        return Optional.empty();
+        return shopDomain.filter(d -> owned && !MerchantEntry.isLoopback(URI.create("https://" + d)));
     }
 }

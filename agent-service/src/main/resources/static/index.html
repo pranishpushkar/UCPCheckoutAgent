@@ -8,9 +8,13 @@
 </head>
 <body>
   <header>
-    <h1>UCP Checkout Lab</h1>
+    <div class="brand">
+      <h1>UCP Checkout Lab</h1>
+      <p class="subtitle">Agent shopping with your approval</p>
+    </div>
     <div class="who">
-      <span id="who">Not signed in</span>
+      <span id="merchant-mode" class="badge" hidden></span>
+      <span id="who" class="user-chip">Not signed in</span>
       <button type="button" id="sign-out" hidden>Sign out</button>
     </div>
   </header>
@@ -18,7 +22,7 @@
   <div id="status" class="status" role="status" aria-live="polite"></div>
 
   <main>
-    <section id="agent" aria-labelledby="agent-h">
+    <section id="agent" class="panel" aria-labelledby="agent-h">
       <h2 id="agent-h">Agent</h2>
       <ol id="chat" class="chat" aria-label="Conversation"></ol>
       <ul id="tools" class="tools" aria-label="Tool calls"></ul>
@@ -28,40 +32,47 @@
       <form id="send" autocomplete="off">
         <label for="message">Message</label>
         <input id="message" name="message" type="text" maxlength="2000" required>
-        <button type="submit">Send</button>
+        <button type="submit" class="primary">Send</button>
       </form>
     </section>
 
     <div class="right">
-      <section id="timeline-section" aria-labelledby="timeline-h">
-        <h2 id="timeline-h">Purchase intent</h2>
-        <p id="timeline-state" class="fixed"></p>
+      <section id="timeline-section" class="panel" aria-labelledby="timeline-h">
+        <h2 id="timeline-h">Purchase</h2>
+        <p id="timeline-state" class="muted"></p>
+        <ol id="steps" class="steps" aria-label="Milestones"></ol>
+        <div id="follow-up"></div>
         <p id="handoff"></p>
-        <p id="follow-up"></p>
-        <ol id="timeline" class="timeline"></ol>
+        <details id="all-events">
+          <summary id="events-toggle">Show all 0 events</summary>
+          <ol id="timeline" class="timeline"></ol>
+        </details>
         <ul id="other-intents" class="timeline" aria-label="The run's other intents"></ul>
       </section>
 
-      <section id="fault-lab" aria-labelledby="lab-h" hidden>
-        <h2 id="lab-h">Fault lab</h2>
-        <p><label for="lab-merchant">Merchant</label> <select id="lab-merchant"></select></p>
-        <div class="actions">
-          <button type="button" data-preset="drop_next_complete">Drop next complete response</button>
-          <button type="button" data-preset="merchant_503_20s">Merchant returns 503 for 20 s</button>
-          <button type="button" data-preset="merchant_down">Merchant down</button>
-          <button type="button" data-preset="change_price">Change price before complete</button>
-          <button type="button" id="clear-faults">Clear faults</button>
-          <button type="button" id="reset-lab">Reset lab</button>
-        </div>
-      </section>
+      <details id="dev-tools" class="dev-tools" hidden>
+        <summary>Developer tools</summary>
+        <section id="fault-lab" aria-labelledby="lab-h">
+          <h2 id="lab-h">Fault lab</h2>
+          <p><label for="lab-merchant">Merchant</label> <select id="lab-merchant"></select></p>
+          <div class="actions">
+            <button type="button" data-preset="drop_next_complete">Drop next complete response</button>
+            <button type="button" data-preset="merchant_503_20s">Merchant returns 503 for 20 s</button>
+            <button type="button" data-preset="merchant_down">Merchant down</button>
+            <button type="button" data-preset="change_price">Change price before complete</button>
+            <button type="button" id="clear-faults">Clear faults</button>
+            <button type="button" id="reset-lab">Reset lab</button>
+          </div>
+        </section>
 
-      <section id="counters" aria-labelledby="orders-h" hidden>
-        <h2 id="orders-h">Merchant orders and breaks</h2>
-        <dl class="counters">
-          <div><dt>Breaks</dt><dd id="breaks">n/a: computed by the evaluation</dd></div>
-        </dl>
-        <dl id="order-counters" class="counters" aria-label="Orders at each merchant"></dl>
-      </section>
+        <section id="counters" aria-labelledby="orders-h">
+          <h2 id="orders-h">Merchant orders and breaks</h2>
+          <dl class="counters">
+            <div><dt>Breaks</dt><dd id="breaks">n/a: computed by the evaluation</dd></div>
+          </dl>
+          <dl id="order-counters" class="counters" aria-label="Orders at each merchant"></dl>
+        </section>
+      </details>
     </div>
   </main>
 
