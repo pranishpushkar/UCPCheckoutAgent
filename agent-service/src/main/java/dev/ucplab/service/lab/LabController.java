@@ -5,11 +5,13 @@ import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.service.config.ServiceProperties;
 import dev.ucplab.service.web.ApiException;
 import dev.ucplab.service.web.ErrorCode;
+import dev.ucplab.service.web.LiveStore;
 import dev.ucplab.ucp.registry.ConfiguredMerchantRegistry;
 import dev.ucplab.ucp.registry.MerchantSettings;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -45,7 +47,8 @@ public class LabController {
     }
 
     /**
-     * The configured merchants, for the console's selector and counters (DESIGN 24.3): each one's id, name and status, and
+     * The configured merchants, for the console's selector, counters, header badge and Developer tools (DESIGN 23.3,
+     * 24.3): each one's id, name, status, completion and whether it is a live store, with its shop_domain when it is, and
      * the fixed reason while it is SUSPENDED. Never a URL, a lab address or a token reference.
      */
     @GetMapping("/api/lab/merchants")
@@ -56,6 +59,11 @@ public class LabController {
             entry.put("merchant_id", m.id().value());
             entry.put("name", m.name());
             entry.put("status", registry.find(m.id()).map(e -> e.status().name()).orElse("SUSPENDED"));
+            // 23.3, 24.3: for the header badge and the Developer tools before an intent exists.
+            entry.put("completion", m.completion().name().toLowerCase(java.util.Locale.ROOT));
+            Optional<String> live = LiveStore.domain(m.owned(), m.shopDomain());
+            entry.put("live", live.isPresent());
+            live.ifPresent(d -> entry.put("shop_domain", d));
             registry.reason(m.id()).ifPresent(reason -> entry.put("reason", reason));
             list.add(entry);
         }

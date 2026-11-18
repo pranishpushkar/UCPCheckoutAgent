@@ -13,6 +13,8 @@ let intentTimer = null;
 let runTimer = null;
 const countdowns = new Map();   // intent id -> its card's expiry timer
 const counters = new Map();    // merchant id -> its order counter element
+let labMerchants = [];         // the lab's merchant list, where the profile has one (23.3)
+let labAvailable = false;
 
 const $ = (id) => document.getElementById(id);
 
@@ -180,8 +182,12 @@ async function loadRunDetails() {
     return;
   }
   clear($("tools"));
+  // 24.3: one chip per call, with a dot for its outcome; a summary other than ok is also shown as text.
   (result.data.tool_events || []).forEach((e) => {
-    $("tools").appendChild(el("li", e.tool + ": " + e.summary + " (" + e.took_ms + " ms)"));
+    const chip = el("li", null, "chip");
+    chip.appendChild(el("span", null, e.summary === "ok" ? "dot ok" : "dot warn")).setAttribute("aria-hidden", "true");
+    chip.appendChild(el("span", e.tool + " · " + e.took_ms + " ms" + (e.summary === "ok" ? "" : " · " + e.summary)));
+    $("tools").appendChild(chip);
   });
 }
 
@@ -232,8 +238,24 @@ function showApprovalCard(id, approvalResponse) {
   const card = el("section", null, "card");
   card.setAttribute("data-intent", id);
   card.setAttribute("aria-label", "Approval from " + snapshot.merchant_id);
-  card.appendChild(el("h3", "Approval from " + snapshot.merchant_id));
+  const head = el("div", null, "card-head");
+  const heading = el("div");
+  heading.appendChild(el("h3", "Approval needed"));
+  heading.appendChild(el("p", "From " + snapshot.merchant_id, "muted"));
+  head.appendChild(heading);
+  const expiry = el("span", null, "pill");
+  head.appendChild(expiry);
+  card.appendChild(head);
   const table = el("table");
+  const columns = el("tr");
+  ["Item", "Qty × price", "Line total"].forEach((label, i) => {
+    const th = el("th", label, i === 0 ? null : "num");
+    th.scope = "col";
+    columns.appendChild(th);
+  });
+  const top = el("thead");
+  top.appendChild(columns);
+  table.appendChild(top);
   const body = el("tbody");
   const foot = el("tfoot");
   let linesTotal = 0;
@@ -245,32 +267,35 @@ function showApprovalCard(id, approvalResponse) {
     }
     name.appendChild(el("div", line.item_id, "item-id"));
     row.appendChild(name);
-    row.appendChild(el("td", line.quantity, "num"));
-    row.appendChild(el("td", money(line.unit_price_minor, snapshot.currency), "num"));
+    row.appendChild(el("td", line.quantity + " × " + money(line.unit_price_minor, snapshot.currency), "num"));
     row.appendChild(el("td", money(line.quantity * line.unit_price_minor, snapshot.currency), "num"));
     body.appendChild(row);
     linesTotal += line.quantity * line.unit_price_minor;
   });
   const rows = cardCharges(snapshot, approval.completion === "handoff", linesTotal);
   rows.forEach(([label, minor], i) => {
-    const row = el("tr");
-    row.appendChild(el(i === rows.length - 1 ? "th" : "td", label));
-    row.appendChild(el("td", ""));
-    row.appendChild(el("td", ""));
+    const last = i === rows.length - 1;
+    const row = el("tr", null, last ? "total" : null);
+    const name = el(last ? "th" : "td", label);
+    name.colSpan = 2;
+    if (last) {
+      name.scope = "row";
+    }
+    row.appendChild(name);
     row.appendChild(el("td", money(minor, snapshot.currency), "num"));
     foot.appendChild(row);
   });
   table.appendChild(body);
   table.appendChild(foot);
   card.appendChild(table);
-  card.appendChild(el("p", "Price and stock are not held.", "fixed"));
+  const info = el("div", null, "info");
+  info.appendChild(el("p", "Price and stock are not held."));
   if (approval.completion === "handoff") {
-    card.appendChild(el("p", approval.note, "fixed"));
+    info.appendChild(el("p", approval.note));
   }
-  const expiry = el("p");
-  card.appendChild(expiry);
+  card.appendChild(info);
   const actions = el("div", null, "actions");
-  const approve = el("button", "Approve");
+  const approve = el("button", "Approve " + money(snapshot.total_minor, snapshot.currency), "primary");
   approve.type = "button";
   const reject = el("button", "Reject");
   reject.type = "button";
@@ -320,6 +345,7 @@ async function decide(id, token, decision) {
 function watchIntent(id) {
   clear($("handoff"));
   clear($("follow-up"));
+  clear($("steps"));
   currentIntent = {id: id, state: ""};
   window.clearTimeout(intentTimer);
   pollIntent();
@@ -337,18 +363,23 @@ async function pollIntent() {
   if (result.status === 404) {
     // Not the caller's intent, or no such intent: the API does not say which (T6), and neither does the page.
     clear($("timeline"));
+    clear($("steps"));
     $("timeline-state").textContent = "Intent not found.";
     setStatus("Intent not found.", true);
     currentIntent = null;
+    showMerchantMode();
     return;
   }
   if (!result.ok) {
     return;
   }
   const state = result.data.state;
+  currentIntent.merchant = result.data.merchant;
+  showMerchantMode();
+  showSteps(milestones(result.data));
   if (state !== currentIntent.state) {
     currentIntent.state = state;
-    $("timeline-state").textContent = "Intent " + id + ": " + state.replace(/_/g, " ").toLowerCase();
+    $("timeline-state").textContent = "Intent " + id;
     setStatus("Intent " + state.replace(/_/g, " ").toLowerCase() + ".");
     await loadEvents(id);
     if (state !== "HANDED_OFF") {
@@ -361,12 +392,15 @@ async function pollIntent() {
   }
   // 24.3, 7.6: what the store reported, on every poll, since it changes while the state stays HANDED_OFF.
   if (state === "HANDED_OFF") {
-    showFollowUp(result.data.store_order, result.data.follow_up);
+    showSuccess(result.data.store_order ? followUpText(result.data.store_order, result.data.follow_up) : "",
+        result.data.quote);
     if (keepsHandoffLink(result.data.store_order, result.data.follow_up)) {
       showHandoffLink(result.data.handoff_url);
     } else {
       clear($("handoff"));
     }
+  } else if (state === "COMPLETED") {
+    showSuccess("Order placed at the store", result.data.quote);
   }
   if (currentRun) {
     showOtherIntents(currentRun.intents);
@@ -399,7 +433,8 @@ function showHandoffLink(url) {
 
 // <follow-up>
 // 24.3, 7.6: what the store reported after the handoff. A completed checkout means the store placed an order; it says
-// nothing of payment, so neither does the text. The confirmation code (VERIFY 11) is set as text only.
+// nothing of payment, so neither does the text. The confirmation code (VERIFY 11) is set as text only. The text is the
+// stepper's last step, and the store's order is also the success card.
 
 // The text of a follow-up that ended without an order, by its ended_reason. A Map, so no other key can match.
 const FOLLOW_UP_ENDED = new Map([
@@ -425,9 +460,8 @@ function keepsHandoffLink(order, followUp) {
   return true;
 }
 
-function showFollowUp(order, followUp) {
-  const holder = $("follow-up");
-  clear(holder);
+// The follow-up's text: the store's order, waiting for one, or how the follow-up ended; empty when there is none.
+function followUpText(order, followUp) {
   let text = "";
   if (order && typeof order.label === "string") {
     text = "Order placed at the store, confirmation #" + order.label;
@@ -438,11 +472,99 @@ function showFollowUp(order, followUp) {
   } else if (followUp) {
     text = FOLLOW_UP_ENDED.get(followUp.ended_reason) || "";
   }
-  if (text) {
-    holder.appendChild(el("p", text));
+  return text;
+}
+
+// 24.3: the success card, in COMPLETED or once the store reported an order: its text, then the quote's product lines.
+function showSuccess(text, quote) {
+  const holder = $("follow-up");
+  clear(holder);
+  if (!text) {
+    return;
   }
+  const card = el("div", null, "success");
+  card.appendChild(el("p", text, "success-title"));
+  if (quote && Array.isArray(quote.lines)) {
+    const list = el("ul", null, "success-lines");
+    quote.lines.forEach((line) => {
+      list.appendChild(el("li", (line.title || line.item_id) + " · " + line.quantity + " × "
+          + money(line.unit_price_minor, quote.currency)));
+    });
+    card.appendChild(list);
+  }
+  holder.appendChild(card);
 }
 // </follow-up>
+
+// <milestones>
+// 24.3: the stepper, made from the intent's state, its merchant's completion, its approval and the store's follow-up;
+// never from the name of anything the timeline records. Each step is {label, mark}: done, current, pending or ended.
+const ENDINGS = new Map([
+  ["REJECTED", "Rejected by you"],
+  ["FAILED_NOT_CHARGED", "Stopped: no order was placed"],
+  ["ESCALATED", "Stopped: the outcome needs a person to check"],
+]);
+
+// How far the intent got: 0 Proposed, 1 Quoted, 2 approval, 3 sent or handed off, 4 the store's order.
+function reached(intent) {
+  switch (intent.state) {
+    case "PROPOSED": return 0;
+    case "QUOTING": return 1;
+    case "AWAITING_APPROVAL": case "REJECTED": return 2;
+    case "APPROVED": case "COMPLETING": case "RECONCILING": return 3;
+    case "COMPLETED": case "HANDED_OFF": return 4;
+    default:
+      if (intent.approval && (intent.approval.status === "APPROVED" || intent.approval.status === "CONSUMED")) {
+        return 3;
+      }
+      return intent.quote ? 2 : 1;
+  }
+}
+
+function milestones(intent) {
+  const handoff = intent.merchant && intent.merchant.completion === "handoff";
+  const at = reached(intent);
+  const labels = ["Proposed", "Quoted by the store", at > 2 ? "Approved by you" : "Waiting for your approval",
+      handoff ? "Handed off to the store" : "Sent to the store", "Order placed at the store"];
+  const steps = labels.map((label, i) => ({label: label, mark: i < at ? "done" : i === at ? "current" : "pending"}));
+  const ending = ENDINGS.get(intent.state);
+  if (ending) {
+    return steps.slice(0, at).concat([{label: ending, mark: "ended"}]);
+  }
+  if (intent.state === "COMPLETED") {
+    steps[4].mark = "done";
+  } else if (intent.state === "HANDED_OFF") {
+    const text = followUpText(intent.store_order, intent.follow_up);
+    if (intent.store_order) {
+      steps[4].mark = "done";
+    } else if (intent.follow_up && intent.follow_up.watching) {
+      steps[4] = {label: text, mark: "current"};
+    } else if (text) {
+      steps[4] = {label: text, mark: "ended"};
+    } else {
+      steps[4].mark = "pending";
+    }
+  }
+  return steps;
+}
+
+// The marks in words, for a screen reader: the marker's shape is not the only signal.
+const MARKS = new Map([["done", "Done: "], ["current", "Now: "], ["pending", "Next: "], ["ended", "Ended: "]]);
+
+function showSteps(steps) {
+  const list = $("steps");
+  clear(list);
+  steps.forEach((step) => {
+    const item = el("li", null, step.mark);
+    item.appendChild(el("span", MARKS.get(step.mark), "sr-only"));
+    item.appendChild(document.createTextNode(step.label));
+    if (step.mark === "current") {
+      item.setAttribute("aria-current", "step");
+    }
+    list.appendChild(item);
+  });
+}
+// </milestones>
 
 // The run's other intents, one line each, beside the one the timeline follows (S22): merchant and state.
 async function showOtherIntents(ids) {
@@ -505,10 +627,37 @@ async function loadEvents(id) {
     return;
   }
   clear($("timeline"));
+  $("events-toggle").textContent = "Show all " + result.data.length + " events";
   result.data.forEach((event) => {
     $("timeline").appendChild(el("li", describe(event)));
   });
 }
+
+// ---- the merchant mode ----------------------------------------------------------------------------------------------
+
+// <merchant-mode>
+// 24.3: the header badge and the Developer tools follow the merchant of the intent the timeline follows; before one,
+// the lab's list. The store's domain is set as text only.
+function liveDomain() {
+  if (currentIntent && currentIntent.merchant) {
+    return typeof currentIntent.merchant.shop_domain === "string" ? currentIntent.merchant.shop_domain : "";
+  }
+  const live = labMerchants.find((m) => m.live === true && typeof m.shop_domain === "string");
+  return live ? live.shop_domain : "";
+}
+
+function showMerchantMode() {
+  const badge = $("merchant-mode");
+  const domain = liveDomain();
+  badge.hidden = !((currentIntent && currentIntent.merchant) || labAvailable);
+  badge.textContent = domain ? "Live store · " + domain : "Lab merchants";
+  badge.className = domain ? "badge live" : "badge";
+  $("dev-tools").hidden = !labAvailable || domain !== "";
+  if (domain) {
+    $("dev-tools").open = false;
+  }
+}
+// </merchant-mode>
 
 // ---- the fault lab and the order counter ---------------------------------------------------------------------------
 
@@ -517,6 +666,8 @@ async function startLab() {
   if (!list.ok) {
     return;     // not the local profile: the lab does not exist here
   }
+  labMerchants = list.data.merchants;
+  labAvailable = true;
   const select = $("lab-merchant");
   clear(select);
   clear($("order-counters"));
@@ -530,8 +681,7 @@ async function startLab() {
     $("order-counters").appendChild(box);
     counters.set(m.merchant_id, count);
   });
-  $("fault-lab").hidden = false;
-  $("counters").hidden = false;
+  showMerchantMode();
   refreshOrders();
   window.setInterval(refreshOrders, 2000);
 }

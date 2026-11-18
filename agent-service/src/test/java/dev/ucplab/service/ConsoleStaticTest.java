@@ -36,6 +36,15 @@ class ConsoleStaticTest {
         return js.substring(from, to);
     }
 
+    /** The code between {@code // <name>} and {@code // </name>} in console.js. */
+    private static String block(String js, String name) {
+        int from = js.indexOf("// <" + name + ">");
+        int to = js.indexOf("// </" + name + ">");
+        assertThat(from).as("the start of " + name).isNotNegative();
+        assertThat(to).as("the end of " + name).isGreaterThan(from);
+        return js.substring(from, to);
+    }
+
     // Covers: 24.3 (text uses textContent, never innerHTML: no way to write markup from data, and no dynamic code)
     @Test
     void javascript_neverWritesMarkup_orRunsDynamicCode() throws IOException {
@@ -87,6 +96,84 @@ class ConsoleStaticTest {
         assertThat(css).contains(":focus-visible").contains("max-width: 720px");
         assertThat(css).doesNotContain("outline: none").doesNotContain("outline:none");
         assertThat(css).doesNotContainPattern("(?i)url\\(\\s*['\"]?https?:").doesNotContain("@import");
+    }
+
+    // Covers: 24.3 (light by default with the restyle's colours, a dark variant of the same tokens under
+    // prefers-color-scheme: dark, system fonts only with no font file, and controls at least 44 px tall)
+    @Test
+    void css_isLightByDefault_withADarkVariant_systemFonts_and44pxControls() throws IOException {
+        String css = read("console.css");
+        int dark = css.indexOf("@media (prefers-color-scheme: dark)");
+        String light = css.substring(0, dark);
+
+        assertThat(dark).as("a dark variant").isPositive();
+        for (String token : List.of("--bg: #ffffff;", "--surface: #ffffff;", "--border: #e3e3e3;", "--fg: #1a1a1a;",
+                "--muted: #616161;", "--accent: #1f5ac9;", "--success: #1a7f37;")) {
+            assertThat(light).as("the light default sets " + token).contains(token);
+        }
+        String darkBlock = css.substring(dark, css.indexOf("\n}\n", dark));
+        for (String token : List.of("--bg:", "--surface:", "--border:", "--fg:", "--muted:", "--accent:", "--success:",
+                "--live-bg:", "--live-fg:")) {
+            assertThat(darkBlock).as("the dark variant sets " + token).contains(token);
+        }
+        assertThat(css).contains("border-radius: 12px").contains("min-height: 44px")
+                .contains("font: 16px/1.45 system-ui, -apple-system, \"Segoe UI\", Roboto, sans-serif;")
+                .doesNotContain("@font-face");
+    }
+
+    // Covers: 24.3 (the header: the app name, the subtitle, the merchant-mode badge, the user chip and Sign out; the
+    // badge's domain is set as text only, from the followed intent's merchant or, before one, the lab's list)
+    @Test
+    void header_hasTheSubtitle_andAMerchantModeBadge_fromTheIntentOrTheLabList() throws IOException {
+        String html = read("index.html");
+        String js = read("console.js");
+        String mode = block(js, "merchant-mode");
+
+        assertThat(html).contains("<h1>UCP Checkout Lab</h1>")
+                .contains("<p class=\"subtitle\">Agent shopping with your approval</p>")
+                .contains("<span id=\"merchant-mode\" class=\"badge\" hidden></span>")
+                .contains("id=\"who\"").contains("id=\"sign-out\"");
+        assertThat(html.indexOf("id=\"merchant-mode\"")).as("the badge before the user chip")
+                .isLessThan(html.indexOf("id=\"who\""));
+        assertThat(mode).contains("currentIntent.merchant.shop_domain")
+                .contains("labMerchants.find((m) => m.live === true && typeof m.shop_domain === \"string\")")
+                .contains("badge.textContent = domain ? \"Live store · \" + domain : \"Lab merchants\";")
+                .contains("badge.className = domain ? \"badge live\" : \"badge\";");
+        assertThat(js).contains("currentIntent.merchant = result.data.merchant;").contains("labMerchants = list.data.merchants;");
+        assertThat(count(js, "shop_domain")).as("shop_domain only in the badge's code").isEqualTo(count(mode, "shop_domain"));
+        assertThat(read("console.css")).contains(".badge.live {");
+    }
+
+    // Covers: 24.3 (the Developer tools: the fault lab and the counters inside one details element, closed and hidden
+    // until the lab answers, and hidden whenever the merchant shown is a live store)
+    @Test
+    void developerTools_holdTheFaultLabAndCounters_andAreHiddenForALiveStore() throws IOException {
+        String html = read("index.html");
+        String mode = block(read("console.js"), "merchant-mode");
+        int tools = html.indexOf("<details id=\"dev-tools\" class=\"dev-tools\" hidden>");
+        int end = html.indexOf("</details>", tools);
+
+        assertThat(tools).as("a closed, hidden details").isPositive();
+        assertThat(html.substring(tools, end)).contains("<summary>Developer tools</summary>")
+                .contains("<section id=\"fault-lab\"").contains("<section id=\"counters\"").doesNotContain(" open");
+        assertThat(html).doesNotContain("id=\"fault-lab\" aria-labelledby=\"lab-h\" hidden")
+                .doesNotContain("id=\"counters\" aria-labelledby=\"orders-h\" hidden");
+        assertThat(mode).contains("$(\"dev-tools\").hidden = !labAvailable || domain !== \"\";");
+        assertThat(read("console.js")).doesNotContain("$(\"fault-lab\").hidden").doesNotContain("$(\"counters\").hidden");
+    }
+
+    // Covers: 24.3 (chat bubbles by role, and each tool call as a chip "<tool> · <took_ms> ms" with a status dot that
+    // is never the only signal: a summary other than ok is shown as text)
+    @Test
+    void chat_hasBubblesByRole_andToolCallsAsChipsWithAStatusDot() throws IOException {
+        String js = read("console.js");
+        String css = read("console.css");
+
+        assertThat(js).contains("el(\"span\", null, e.summary === \"ok\" ? \"dot ok\" : \"dot warn\")")
+                .contains(".setAttribute(\"aria-hidden\", \"true\");")
+                .contains("e.tool + \" · \" + e.took_ms + \" ms\" + (e.summary === \"ok\" ? \"\" : \" · \" + e.summary)");
+        assertThat(css).contains(".chat li.user {").contains(".chat li.agent {").contains(".chip .dot.ok {")
+                .contains(".chip .dot.warn {");
     }
 
     // Covers: I2, 9.3 L4, 24.3, 9.2 (the approval card is its own component and reads only the approval response's
@@ -167,6 +254,26 @@ class ConsoleStaticTest {
         assertThat(card).contains("Price and stock are not held").contains("expires_at").contains("Other charges (tax)");
     }
 
+    // Covers: 24.3, I2, 9.3 L4 (the card is headed "Approval needed / From <merchant_id>" from the snapshot, the countdown
+    // is a pill, a line shows quantity × unit price and its total, the last row is the large total, the notes are an
+    // info box, and the primary button names the snapshot's total)
+    @Test
+    void approvalCard_isHeadedApprovalNeeded_withAPill_anInfoBox_andApproveNamingTheTotal() throws IOException {
+        String card = card(read("console.js"));
+
+        assertThat(card).contains("heading.appendChild(el(\"h3\", \"Approval needed\"));")
+                .contains("heading.appendChild(el(\"p\", \"From \" + snapshot.merchant_id, \"muted\"));")
+                .contains("const expiry = el(\"span\", null, \"pill\");")
+                .contains("line.quantity + \" × \" + money(line.unit_price_minor, snapshot.currency)")
+                .contains("const row = el(\"tr\", null, last ? \"total\" : null);")
+                .contains("const info = el(\"div\", null, \"info\");")
+                .contains("info.appendChild(el(\"p\", \"Price and stock are not held.\"));")
+                .contains("const approve = el(\"button\", \"Approve \" + money(snapshot.total_minor, snapshot.currency), \"primary\");")
+                .doesNotContain("el(\"h3\", \"Approval from \"");
+        assertThat(read("console.css")).contains(".pill {").contains(".info {").contains("tr.total")
+                .contains("button.primary {").contains(".item-id {\n  font-family: ui-monospace");
+    }
+
     // Covers: 24.3, 9.2, I2 (a line shows the snapshot's merchant title as text, with the item id under it, and the id
     // alone when the title is empty)
     @Test
@@ -206,7 +313,7 @@ class ConsoleStaticTest {
         String card = card(read("console.js"));
 
         assertThat(card).contains("if (approval.completion === \"handoff\") {")
-                .contains("card.appendChild(el(\"p\", approval.note, \"fixed\"));");
+                .contains("info.appendChild(el(\"p\", approval.note));");
     }
 
     /** The code between {@code // <handoff-link>} and {@code // </handoff-link>} in console.js. */
@@ -265,16 +372,17 @@ class ConsoleStaticTest {
         String js = read("console.js");
         String block = followUp(js);
 
-        assertThat(block).contains("function showFollowUp(order, followUp) {")
+        assertThat(block).contains("function followUpText(order, followUp) {")
                 .contains("\"Order placed at the store, confirmation #\" + order.label")
                 .contains("\"Waiting for the store to report an order\"")
                 .contains("\"The store reported no order within 24 h\"")
-                .contains("holder.appendChild(el(\"p\", text));");
+                .contains("function showSuccess(text, quote) {")
+                .contains("card.appendChild(el(\"p\", text, \"success-title\"));");
         for (String forbidden : List.of("innerHTML", "insertAdjacentHTML", "permalink", "console.", "Storage")) {
             assertThat(block).as("the follow-up's code uses " + forbidden).doesNotContain(forbidden);
         }
         assertThat(js.toLowerCase(java.util.Locale.ROOT)).as("the console never says paid").doesNotContain("paid");
-        assertThat(read("index.html")).as("outside the one live region, as the link is").contains("<p id=\"follow-up\"></p>");
+        assertThat(read("index.html")).as("outside the one live region, as the link is").contains("<div id=\"follow-up\"></div>");
     }
 
     // Covers: 24.3, 7.6 (in HANDED_OFF the follow-up and the link are shown on every poll, not only when the state
@@ -284,9 +392,11 @@ class ConsoleStaticTest {
         String js = read("console.js");
 
         assertThat(js).contains("  if (state === \"HANDED_OFF\") {\n"
-                + "    showFollowUp(result.data.store_order, result.data.follow_up);\n"
+                + "    showSuccess(result.data.store_order ? followUpText(result.data.store_order, result.data.follow_up) : \"\",\n"
+                + "        result.data.quote);\n"
                 + "    if (keepsHandoffLink(result.data.store_order, result.data.follow_up)) {\n"
-                + "      showHandoffLink(result.data.handoff_url);\n    } else {\n      clear($(\"handoff\"));\n    }\n  }\n");
+                + "      showHandoffLink(result.data.handoff_url);\n    } else {\n      clear($(\"handoff\"));\n    }\n"
+                + "  } else if (state === \"COMPLETED\") {\n");
         assertThat(followUp(js)).contains("function keepsHandoffLink(order, followUp) {\n"
                 + "  if (order) {\n    return false;\n  }\n"
                 + "  if (followUp && !followUp.watching) {\n    return LINK_KEPT_WHEN_ENDED.includes(followUp.ended_reason);\n  }\n"
@@ -317,6 +427,56 @@ class ConsoleStaticTest {
         assertThat(block).contains("    text = FOLLOW_UP_ENDED.get(followUp.ended_reason) || \"\";")
                 .doesNotContain("The store reported no order within 24 h\";");
         assertThat(text.toLowerCase(java.util.Locale.ROOT)).doesNotContain("paid");
+    }
+
+    // Covers: 24.3, 7.1, 7.6, P7 (the timeline is a stepper of milestones made from the intent's state, merchant
+    // completion, approval and follow-up, never from an event's name; each step is marked done, current, pending or
+    // ended, in text for a screen reader as well as by its marker; the events are behind a "Show all N events" toggle)
+    @Test
+    void timeline_isAStepperOfMilestones_withTheEventsBehindAToggle() throws IOException {
+        String js = read("console.js");
+        String steps = block(js, "milestones");
+        String html = read("index.html");
+
+        for (String label : List.of("\"Proposed\"", "\"Quoted by the store\"", "\"Waiting for your approval\"",
+                "\"Approved by you\"", "\"Handed off to the store\"", "\"Sent to the store\"",
+                "\"Order placed at the store\"", "[\"REJECTED\", \"Rejected by you\"]",
+                "[\"FAILED_NOT_CHARGED\", \"Stopped: no order was placed\"]",
+                "[\"ESCALATED\", \"Stopped: the outcome needs a person to check\"]")) {
+            assertThat(steps).as("the stepper names " + label).contains(label);
+        }
+        assertThat(steps).contains("intent.merchant && intent.merchant.completion === \"handoff\"")
+                .contains("followUpText(intent.store_order, intent.follow_up)")
+                .contains("item.setAttribute(\"aria-current\", \"step\");")
+                .doesNotContain("event").doesNotContain("LABELS").doesNotContain("describe(");
+        assertThat(js).contains("showSteps(milestones(result.data));")
+                .contains("$(\"events-toggle\").textContent = \"Show all \" + result.data.length + \" events\";");
+        int events = html.indexOf("<details id=\"all-events\">");
+        assertThat(events).as("the events behind a closed toggle").isPositive();
+        assertThat(html.substring(events, html.indexOf("</details>", events)))
+                .contains("<summary id=\"events-toggle\">Show all 0 events</summary>")
+                .contains("<ol id=\"timeline\" class=\"timeline\"></ol>");
+        assertThat(html).contains("<ol id=\"steps\" class=\"steps\" aria-label=\"Milestones\"></ol>");
+        assertThat(read("console.css")).contains(".steps li.done").contains(".steps li.current")
+                .contains(".steps li.pending").contains(".steps li.ended");
+    }
+
+    // Covers: 24.3, 7.6, VERIFY 11 (the success card: in COMPLETED, and in HANDED_OFF once the store reported an order,
+    // the text and the product lines of the intent's quote, each set as text; green only here)
+    @Test
+    void successCard_showsTheOrderText_andTheQuotesProductLines() throws IOException {
+        String js = read("console.js");
+        String block = followUp(js);
+
+        assertThat(block).contains("const card = el(\"div\", null, \"success\");")
+                .contains("quote.lines.forEach((line) => {")
+                .contains("(line.title || line.item_id) + \" · \" + line.quantity + \" × \"");
+        assertThat(js).contains("  } else if (state === \"COMPLETED\") {\n"
+                + "    showSuccess(\"Order placed at the store\", result.data.quote);\n  }\n");
+        String css = read("console.css");
+        assertThat(css).contains(".success {");
+        assertThat(count(css.toLowerCase(java.util.Locale.ROOT), "#1a7f37")).as("green only as the success token")
+                .isEqualTo(1);
     }
 
     // Covers: 24.3, 7.6 (the timeline stops polling a terminal intent, except a HANDED_OFF one while its follow-up is

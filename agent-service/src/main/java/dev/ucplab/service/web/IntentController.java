@@ -83,6 +83,7 @@ final class IntentController {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("id", intent.id().value());
         body.put("merchant_id", intent.merchantId().value());
+        body.put("merchant", merchant(intent));
         body.put("state", intent.state().name());
         intent.failureReason().ifPresent(r -> body.put("failure_reason", r));
         intent.orderId().ifPresent(o -> body.put("order_id", o));
@@ -101,6 +102,20 @@ final class IntentController {
         });
         body.put("created_at", intent.createdAt().toString());
         return body;
+    }
+
+    /**
+     * 23.2, 19: the merchant as the values stored on the intent at creation describe it, never re-read from the
+     * merchants file: its completion, and its shop_domain only for a live store (LiveStore).
+     */
+    private static Map<String, Object> merchant(PurchaseIntent intent) {
+        Map<String, Object> stored = LenientJson.readObject(intent.merchantFingerprint());
+        Map<String, Object> merchant = new LinkedHashMap<>();
+        merchant.put("completion", stored.get("completion") instanceof String c ? c : "agent");
+        Optional<String> shopDomain = stored.get("shop_domain") instanceof String d ? Optional.of(d) : Optional.empty();
+        LiveStore.domain(Boolean.TRUE.equals(stored.get("owned")), shopDomain)
+                .ifPresent(d -> merchant.put("shop_domain", d));
+        return merchant;
     }
 
     /**

@@ -163,7 +163,8 @@ class MultiApprovalApiTest {
     }
 
     // Covers: 23.3, 24.3, D7 (the console's merchant selector and counters come from one lab route: each configured merchant
-    // with its status and, when SUSPENDED, the fixed reason; it needs a session)
+    // with its status, its completion and whether it is a live store, and, when SUSPENDED, the fixed reason; a lab merchant
+    // is not live and has no shop_domain; it needs a session)
     @Test
     void labMerchants_listsEachMerchantWithItsStatus() throws IOException {
         service = TestService.startMerchants(dir, Map.of(), Optional.empty(), "suspended", true);
@@ -183,6 +184,9 @@ class MultiApprovalApiTest {
         assertThat(b.get("status")).isEqualTo("SUSPENDED");
         assertThat(b.get("reason")).isEqualTo("suspended_in_file");
         assertThat(a.keySet()).doesNotContain("url", "lab_url", "token_ref");
+        // 23.3, 24.3: what the header badge and the Developer tools need before an intent exists.
+        assertThat(a).containsEntry("completion", "agent").containsEntry("live", false).doesNotContainKey("shop_domain");
+        assertThat(b).containsEntry("completion", "agent").containsEntry("live", false).doesNotContainKey("shop_domain");
     }
 
     // Covers: 23.3, 24.3 (a merchant the console names that is not configured, or not a string, is 422 on faults, and nothing
