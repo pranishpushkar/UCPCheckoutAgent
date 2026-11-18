@@ -395,7 +395,8 @@ class ConsoleStaticTest {
                 + "    showSuccess(result.data.store_order ? followUpText(result.data.store_order, result.data.follow_up) : \"\",\n"
                 + "        result.data.quote);\n"
                 + "    if (keepsHandoffLink(result.data.store_order, result.data.follow_up)) {\n"
-                + "      showHandoffLink(result.data.handoff_url);\n    } else {\n      clear($(\"handoff\"));\n    }\n  }\n");
+                + "      showHandoffLink(result.data.handoff_url);\n    } else {\n      clear($(\"handoff\"));\n    }\n"
+                + "  } else if (state === \"COMPLETED\") {\n");
         assertThat(followUp(js)).contains("function keepsHandoffLink(order, followUp) {\n"
                 + "  if (order) {\n    return false;\n  }\n"
                 + "  if (followUp && !followUp.watching) {\n    return LINK_KEPT_WHEN_ENDED.includes(followUp.ended_reason);\n  }\n"
