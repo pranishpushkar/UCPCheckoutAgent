@@ -11,6 +11,8 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 /**
  * The lab console's three static files (24.1 to 24.3, m6-plan section 7, C18), read as text: there is no browser in
@@ -244,18 +246,45 @@ class ConsoleStaticTest {
     }
 
     // Covers: 24.3, 7.6 (in HANDED_OFF the follow-up and the link are shown on every poll, not only when the state
-    // changes; once the store's order is shown the link goes, and it stays when the follow-up ended without one)
+    // changes; whether the link stays is decided by keepsHandoffLink, from the store's order and the follow-up)
     @Test
-    void followUp_isShownOnEveryPoll_andTheLinkGoesOnlyOnceAnOrderIsShown() throws IOException {
+    void followUp_isShownOnEveryPoll_andTheLinkFollowsIt() throws IOException {
         String js = read("console.js");
 
         assertThat(js).contains("  if (state === \"HANDED_OFF\") {\n"
                 + "    showFollowUp(result.data.store_order, result.data.follow_up);\n"
-                + "    if (result.data.store_order) {\n      clear($(\"handoff\"));\n    } else {\n"
-                + "      showHandoffLink(result.data.handoff_url);\n    }\n  }\n");
+                + "    if (keepsHandoffLink(result.data.store_order, result.data.follow_up)) {\n"
+                + "      showHandoffLink(result.data.handoff_url);\n    } else {\n      clear($(\"handoff\"));\n    }\n  }\n");
+        assertThat(followUp(js)).contains("function keepsHandoffLink(order, followUp) {\n"
+                + "  if (order) {\n    return false;\n  }\n"
+                + "  if (followUp && !followUp.watching) {\n    return LINK_KEPT_WHEN_ENDED.includes(followUp.ended_reason);\n  }\n"
+                + "  return true;\n}\n");
         int watch = js.indexOf("function watchIntent(id) {");
         assertThat(js.indexOf("clear($(\"follow-up\"));", watch)).as("watching another intent drops the follow-up")
                 .isBetween(watch, js.indexOf("pollIntent();", watch));
+    }
+
+    // Covers: 24.3, 7.6 (a follow-up that ended without an order shows the text of its ended_reason, looked up in a Map so
+    // no other key can match; the Continue at the store link stays only for window_ended and reads_exhausted, where the
+    // checkout may still be open, and goes for canceled, session_gone and merchant_changed; never "not paid")
+    @ParameterizedTest(name = "{0}")
+    @CsvSource(delimiter = '|', value = {
+        "window_ended     | The store reported no order within 24 h                      | true",
+        "reads_exhausted  | The store reported no order within 24 h                      | true",
+        "canceled         | The checkout was cancelled at the store; no order was placed | false",
+        "session_gone     | The checkout is no longer available at the store             | false",
+        "merchant_changed | Stopped checking: the store's settings changed               | false"})
+    void followUp_endedReason_showsItsText_andKeepsTheLinkOnlyWhereTheCheckoutMayBeOpen(String reason, String text,
+            boolean keepsLink) throws IOException {
+        String block = followUp(read("console.js"));
+
+        assertThat(block).contains("  [\"" + reason + "\", \"" + text + "\"],\n");
+        Matcher kept = Pattern.compile("const LINK_KEPT_WHEN_ENDED = \\[([^\\]]*)\\];").matcher(block);
+        assertThat(kept.find()).as("the reasons that keep the link").isTrue();
+        assertThat(kept.group(1).contains("\"" + reason + "\"")).as("keeps the link").isEqualTo(keepsLink);
+        assertThat(block).contains("    text = FOLLOW_UP_ENDED.get(followUp.ended_reason) || \"\";")
+                .doesNotContain("The store reported no order within 24 h\";");
+        assertThat(text.toLowerCase(java.util.Locale.ROOT)).doesNotContain("paid");
     }
 
     // Covers: 24.3, 7.6 (the timeline stops polling a terminal intent, except a HANDED_OFF one while its follow-up is
