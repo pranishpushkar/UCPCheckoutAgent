@@ -1,5 +1,6 @@
 package dev.ucplab.persistence;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.ucplab.core.approval.ApprovalRecord;
@@ -57,6 +58,35 @@ class SqlApprovalRepositoryTest extends ApprovalRepositoryContract {
                 "th", snapshot.expiresAt(), ApprovalStatus.PENDING, Optional.empty(), Optional.empty());
 
         assertThatThrownBy(() -> repo.insert(orphan)).isInstanceOf(DatabaseException.class);
+    }
+
+    // Covers: 9.2, 10 (a snapshot stored before titles, with no title key in its JSON, reads back with empty titles and
+    // its stored hash; the hash of a title-less snapshot is unchanged)
+    @Test
+    void aSnapshotStoredBeforeTitles_readsBackWithEmptyTitles() {
+        IntentId id = new IntentId("i-old");
+        storeIntent(id, new UserId("alice"));
+        ApprovalSnapshot snapshot = new ApprovalSnapshot(id, new MerchantId("shop-1"), new SessionId("s"),
+                List.of(new SnapshotLine("item_123", 1, 100)), "USD", 100, 100, Instant.parse("2026-01-01T00:10:00Z"));
+        repo.insert(new ApprovalRecord("a-old", id, new UserId("alice"), snapshot, snapshot.hash(), "th",
+                snapshot.expiresAt(), ApprovalStatus.PENDING, Optional.empty(), Optional.empty()));
+        String stored = db.write(c -> {
+            try (var s = c.prepareStatement("UPDATE approval SET snapshot_json = replace(replace(snapshot_json,"
+                    + " '\"title\":\"\",', ''), ',\"title\":\"\"', '') WHERE id = 'a-old'")) {
+                s.executeUpdate();
+            }
+            try (var s = c.prepareStatement("SELECT snapshot_json FROM approval WHERE id = 'a-old'");
+                    var r = s.executeQuery()) {
+                r.next();
+                return r.getString(1);
+            }
+        });
+        assertThat(stored).as("as stored before titles").doesNotContain("title");
+
+        ApprovalRecord read = repo.findLatest(new UserId("alice"), id).orElseThrow();
+
+        assertThat(read.snapshot().lines()).containsExactly(new SnapshotLine("item_123", 1, 100, ""));
+        assertThat(read.snapshot().hash()).isEqualTo(read.snapshotHash());
     }
 
     @AfterEach
