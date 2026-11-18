@@ -1871,7 +1871,8 @@ public final class DefaultOrchestrator implements Orchestrator {
         summary.put("resolved_by", FOLLOW_UP);
         Optional<Integer> http = Optional.empty();
         HandoffWatch nextWatch = watch.nextRead(counted, at);
-        String event = "";
+        boolean seen = false;
+        boolean ended = false;
         Map<String, Object> payload = new LinkedHashMap<>();
         if (read instanceof CallOutcome.Ok<CheckoutView> ok) {
             CheckoutView view = ok.value();
@@ -1881,13 +1882,13 @@ public final class DefaultOrchestrator implements Orchestrator {
             if (view.status() == CheckoutStatus.COMPLETED && view.order().isPresent()) {
                 OrderRef order = view.order().get();
                 nextWatch = watch.ended(Optional.of(new StoreOrder(order.id(), order.label())));
-                event = "handoff_order_seen";
+                seen = true;
                 // I8: the order id only; the label is the buyer's confirmation code.
                 payload.put("order_id", order.id());
                 payload.put("reads", counted);
             } else if (view.status() == CheckoutStatus.CANCELED) {
                 nextWatch = watch.ended(Optional.empty());
-                event = "handoff_follow_up_ended";
+                ended = true;
                 payload.put("reason", "canceled");
                 payload.put("reads", counted);
             }
@@ -1895,7 +1896,7 @@ public final class DefaultOrchestrator implements Orchestrator {
             http = Optional.of(e.httpStatus());
             if (e.httpStatus() == 404) {
                 nextWatch = watch.ended(Optional.empty());
-                event = "handoff_follow_up_ended";
+                ended = true;
                 payload.put("reason", "session_gone");
                 payload.put("reads", counted);
             }
@@ -1908,8 +1909,10 @@ public final class DefaultOrchestrator implements Orchestrator {
                 http, Optional.of(CanonicalJson.write(summary)), sentAt, Optional.of(at));
         PurchaseIntent next = intent.withHandoffWatch(nextWatch).withState(intent.state(), at);
         intents.recordAttempt(attempt, next, intent.version(), workerId);
-        if (!event.isEmpty()) {
-            event(intent.id(), event, payload);
+        if (seen) {
+            event(intent.id(), "handoff_order_seen", payload);
+        } else if (ended) {
+            event(intent.id(), "handoff_follow_up_ended", payload);
         }
         return moved(intent, next);
     }

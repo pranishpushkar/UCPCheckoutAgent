@@ -19,7 +19,10 @@ final class EventPayloads {
     static final Set<String> ALLOWED = Set.of("from", "to", "event", "guard", "stage", "allowed", "rule", "reason",
             "merchant_id", "lines", "item_id", "quantity", "approval_id", "decision", "decided_by", "outcome",
             "http_status", "code", "codes", "status", "approval_status", "hash_matches", "attempt", "probe", "probes",
-            "resend", "total_minor", "max_total_minor");
+            "resend", "total_minor", "max_total_minor",
+            // 7.6: the order the store reported, which the owner's intent read shows too, and the follow-up's read
+            // count. Never the order's label, which no event carries (I8).
+            "order_id", "reads");
 
     private EventPayloads() {
     }
