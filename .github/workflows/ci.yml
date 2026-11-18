@@ -21,4 +21,18 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
-      - run: ./mvnw -B -ntp verify
+      # CI speed: the persistence and eval-harness tests keep their temp files, the SQLite databases among them, in
+      # /dev/shm (tmpfs) through -Dtest.tmpdir, so a commit's fsync costs nothing. Only where the files live changes.
+      # Stop here, clearly, if /dev/shm is missing or too small.
+      - name: Check /dev/shm
+        run: |
+          df -h /dev/shm
+          free_kb=$(df -Pk /dev/shm | awk 'NR==2 {print $4}')
+          if [ "${free_kb:-0}" -lt 2097152 ]; then
+            echo "::error::/dev/shm has $(( ${free_kb:-0} / 1024 )) MiB free; the tests' temp files need at least 2048 MiB (-Dtest.tmpdir=/dev/shm)"
+            exit 1
+          fi
+      - run: ./mvnw -B -ntp -Dtest.tmpdir=/dev/shm verify
+      - name: /dev/shm after the tests
+        if: always()
+        run: df -h /dev/shm

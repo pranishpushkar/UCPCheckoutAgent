@@ -43,6 +43,25 @@
         </dependency>
     </dependencies>
 
+    <!-- CI speed: the test JVM's temp directory, where @TempDir puts the SQLite files. CI sets test.tmpdir to /dev/shm
+         (tmpfs), so a commit's fsync costs nothing there; locally it is the usual temp directory. Only the place the files
+         live changes: the same SQL, pragmas, tries and seeds. -->
+    <properties>
+        <test.tmpdir>${java.io.tmpdir}</test.tmpdir>
+    </properties>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <argLine>-Djava.io.tmpdir=${test.tmpdir}</argLine>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
     <profiles>
         <!-- 13.5, section 15, Decision 1: the acceptance report. ./mvnw -B -ntp verify -Peval-full runs the whole
              build, then EvalMain with 200 runs per scenario at time scale 1 on 16 lanes. Its require-full flag
