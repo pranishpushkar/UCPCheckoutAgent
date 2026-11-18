@@ -211,6 +211,61 @@ class ConsoleStaticTest {
                 .contains("anchor.referrerPolicy = \"no-referrer\";");
     }
 
+    /** The code between {@code // <follow-up>} and {@code // </follow-up>} in console.js. */
+    private static String followUp(String js) {
+        int from = js.indexOf("// <follow-up>");
+        int to = js.indexOf("// </follow-up>");
+        assertThat(from).as("the follow-up block").isNotNegative();
+        assertThat(to).isGreaterThan(from);
+        return js.substring(from, to);
+    }
+
+    // Covers: 24.3, 7.6, VERIFY 11 (in HANDED_OFF the timeline shows what the store reported: "Order placed at the store,
+    // confirmation #<label>" from store_order.label as text, or waiting, or no order within 24 h; never "paid": a
+    // completed checkout means an order was placed, not that it was paid)
+    @Test
+    void followUp_showsTheStoresOrder_asText_andNeverSaysPaid() throws IOException {
+        String js = read("console.js");
+        String block = followUp(js);
+
+        assertThat(block).contains("function showFollowUp(order, followUp) {")
+                .contains("\"Order placed at the store, confirmation #\" + order.label")
+                .contains("\"Waiting for the store to report an order\"")
+                .contains("\"The store reported no order within 24 h\"")
+                .contains("holder.appendChild(el(\"p\", text));");
+        for (String forbidden : List.of("innerHTML", "insertAdjacentHTML", "permalink", "console.", "Storage")) {
+            assertThat(block).as("the follow-up's code uses " + forbidden).doesNotContain(forbidden);
+        }
+        assertThat(js.toLowerCase(java.util.Locale.ROOT)).as("the console never says paid").doesNotContain("paid");
+        assertThat(read("index.html")).contains("<p id=\"follow-up\" aria-live=\"polite\"></p>");
+    }
+
+    // Covers: 24.3, 7.6 (in HANDED_OFF the follow-up and the link are shown on every poll, not only when the state
+    // changes; once the store's order is shown the link goes, and it stays when the follow-up ended without one)
+    @Test
+    void followUp_isShownOnEveryPoll_andTheLinkGoesOnlyOnceAnOrderIsShown() throws IOException {
+        String js = read("console.js");
+
+        assertThat(js).contains("  if (state === \"HANDED_OFF\") {\n"
+                + "    showFollowUp(result.data.store_order, result.data.follow_up);\n"
+                + "    if (result.data.store_order) {\n      clear($(\"handoff\"));\n    } else {\n"
+                + "      showHandoffLink(result.data.handoff_url);\n    }\n  }\n");
+        int watch = js.indexOf("function watchIntent(id) {");
+        assertThat(js.indexOf("clear($(\"follow-up\"));", watch)).as("watching another intent drops the follow-up")
+                .isBetween(watch, js.indexOf("pollIntent();", watch));
+    }
+
+    // Covers: 24.3, 7.6 (the timeline stops polling a terminal intent, except a HANDED_OFF one while its follow-up is
+    // watching: then every 10 s)
+    @Test
+    void timeline_pollsAHandedOffIntent_every10s_whileItsFollowUpIsWatching() throws IOException {
+        String js = read("console.js");
+
+        assertThat(js).contains("  if (!TERMINAL.includes(state)) {\n    intentTimer = window.setTimeout(pollIntent, 1000);\n"
+                + "  } else if (state === \"HANDED_OFF\" && result.data.follow_up && result.data.follow_up.watching) {\n"
+                + "    intentTimer = window.setTimeout(pollIntent, 10000);\n  }\n");
+    }
+
     // Covers: 24.3, I8, H5 (the handoff URL is never page text: inside the link's code it is only checked and set as the
     // href; the code writes no text from it, no status, no console line, no location, history or storage)
     @Test

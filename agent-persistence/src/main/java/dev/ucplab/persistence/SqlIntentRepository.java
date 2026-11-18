@@ -5,6 +5,7 @@ import dev.ucplab.core.intent.AttemptId;
 import dev.ucplab.core.intent.AttemptOp;
 import dev.ucplab.core.intent.AttemptStatus;
 import dev.ucplab.core.intent.DuplicateIntentException;
+import dev.ucplab.core.intent.HandoffWatch;
 import dev.ucplab.core.intent.IntentEvent;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentNotFoundException;
@@ -630,7 +631,7 @@ public final class SqlIntentRepository implements IntentRepository {
                 Optional.ofNullable(r.getString("lease_owner")),
                 Optional.ofNullable(r.getString("lease_until")).map(SqlTimes::parse),
                 SqlTimes.parse(r.getString("created_at")),
-                SqlTimes.parse(r.getString("updated_at")));
+                SqlTimes.parse(r.getString("updated_at")), HandoffWatch.NONE);
     }
 
     private static MerchantAttempt attempt(ResultSet r) throws SQLException {

@@ -321,6 +321,34 @@ final class Invariants {
      * reaches the merchant on its session and no complete attempt row is written, whatever the faults, crashes, flips
      * and decisions. An intent proposed after a flip to an agent entry completes as usual.
      */
+    /**
+     * 7.6 handoff follow-up: once an intent is seen HANDED_OFF it stays HANDED_OFF in every later sample, and every call
+     * that reaches the merchant on its session afterwards is a GET: the follow-up never creates, updates, completes or
+     * cancels, and never moves the intent.
+     */
+    static List<String> followUpOnlyReads(Observations o) {
+        List<String> v = new ArrayList<>(o.aborts());
+        Map<IntentId, Observations.Sample> handedOff = new LinkedHashMap<>();
+        for (Observations.Sample s : o.samples()) {
+            Observations.Sample first = handedOff.get(s.intent());
+            if (first == null) {
+                if (s.state() == IntentState.HANDED_OFF) {
+                    handedOff.put(s.intent(), s);
+                }
+            } else if (s.state() != IntentState.HANDED_OFF) {
+                v.add("follow-up: intent " + s.intent().value() + " left HANDED_OFF for " + s.state() + " at #" + s.seq());
+            }
+        }
+        for (Observations.Sample first : handedOff.values()) {
+            first.session().ifPresent(session -> o.calls().stream()
+                    .filter(c -> c.seq() > first.seq() && c.session().equals(Optional.of(session))
+                            && c.call() != MerchantCall.GET)
+                    .forEach(c -> v.add("follow-up: " + c.call() + " #" + c.seq() + " reached the store after intent "
+                            + first.intent().value() + " was handed off")));
+        }
+        return v;
+    }
+
     static List<String> handoffNeverCompletes(Observations o) {
         List<String> v = new ArrayList<>();
         Set<SessionId> sessions = new HashSet<>();

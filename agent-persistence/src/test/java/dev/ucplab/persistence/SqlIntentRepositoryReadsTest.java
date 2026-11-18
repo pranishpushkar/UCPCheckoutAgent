@@ -8,6 +8,7 @@ import dev.ucplab.core.identity.UserId;
 import dev.ucplab.core.intent.AttemptOp;
 import dev.ucplab.core.intent.AttemptStatus;
 import dev.ucplab.core.intent.DuplicateIntentException;
+import dev.ucplab.core.intent.HandoffWatch;
 import dev.ucplab.core.intent.IntentEvent;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentState;
@@ -76,7 +77,7 @@ class SqlIntentRepositoryReadsTest {
                 List.of(new ProposedLine("item_456", 3), new ProposedLine("item_123", 1)), "a@example.com",
                 IntentState.RECONCILING, 7, Optional.of(new SessionId("s1")), Optional.of("hash"), 2,
                 Optional.of("order-9"), Optional.empty(), Optional.of("why"), Optional.of(T0.plusNanos(5)), true,
-                Optional.of("worker-1"), Optional.of(T0.plusSeconds(30)), T0, T0.plusMillis(250));
+                Optional.of("worker-1"), Optional.of(T0.plusSeconds(30)), T0, T0.plusMillis(250), HandoffWatch.NONE);
 
         repo.insert(full);
 
@@ -89,7 +90,7 @@ class SqlIntentRepositoryReadsTest {
                 IntentState.HANDED_OFF, 3, Optional.of(new SessionId("s2")), Optional.of("hash"), 0, Optional.empty(),
                 Optional.of(new dev.ucplab.core.merchant.ContinueUrl(
                         java.net.URI.create("https://s.myshopify.com/cart/c/abc?key=k-1"))),
-                Optional.empty(), Optional.empty(), false, Optional.empty(), Optional.empty(), T0, T0.plusMillis(9));
+                Optional.empty(), Optional.empty(), false, Optional.empty(), Optional.empty(), T0, T0.plusMillis(9), HandoffWatch.NONE);
 
         repo.insert(handedOff);
 
