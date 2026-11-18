@@ -346,10 +346,10 @@ async function pollIntent() {
   // 24.3, 7.6: what the store reported, on every poll, since it changes while the state stays HANDED_OFF.
   if (state === "HANDED_OFF") {
     showFollowUp(result.data.store_order, result.data.follow_up);
-    if (result.data.store_order) {
-      clear($("handoff"));
-    } else {
+    if (keepsHandoffLink(result.data.store_order, result.data.follow_up)) {
       showHandoffLink(result.data.handoff_url);
+    } else {
+      clear($("handoff"));
     }
   }
   if (currentRun) {
@@ -384,6 +384,31 @@ function showHandoffLink(url) {
 // <follow-up>
 // 24.3, 7.6: what the store reported after the handoff. A completed checkout means the store placed an order; it says
 // nothing of payment, so neither does the text. The confirmation code (VERIFY 11) is set as text only.
+
+// The text of a follow-up that ended without an order, by its ended_reason. A Map, so no other key can match.
+const FOLLOW_UP_ENDED = new Map([
+  ["window_ended", "The store reported no order within 24 h"],
+  ["reads_exhausted", "The store reported no order within 24 h"],
+  ["canceled", "The checkout was cancelled at the store; no order was placed"],
+  ["session_gone", "The checkout is no longer available at the store"],
+  ["merchant_changed", "Stopped checking: the store's settings changed"],
+]);
+
+// The endings after which the checkout may still be open, so the Continue at the store link stays.
+const LINK_KEPT_WHEN_ENDED = ["window_ended", "reads_exhausted"];
+
+// Whether the Continue at the store link stays: not once the store's order is shown, and after an ending only where the
+// checkout may still be open.
+function keepsHandoffLink(order, followUp) {
+  if (order) {
+    return false;
+  }
+  if (followUp && !followUp.watching) {
+    return LINK_KEPT_WHEN_ENDED.includes(followUp.ended_reason);
+  }
+  return true;
+}
+
 function showFollowUp(order, followUp) {
   const holder = $("follow-up");
   clear(holder);
@@ -395,7 +420,7 @@ function showFollowUp(order, followUp) {
   } else if (followUp && followUp.watching) {
     text = "Waiting for the store to report an order";
   } else if (followUp) {
-    text = "The store reported no order within 24 h";
+    text = FOLLOW_UP_ENDED.get(followUp.ended_reason) || "";
   }
   if (text) {
     holder.appendChild(el("p", text));

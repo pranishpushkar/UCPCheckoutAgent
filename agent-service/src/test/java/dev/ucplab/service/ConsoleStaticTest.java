@@ -193,7 +193,7 @@ class ConsoleStaticTest {
     }
 
     // Covers: 24.3, 23.2, I9, H5, 7.6 (the Continue at the store link: built only in HANDED_OFF, from the handoff_url of
-    // the owner's GET /api/intents/{id}, read once and nowhere else, until the store's order is shown; removed when another
+    // the owner's GET /api/intents/{id}, read once and nowhere else, while keepsHandoffLink says so; removed when another
     // intent is watched; a link in a new tab with rel="noopener noreferrer" and referrerpolicy="no-referrer")
     @Test
     void handoffLink_existsOnlyInHandedOff_fromTheIntentsHandoffUrl() throws IOException {
@@ -201,11 +201,9 @@ class ConsoleStaticTest {
         String link = handoffLink(js);
 
         assertThat(count(js, "handoff_url")).as("handoff_url is read once").isEqualTo(1);
-        // 24.3, 7.6: shown on every poll in HANDED_OFF until the store's order is shown; cleared in any other state.
+        // 24.3, 7.6: cleared in any other state; in HANDED_OFF, kept as keepsHandoffLink says (the poll's test).
         assertThat(js).contains("    if (state !== \"HANDED_OFF\") {\n      clear($(\"handoff\"));\n"
                 + "      clear($(\"follow-up\"));\n    }\n");
-        assertThat(js).contains("    if (result.data.store_order) {\n      clear($(\"handoff\"));\n    } else {\n"
-                + "      showHandoffLink(result.data.handoff_url);\n    }\n");
         assertThat(count(js, "showHandoffLink(")).as("one definition, one call").isEqualTo(2);
         int watch = js.indexOf("function watchIntent(id) {");
         assertThat(js.indexOf("clear($(\"handoff\"));", watch)).as("watching another intent drops the link")
