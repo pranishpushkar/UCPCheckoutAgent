@@ -1,12 +1,15 @@
-# Architecture (as M6a built it)
+# Architecture (as H5 built it)
 
 The stack of `docker compose up`: eight containers sharing one network namespace. The merchants and the fault proxies
 listen on loopback only (the merchant's source is frozen apart from its catalog option; the proxy's contract says
 127.0.0.1), so `lab-net` owns the namespace and the other seven join it. Only `127.0.0.1:8080` is published, for the
 console and the REST API. There are three merchants, each with a proxy of its own (one proxy has one upstream). The
-merchant image is one image: `merchant-b` and `merchant-c` pass `--catalog` with a file from `dev/catalogs/`. Dashed boxes
-are what comes next (M6b and M7). The registry reads `merchants.yaml`; a merchant that fails its discovery check starts
-SUSPENDED and is left out of search until a check passes again.
+merchant image is one image: `merchant-b` and `merchant-c` pass `--catalog` with a file from `dev/catalogs/`. The dashed
+box is optional (Gemini). The registry reads `merchants.yaml`; a merchant that fails its discovery check starts SUSPENDED
+and is left out of search until a check passes again.
+
+The Shopify store is not part of the Compose stack. The H5 live run (`scripts/shopify-live.sh`) starts the service with
+`java -jar` and a temporary `merchants.yaml` that lists the owner's development store alone, reached over MCP.
 
 ```mermaid
 flowchart LR
@@ -17,42 +20,34 @@ flowchart LR
   subgraph ns["lab-net: one network namespace, 127.0.0.1:8080 published"]
     subgraph svc["agent-service (Spring Boot)"]
       api["REST API and console<br/>session, CSRF, no-store"]
-      sup["Run supervisor<br/>one active run per user"]
-      rt["Agent runtime<br/>5 tools, budgets"]
+      rt["Agent runtime<br/>5 tools, budgets, cannot pay"]
+      orch["Orchestrator<br/>approvals, write-ahead attempts,<br/>handoff, recovery worker"]
+      gw["Merchant gateways<br/>UCP over HTTP, UCP over MCP<br/>breaker and rate limit per merchant"]
       reg["Merchant registry<br/>merchants.yaml, discovery check"]
-      orch["Orchestrator<br/>approvals, write-ahead attempts<br/>gateway of the intent's merchant"]
-      rec["Recovery worker"]
       db[("SQLite<br/>volume ucplab-data")]
     end
-    proxyA["fault-proxy-a :9101<br/>admin API"]
-    proxyB["fault-proxy-b :9102"]
-    proxyC["fault-proxy-c :9103"]
-    merchantA["merchant-a :9001<br/>UCP checkout, /_lab"]
-    merchantB["merchant-b :9002"]
-    merchantC["merchant-c :9003"]
+    proxies["Fault proxies a, b, c<br/>drop, delay, duplicate"]
+    merchants["Lab merchants a, b, c<br/>UCP checkout, order counter"]
   end
+  shopify(["Shopify development store<br/>UCP over MCP, the H5 live run"])
   gemini(["Gemini<br/>only if AGENT_MODEL=gemini"])
-  keycloak["Keycloak, OIDC<br/>M6b"]
-  pg[("Postgres, several instances<br/>M7")]
 
-  browser -->|HTTP, cookie and CSRF| api
-  cli -->|HTTP, same API| api
-  api --> sup --> rt
-  rt -->|propose only; search asks every merchant| orch
-  api -->|approve| orch
+  browser -->|"HTTP, cookie and CSRF"| api
+  cli -->|"HTTP, same API"| api
+  api --> rt
+  rt -->|"search every merchant"| gw
+  rt -->|"propose only"| orch
+  api -->|"approve"| orch
   orch --> db
-  rec --> orch
-  reg -.->|discovery| proxyA
-  rt -.->|model calls| gemini
-  orch -->|UCP over HTTP| proxyA --> merchantA
-  orch -->|UCP over HTTP| proxyB --> merchantB
-  orch -->|UCP over HTTP| proxyC --> merchantC
-  api -->|lab controls, local only| proxyA
-  api -->|orders, reset, price| merchantA
-  keycloak -.-> api
-  pg -.-> orch
-  classDef next stroke-dasharray: 5 5
-  class keycloak,pg,gemini next
+  orch --> gw
+  reg -.->|"discovery"| gw
+  gw -->|"UCP over HTTP"| proxies --> merchants
+  gw -->|"UCP over MCP, owned store only"| shopify
+  browser -.->|"handoff: the buyer pays at the store"| shopify
+  api -->|"lab controls, local only"| proxies
+  rt -.->|"model calls"| gemini
+  classDef ext stroke-dasharray: 5 5
+  class gemini ext
 ```
 
 The agent can only propose a purchase. Approval comes from the signed-in person through the REST API, and the
