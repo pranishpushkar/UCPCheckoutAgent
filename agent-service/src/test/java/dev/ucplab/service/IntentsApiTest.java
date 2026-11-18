@@ -7,11 +7,14 @@ import dev.ucplab.core.approval.ApprovalRecord;
 import dev.ucplab.core.approval.SnapshotLine;
 import dev.ucplab.core.identity.AuthContext;
 import dev.ucplab.core.identity.UserId;
+import dev.ucplab.core.intent.HandoffWatch;
 import dev.ucplab.core.intent.IntentEvent;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentState;
 import dev.ucplab.core.intent.ProposalResult;
 import dev.ucplab.core.intent.ProposedLine;
+import dev.ucplab.core.intent.PurchaseIntent;
+import dev.ucplab.core.intent.StoreOrder;
 import dev.ucplab.core.json.LenientJson;
 import dev.ucplab.core.orchestrator.DefaultOrchestrator;
 import dev.ucplab.core.recovery.RecoveryWorker;
@@ -259,6 +262,53 @@ class IntentsApiTest {
         assertThat(decide(alice, id, (String) pending.get("token"), "approve").statusCode()).isEqualTo(200);
         assertThat(awaitState(alice, id, s -> s.equals("COMPLETED"))).isEqualTo("COMPLETED");
         assertThat(json(api.get(alice, "/api/intents/" + id.value()))).doesNotContainKey("handoff_url");
+    }
+
+    /** Moves the owner's intent to HANDED_OFF with the follow-up {@code watch}, as the orchestrator's writes would. */
+    private void handOff(IntentId id, HandoffWatch watch) {
+        SqlIntentRepository intents = service.bean(SqlIntentRepository.class);
+        // As the worker that proposed it: propose leaves its own lease on the intent.
+        String owner = intents.findForSystem(id).orElseThrow().leaseOwner().orElse("test-writer");
+        PurchaseIntent claimed = intents.claim(id, owner, Duration.ofSeconds(30)).orElseThrow();
+        Instant now = service.bean(Clock.class).instant();
+        intents.update(claimed.withState(IntentState.HANDED_OFF, now).withHandoffWatch(watch), claimed.version(), owner);
+        intents.releaseLease(id, owner);
+    }
+
+    // Covers: 23.2, 7.6, I9 (in HANDED_OFF the owner's intent shows the follow-up: watching while the window is open, the
+    // store's order with its confirmation code once seen, the reason once it ended without one; another user gets 404;
+    // an intent in any other state has neither field)
+    @Test
+    void aHandedOffIntent_showsItsFollowUp_andItsStoreOrder_toTheOwnerOnly() throws IOException {
+        start();
+        Session alice = api.signIn("alice");
+        Session bob = api.signIn("bob");
+        IntentId watching = propose("alice", List.of(new ProposedLine("item_123", 1)));
+        IntentId seen = propose("alice", List.of(new ProposedLine("item_123", 2)));
+        IntentId ended = propose("alice", List.of(new ProposedLine("item_123", 3)));
+        assertThat(json(api.get(alice, "/api/intents/" + watching.value())))
+                .doesNotContainKey("store_order").doesNotContainKey("follow_up");
+
+        Instant now = service.bean(Clock.class).instant();
+        handOff(watching, new HandoffWatch(Optional.of(now.plus(Duration.ofHours(24))),
+                Optional.of(now.plus(Duration.ofHours(23))), Optional.empty()));
+        handOff(seen, new HandoffWatch(Optional.empty(), Optional.empty(),
+                Optional.of(new StoreOrder("gid://shopify/Order/42", Optional.of("CANARYLABEL7")))));
+        handOff(ended, HandoffWatch.NONE);
+        service.bean(SqlIntentRepository.class).appendEvent(ended,
+                IntentEvent.of("handoff_follow_up_ended", Map.of("reads", 52, "reason", "window_ended"), now));
+
+        assertThat(json(api.get(alice, "/api/intents/" + watching.value())))
+                .containsEntry("follow_up", Map.of("watching", true)).doesNotContainKey("store_order");
+        assertThat(json(api.get(alice, "/api/intents/" + seen.value())))
+                .containsEntry("store_order", Map.of("id", "gid://shopify/Order/42", "label", "CANARYLABEL7"))
+                .containsEntry("follow_up", Map.of("watching", false));
+        assertThat(json(api.get(alice, "/api/intents/" + ended.value())))
+                .containsEntry("follow_up", Map.of("watching", false, "ended_reason", "window_ended"))
+                .doesNotContainKey("store_order");
+        HttpResponse<String> other = api.get(bob, "/api/intents/" + seen.value());
+        assertThat(other.statusCode()).isEqualTo(404);
+        assertThat(other.body()).doesNotContain("CANARYLABEL7");
     }
 
     // Covers: 23.2, 9.2 (the quote card on the intent is the newest approval's snapshot, field for field; the approval

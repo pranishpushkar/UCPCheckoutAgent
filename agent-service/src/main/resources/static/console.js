@@ -303,6 +303,7 @@ async function decide(id, token, decision) {
 
 function watchIntent(id) {
   clear($("handoff"));
+  clear($("follow-up"));
   currentIntent = {id: id, state: ""};
   window.clearTimeout(intentTimer);
   pollIntent();
@@ -334,13 +335,21 @@ async function pollIntent() {
     $("timeline-state").textContent = "Intent " + id + ": " + state.replace(/_/g, " ").toLowerCase();
     setStatus("Intent " + state.replace(/_/g, " ").toLowerCase() + ".");
     await loadEvents(id);
-    if (state === "HANDED_OFF") {
-      showHandoffLink(result.data.handoff_url);
-    } else {
+    if (state !== "HANDED_OFF") {
       clear($("handoff"));
+      clear($("follow-up"));
     }
     if (state === "AWAITING_APPROVAL") {
       loadApproval(id);
+    }
+  }
+  // 24.3, 7.6: what the store reported, on every poll, since it changes while the state stays HANDED_OFF.
+  if (state === "HANDED_OFF") {
+    showFollowUp(result.data.store_order, result.data.follow_up);
+    if (keepsHandoffLink(result.data.store_order, result.data.follow_up)) {
+      showHandoffLink(result.data.handoff_url);
+    } else {
+      clear($("handoff"));
     }
   }
   if (currentRun) {
@@ -348,6 +357,8 @@ async function pollIntent() {
   }
   if (!TERMINAL.includes(state)) {
     intentTimer = window.setTimeout(pollIntent, 1000);
+  } else if (state === "HANDED_OFF" && result.data.follow_up && result.data.follow_up.watching) {
+    intentTimer = window.setTimeout(pollIntent, 10000);
   }
 }
 
@@ -369,6 +380,53 @@ function showHandoffLink(url) {
   holder.appendChild(anchor);
 }
 // </handoff-link>
+
+// <follow-up>
+// 24.3, 7.6: what the store reported after the handoff. A completed checkout means the store placed an order; it says
+// nothing of payment, so neither does the text. The confirmation code (VERIFY 11) is set as text only.
+
+// The text of a follow-up that ended without an order, by its ended_reason. A Map, so no other key can match.
+const FOLLOW_UP_ENDED = new Map([
+  ["window_ended", "The store reported no order within 24 h"],
+  ["reads_exhausted", "The store reported no order within 24 h"],
+  ["canceled", "The checkout was cancelled at the store; no order was placed"],
+  ["session_gone", "The checkout is no longer available at the store"],
+  ["merchant_changed", "Stopped checking: the store's settings changed"],
+]);
+
+// The endings after which the checkout may still be open, so the Continue at the store link stays.
+const LINK_KEPT_WHEN_ENDED = ["window_ended", "reads_exhausted"];
+
+// Whether the Continue at the store link stays: not once the store's order is shown, and after an ending only where the
+// checkout may still be open.
+function keepsHandoffLink(order, followUp) {
+  if (order) {
+    return false;
+  }
+  if (followUp && !followUp.watching) {
+    return LINK_KEPT_WHEN_ENDED.includes(followUp.ended_reason);
+  }
+  return true;
+}
+
+function showFollowUp(order, followUp) {
+  const holder = $("follow-up");
+  clear(holder);
+  let text = "";
+  if (order && typeof order.label === "string") {
+    text = "Order placed at the store, confirmation #" + order.label;
+  } else if (order) {
+    text = "Order placed at the store";
+  } else if (followUp && followUp.watching) {
+    text = "Waiting for the store to report an order";
+  } else if (followUp) {
+    text = FOLLOW_UP_ENDED.get(followUp.ended_reason) || "";
+  }
+  if (text) {
+    holder.appendChild(el("p", text));
+  }
+}
+// </follow-up>
 
 // The run's other intents, one line each, beside the one the timeline follows (S22): merchant and state.
 async function showOtherIntents(ids) {

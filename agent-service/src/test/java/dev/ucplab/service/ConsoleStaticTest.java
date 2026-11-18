@@ -11,6 +11,8 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 /**
  * The lab console's three static files (24.1 to 24.3, m6-plan section 7, C18), read as text: there is no browser in
@@ -190,17 +192,18 @@ class ConsoleStaticTest {
         return n;
     }
 
-    // Covers: 24.3, 23.2, I9, H5 (the Continue at the store link: built only in HANDED_OFF, from the handoff_url of the
-    // owner's GET /api/intents/{id}, read once and nowhere else; removed when another intent is watched; a link in a new
-    // tab with rel="noopener noreferrer" and referrerpolicy="no-referrer")
+    // Covers: 24.3, 23.2, I9, H5, 7.6 (the Continue at the store link: built only in HANDED_OFF, from the handoff_url of
+    // the owner's GET /api/intents/{id}, read once and nowhere else, while keepsHandoffLink says so; removed when another
+    // intent is watched; a link in a new tab with rel="noopener noreferrer" and referrerpolicy="no-referrer")
     @Test
     void handoffLink_existsOnlyInHandedOff_fromTheIntentsHandoffUrl() throws IOException {
         String js = read("console.js");
         String link = handoffLink(js);
 
         assertThat(count(js, "handoff_url")).as("handoff_url is read once").isEqualTo(1);
-        assertThat(js).contains("    if (state === \"HANDED_OFF\") {\n      showHandoffLink(result.data.handoff_url);\n"
-                + "    } else {\n      clear($(\"handoff\"));\n    }\n");
+        // 24.3, 7.6: cleared in any other state; in HANDED_OFF, kept as keepsHandoffLink says (the poll's test).
+        assertThat(js).contains("    if (state !== \"HANDED_OFF\") {\n      clear($(\"handoff\"));\n"
+                + "      clear($(\"follow-up\"));\n    }\n");
         assertThat(count(js, "showHandoffLink(")).as("one definition, one call").isEqualTo(2);
         int watch = js.indexOf("function watchIntent(id) {");
         assertThat(js.indexOf("clear($(\"handoff\"));", watch)).as("watching another intent drops the link")
@@ -209,6 +212,88 @@ class ConsoleStaticTest {
                 .contains("anchor.href = url;").contains("anchor.target = \"_blank\";")
                 .contains("anchor.rel = \"noopener noreferrer\";")
                 .contains("anchor.referrerPolicy = \"no-referrer\";");
+    }
+
+    /** The code between {@code // <follow-up>} and {@code // </follow-up>} in console.js. */
+    private static String followUp(String js) {
+        int from = js.indexOf("// <follow-up>");
+        int to = js.indexOf("// </follow-up>");
+        assertThat(from).as("the follow-up block").isNotNegative();
+        assertThat(to).isGreaterThan(from);
+        return js.substring(from, to);
+    }
+
+    // Covers: 24.3, 7.6, VERIFY 11 (in HANDED_OFF the timeline shows what the store reported: "Order placed at the store,
+    // confirmation #<label>" from store_order.label as text, or waiting, or no order within 24 h; never "paid": a
+    // completed checkout means an order was placed, not that it was paid)
+    @Test
+    void followUp_showsTheStoresOrder_asText_andNeverSaysPaid() throws IOException {
+        String js = read("console.js");
+        String block = followUp(js);
+
+        assertThat(block).contains("function showFollowUp(order, followUp) {")
+                .contains("\"Order placed at the store, confirmation #\" + order.label")
+                .contains("\"Waiting for the store to report an order\"")
+                .contains("\"The store reported no order within 24 h\"")
+                .contains("holder.appendChild(el(\"p\", text));");
+        for (String forbidden : List.of("innerHTML", "insertAdjacentHTML", "permalink", "console.", "Storage")) {
+            assertThat(block).as("the follow-up's code uses " + forbidden).doesNotContain(forbidden);
+        }
+        assertThat(js.toLowerCase(java.util.Locale.ROOT)).as("the console never says paid").doesNotContain("paid");
+        assertThat(read("index.html")).as("outside the one live region, as the link is").contains("<p id=\"follow-up\"></p>");
+    }
+
+    // Covers: 24.3, 7.6 (in HANDED_OFF the follow-up and the link are shown on every poll, not only when the state
+    // changes; whether the link stays is decided by keepsHandoffLink, from the store's order and the follow-up)
+    @Test
+    void followUp_isShownOnEveryPoll_andTheLinkFollowsIt() throws IOException {
+        String js = read("console.js");
+
+        assertThat(js).contains("  if (state === \"HANDED_OFF\") {\n"
+                + "    showFollowUp(result.data.store_order, result.data.follow_up);\n"
+                + "    if (keepsHandoffLink(result.data.store_order, result.data.follow_up)) {\n"
+                + "      showHandoffLink(result.data.handoff_url);\n    } else {\n      clear($(\"handoff\"));\n    }\n  }\n");
+        assertThat(followUp(js)).contains("function keepsHandoffLink(order, followUp) {\n"
+                + "  if (order) {\n    return false;\n  }\n"
+                + "  if (followUp && !followUp.watching) {\n    return LINK_KEPT_WHEN_ENDED.includes(followUp.ended_reason);\n  }\n"
+                + "  return true;\n}\n");
+        int watch = js.indexOf("function watchIntent(id) {");
+        assertThat(js.indexOf("clear($(\"follow-up\"));", watch)).as("watching another intent drops the follow-up")
+                .isBetween(watch, js.indexOf("pollIntent();", watch));
+    }
+
+    // Covers: 24.3, 7.6 (a follow-up that ended without an order shows the text of its ended_reason, looked up in a Map so
+    // no other key can match; the Continue at the store link stays only for window_ended and reads_exhausted, where the
+    // checkout may still be open, and goes for canceled, session_gone and merchant_changed; never "not paid")
+    @ParameterizedTest(name = "{0}")
+    @CsvSource(delimiter = '|', value = {
+        "window_ended     | The store reported no order within 24 h                      | true",
+        "reads_exhausted  | The store reported no order within 24 h                      | true",
+        "canceled         | The checkout was cancelled at the store; no order was placed | false",
+        "session_gone     | The checkout is no longer available at the store             | false",
+        "merchant_changed | Stopped checking: the store's settings changed               | false"})
+    void followUp_endedReason_showsItsText_andKeepsTheLinkOnlyWhereTheCheckoutMayBeOpen(String reason, String text,
+            boolean keepsLink) throws IOException {
+        String block = followUp(read("console.js"));
+
+        assertThat(block).contains("  [\"" + reason + "\", \"" + text + "\"],\n");
+        Matcher kept = Pattern.compile("const LINK_KEPT_WHEN_ENDED = \\[([^\\]]*)\\];").matcher(block);
+        assertThat(kept.find()).as("the reasons that keep the link").isTrue();
+        assertThat(kept.group(1).contains("\"" + reason + "\"")).as("keeps the link").isEqualTo(keepsLink);
+        assertThat(block).contains("    text = FOLLOW_UP_ENDED.get(followUp.ended_reason) || \"\";")
+                .doesNotContain("The store reported no order within 24 h\";");
+        assertThat(text.toLowerCase(java.util.Locale.ROOT)).doesNotContain("paid");
+    }
+
+    // Covers: 24.3, 7.6 (the timeline stops polling a terminal intent, except a HANDED_OFF one while its follow-up is
+    // watching: then every 10 s)
+    @Test
+    void timeline_pollsAHandedOffIntent_every10s_whileItsFollowUpIsWatching() throws IOException {
+        String js = read("console.js");
+
+        assertThat(js).contains("  if (!TERMINAL.includes(state)) {\n    intentTimer = window.setTimeout(pollIntent, 1000);\n"
+                + "  } else if (state === \"HANDED_OFF\" && result.data.follow_up && result.data.follow_up.watching) {\n"
+                + "    intentTimer = window.setTimeout(pollIntent, 10000);\n  }\n");
     }
 
     // Covers: 24.3, I8, H5 (the handoff URL is never page text: inside the link's code it is only checked and set as the

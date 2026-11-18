@@ -362,7 +362,7 @@ class MigrationsTest {
 
     // Covers: 10, 7.2, H5 C7a (a database at V8 holding rows, events, attempts and approvals upgrades to V9: every row
     // keeps every value it had, handoff_url starts empty, HANDED_OFF is accepted and terminal for the dedupe index, the
-    // children point at the renamed parent, and the indexes and the I11 trigger are back; V9 is the last migration)
+    // children point at the renamed parent, and the indexes and the I11 trigger are back; V9 follows V8)
     @Test
     void v9_upgradesAV8DatabaseWithRows_andAcceptsHandedOff() {
         Path file = dir.resolve("v8-to-v9.db");
@@ -414,7 +414,7 @@ class MigrationsTest {
                     () -> exec(db, "UPDATE purchase_intent SET merchant_id = 'other' WHERE id = 'i1'"))
                     .hasStackTraceContaining("I11");
             assertThat(column(db, "SELECT version FROM flyway_schema_history WHERE success = 1"
-                    + " ORDER BY installed_rank")).endsWith("8", "9");
+                    + " ORDER BY installed_rank")).containsSubsequence("8", "9");
         }
     }
 
@@ -480,5 +480,44 @@ class MigrationsTest {
         assertThat(Migrations.isCurrent(behind)).isFalse();
         assertThat(Migrations.isCurrent(behind)).as("still behind: isCurrent did not migrate").isFalse();
         assertThat(Migrations.isCurrent(current)).isTrue();
+    }
+
+    // Covers: 10 V10, 7.6 (a database at V9 holding rows upgrades to V10: every row keeps every value it had and the four
+    // follow-up columns start empty, so an intent handed off before V10 is not followed; a store order is refused in any
+    // state but HANDED_OFF; V10 is the last migration)
+    @Test
+    void v10_upgradesAV9DatabaseWithRows_addingTheFollowUpColumnsEmpty() {
+        Path file = dir.resolve("v9-to-v10.db");
+        Flyway.configure().dataSource("jdbc:sqlite:" + file, null, null).locations("classpath:db/migration")
+                .target("9").load().migrate();
+        String dump = "SELECT group_concat(id || '|' || user_id || '|' || merchant_id || '|' || merchant_fingerprint"
+                + " || '|' || state || '|' || version || '|' || coalesce(handoff_url, '-') || '|' || created_at, ';')"
+                + " FROM (SELECT * FROM purchase_intent ORDER BY id)";
+        List<String> before;
+        try (Database old = Database.open(file, 1)) {
+            exec(old, intent("i1", "merchant-a", "k1", "APPROVED", null),
+                    intent("i2", "merchant-b", "k2", "COMPLETED", "o2"),
+                    "UPDATE purchase_intent SET state = 'HANDED_OFF', handoff_url = 'https://shop.example/c' WHERE id = 'i1'");
+            before = column(old, dump);
+        }
+
+        Migrations.migrate(file);
+
+        try (Database db = Database.open(file, 1)) {
+            assertThat(column(db, dump)).isEqualTo(before);
+            assertThat(column(db, "SELECT count(*) FROM purchase_intent WHERE handoff_watch_until IS NULL"
+                    + " AND handoff_next_read_at IS NULL AND store_order_id IS NULL AND store_order_label IS NULL"))
+                    .containsExactly("2");
+            exec(db, "UPDATE purchase_intent SET store_order_id = 'gid://shopify/Order/1', store_order_label = 'L1',"
+                    + " handoff_watch_until = NULL WHERE id = 'i1'");
+            org.assertj.core.api.Assertions.assertThatThrownBy(
+                    () -> exec(db, "UPDATE purchase_intent SET store_order_id = 'gid://shopify/Order/2' WHERE id = 'i2'"))
+                    .as("a store order belongs to HANDED_OFF").isInstanceOf(DatabaseException.class);
+            org.assertj.core.api.Assertions.assertThatThrownBy(
+                    () -> exec(db, "UPDATE purchase_intent SET handoff_watch_until = 't' WHERE id = 'i2'"))
+                    .as("a follow-up window belongs to HANDED_OFF").isInstanceOf(DatabaseException.class);
+            assertThat(column(db, "SELECT version FROM flyway_schema_history WHERE success = 1"
+                    + " ORDER BY installed_rank")).endsWith("9", "10");
+        }
     }
 }

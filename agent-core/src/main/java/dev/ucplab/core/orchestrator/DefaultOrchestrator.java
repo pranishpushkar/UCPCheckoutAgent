@@ -20,6 +20,7 @@ import dev.ucplab.core.intent.AttemptId;
 import dev.ucplab.core.intent.AttemptOp;
 import dev.ucplab.core.intent.AttemptStatus;
 import dev.ucplab.core.intent.DuplicateIntentException;
+import dev.ucplab.core.intent.HandoffWatch;
 import dev.ucplab.core.intent.IntentEvent;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentNotFoundException;
@@ -32,6 +33,7 @@ import dev.ucplab.core.intent.ProposalResult;
 import dev.ucplab.core.intent.ProposedLine;
 import dev.ucplab.core.intent.PurchaseIntent;
 import dev.ucplab.core.intent.StepResult;
+import dev.ucplab.core.intent.StoreOrder;
 import dev.ucplab.core.intent.Transition;
 import dev.ucplab.core.intent.TransitionEvent;
 import dev.ucplab.core.intent.TransitionGuard;
@@ -60,6 +62,7 @@ import dev.ucplab.core.merchant.FulfillmentView;
 import dev.ucplab.core.merchant.NoGatewayException;
 import dev.ucplab.core.merchant.NoInstrumentException;
 import dev.ucplab.core.merchant.MutatingOp;
+import dev.ucplab.core.merchant.OrderRef;
 import dev.ucplab.core.merchant.PaymentInstrument;
 import dev.ucplab.core.merchant.QuoteShape;
 import dev.ucplab.core.merchant.SessionId;
@@ -175,6 +178,10 @@ public final class DefaultOrchestrator implements Orchestrator {
     static final int MAX_PROBE_ATTEMPTS = 3;
     /** 7.6 M3 note: probing ends at the first probe step this long after the original create was sent. */
     static final Duration PROBE_DEADLINE = Duration.ofMinutes(10);
+
+    /** The resolved_by of a follow-up read's attempt (7.6), and how a counted read is recognised in its summary. */
+    private static final String FOLLOW_UP = "handoff_follow_up";
+    private static final String FOLLOW_UP_MARK = "\"resolved_by\":\"" + FOLLOW_UP + "\"";
 
     private static final int MAX_RATIONALE = 300;
     private static final System.Logger LOG = System.getLogger(DefaultOrchestrator.class.getName());
@@ -471,7 +478,8 @@ public final class DefaultOrchestrator implements Orchestrator {
             case COMPLETING -> completing(intent, attempts);
             case RECONCILING -> reconcile(intent, attempts);
             case REJECTED, FAILED_NOT_CHARGED -> cancelIfOwed(intent, attempts, entry);
-            case COMPLETED, HANDED_OFF, ESCALATED -> idle(intent);
+            case HANDED_OFF -> followUp(intent, attempts, entry);
+            case COMPLETED, ESCALATED -> idle(intent);
         };
     }
 
@@ -1804,7 +1812,8 @@ public final class DefaultOrchestrator implements Orchestrator {
      */
     private Step handedOff(PurchaseIntent intent, ApprovalRecord approval, ContinueUrl url) {
         Move m = move(intent, TransitionEvent.HAND_OFF);
-        PurchaseIntent next = m.next().withHandoffUrl(url);
+        // 7.2 hand_off, 7.6: the follow-up's window opens in the same fenced write as the move.
+        PurchaseIntent next = m.next().withHandoffUrl(url).withHandoffWatch(HandoffWatch.opened(clock.instant()));
         intents.update(next, intent.version(), workerId);
         if (approval.status() != ApprovalStatus.CONSUMED) {
             approvals.transition(approval.id(), ApprovalStatus.APPROVED, ApprovalStatus.CONSUMED, clock.instant(),
@@ -1813,6 +1822,118 @@ public final class DefaultOrchestrator implements Orchestrator {
         // I8: the host only; the URL carries an access key.
         event(intent.id(), "handed_off", Map.of("host", url.value().getHost()));
         transitionEvent(intent.id(), m.transition());
+        return moved(intent, next);
+    }
+
+    // ---------------------------------------------------------------- handoff follow-up (7.6)
+
+    /**
+     * The handoff follow-up (7.6): while the window is open and the next read is due, one {@code get} of the session and
+     * nothing else; the state never changes and nothing mutating is sent. Before the read, a changed entry, {@link HandoffWatch#MAX_READS}
+     * counted reads or the window's end, in that order, end the follow-up without reading; while the gateway does not
+     * admit calls the step sends and writes nothing. The read and what it settles are one fenced write: a {@code get}
+     * attempt whose summary is only resolved_by, the status and the order id (I8), with the intent's next read, or its
+     * store order, or the end. A NotSent read reached no store: no attempt, not counted, only the next read is set. A crash
+     * between the read and the write repeats the read, which is harmless.
+     */
+    private Step followUp(PurchaseIntent intent, List<MerchantAttempt> attempts, Optional<MerchantEntry> entry) {
+        HandoffWatch watch = intent.handoffWatch();
+        Instant now = clock.instant();
+        // Only a watching follow-up has a next read (HandoffWatch).
+        if (watch.nextReadAt().map(now::isBefore).orElse(true)) {
+            return idle(intent);
+        }
+        int reads = (int) attempts.stream().filter(DefaultOrchestrator::followUpRead).count();
+        if (!OwnStoreGuard.unchanged(entry, intent.merchantFingerprint())) {
+            return endFollowUp(intent, watch, OwnStoreGuard.MERCHANT_CHANGED, reads);
+        }
+        if (reads >= HandoffWatch.MAX_READS) {
+            return endFollowUp(intent, watch, "reads_exhausted", reads);
+        }
+        if (!now.isBefore(watch.until().get())) {
+            return endFollowUp(intent, watch, "window_ended", reads);
+        }
+        MerchantGateway merchant = gateway(intent);
+        if (!merchant.admitsCalls()) {
+            // 8.3: the gateway's get bypasses the breaker and the rate limiter, so the follow-up holds back itself.
+            return idle(intent);
+        }
+        Instant sentAt = clock.instant();
+        CallOutcome<CheckoutView> read = merchant.get(requireSession(intent));
+        Instant at = clock.instant();
+        if (read instanceof CallOutcome.NotSent<CheckoutView>) {
+            PurchaseIntent next = intent.withHandoffWatch(watch.nextRead(reads, at)).withState(intent.state(), at);
+            intents.update(next, intent.version(), workerId);
+            return moved(intent, next);
+        }
+        int counted = reads + 1;
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("resolved_by", FOLLOW_UP);
+        Optional<Integer> http = Optional.empty();
+        HandoffWatch nextWatch = watch.nextRead(counted, at);
+        boolean seen = false;
+        boolean ended = false;
+        Map<String, Object> payload = new LinkedHashMap<>();
+        if (read instanceof CallOutcome.Ok<CheckoutView> ok) {
+            CheckoutView view = ok.value();
+            http = Optional.of(ok.httpStatus());
+            summary.put("status", view.status().wire());
+            view.order().ifPresent(o -> summary.put("order_id", o.id()));
+            if (view.status() == CheckoutStatus.COMPLETED && view.order().isPresent()) {
+                OrderRef order = view.order().get();
+                nextWatch = watch.ended(Optional.of(new StoreOrder(order.id(), order.label())));
+                seen = true;
+                // I8: the order id only; the label is the buyer's confirmation code.
+                payload.put("order_id", order.id());
+                payload.put("reads", counted);
+            } else if (view.status() == CheckoutStatus.CANCELED) {
+                nextWatch = watch.ended(Optional.empty());
+                ended = true;
+                payload.put("reason", "canceled");
+                payload.put("reads", counted);
+            }
+        } else if (read instanceof CallOutcome.ProtocolError<CheckoutView> e) {
+            http = Optional.of(e.httpStatus());
+            if (e.httpStatus() == 404) {
+                nextWatch = watch.ended(Optional.empty());
+                ended = true;
+                payload.put("reason", "session_gone");
+                payload.put("reads", counted);
+            }
+        } else if (read instanceof CallOutcome.Rejected<CheckoutView> r) {
+            http = Optional.of(r.httpStatus());
+        }
+        MerchantAttempt attempt = new MerchantAttempt(new AttemptId(ids.next()), intent.id(), AttemptOp.GET,
+                intent.requoteCount(), Optional.empty(), Optional.empty(), Optional.empty(),
+                read instanceof CallOutcome.Uncertain<CheckoutView> ? AttemptStatus.UNCERTAIN : AttemptStatus.RESPONDED,
+                http, Optional.of(CanonicalJson.write(summary)), sentAt, Optional.of(at));
+        PurchaseIntent next = intent.withHandoffWatch(nextWatch).withState(intent.state(), at);
+        intents.recordAttempt(attempt, next, intent.version(), workerId);
+        if (seen) {
+            event(intent.id(), "handoff_order_seen", payload);
+        } else if (ended) {
+            event(intent.id(), "handoff_follow_up_ended", payload);
+        }
+        return moved(intent, next);
+    }
+
+    /**
+     * A counted follow-up read: an attempt the follow-up wrote, which is always a {@code get} (a NotSent read writes
+     * none). No other attempt's summary has its resolved_by.
+     */
+    private static boolean followUpRead(MerchantAttempt a) {
+        return a.responseJson().filter(j -> j.contains(FOLLOW_UP_MARK)).isPresent();
+    }
+
+    /** Ends the follow-up without reading: one fenced write and the event with the reason and the counted reads. */
+    private Step endFollowUp(PurchaseIntent intent, HandoffWatch watch, String reason, int reads) {
+        PurchaseIntent next = intent.withHandoffWatch(watch.ended(watch.storeOrder()))
+                .withState(intent.state(), clock.instant());
+        intents.update(next, intent.version(), workerId);
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("reason", reason);
+        payload.put("reads", reads);
+        event(intent.id(), "handoff_follow_up_ended", payload);
         return moved(intent, next);
     }
 

@@ -5,6 +5,7 @@ import dev.ucplab.core.intent.AttemptId;
 import dev.ucplab.core.intent.AttemptOp;
 import dev.ucplab.core.intent.AttemptStatus;
 import dev.ucplab.core.intent.DuplicateIntentException;
+import dev.ucplab.core.intent.HandoffWatch;
 import dev.ucplab.core.intent.IntentEvent;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentNotFoundException;
@@ -12,6 +13,7 @@ import dev.ucplab.core.intent.IntentRepository;
 import dev.ucplab.core.intent.IntentState;
 import dev.ucplab.core.intent.LeaseLostException;
 import dev.ucplab.core.intent.StaleVersionException;
+import dev.ucplab.core.intent.StoreOrder;
 import dev.ucplab.core.intent.MerchantAttempt;
 import dev.ucplab.core.intent.ProposedLine;
 import dev.ucplab.core.intent.PurchaseIntent;
@@ -52,7 +54,8 @@ public final class SqlIntentRepository implements IntentRepository {
 
     static final String INTENT_COLUMNS = "id, user_id, merchant_id, merchant_fingerprint, dedupe_key, lines_json,"
             + " buyer_email, state, version, session_id, approved_snapshot_hash, requote_count, order_id, failure_reason,"
-            + " uncertain_since, cancel_pending, lease_owner, lease_until, created_at, updated_at, handoff_url";
+            + " uncertain_since, cancel_pending, lease_owner, lease_until, created_at, updated_at, handoff_url,"
+            + " handoff_watch_until, handoff_next_read_at, store_order_id, store_order_label";
 
     private static final String ATTEMPT_COLUMNS = "id, intent_id, op, revision, idempotency_key, request_hash,"
             + " request_body, status, http_status, response_json, sent_at, responded_at";
@@ -63,9 +66,17 @@ public final class SqlIntentRepository implements IntentRepository {
                     .map(s -> "'" + s.name() + "'").collect(Collectors.joining(", "))
             + ")";
 
-    /** The states a worker drives, and any intent that still owes a cancel (7.6). */
+    /**
+     * The states a worker drives, any intent that still owes a cancel, and a HANDED_OFF intent whose follow-up read is
+     * due (7.6). Binds now.
+     */
     private static final String RECOVERABLE_FILTER = "state IN ('QUOTING', 'APPROVED', 'COMPLETING', 'RECONCILING')"
-            + " OR cancel_pending = 1";
+            + " OR cancel_pending = 1"
+            + " OR (state = 'HANDED_OFF' AND handoff_watch_until IS NOT NULL AND handoff_next_read_at <= ?)";
+
+    /** Follow-ups last (7.6), so they cannot crowd the other recoverable intents out of a pass; then oldest first. */
+    private static final String RECOVERABLE_ORDER = " ORDER BY CASE WHEN state = 'HANDED_OFF' THEN 1 ELSE 0 END,"
+            + " created_at, id";
 
     /** Lease free for {@code owner} at {@code now}: held by owner, never taken, or expired. Binds owner, then now. */
     private static final String LEASE_FREE = "(lease_owner = ? OR lease_until IS NULL OR lease_until < ?)";
@@ -114,7 +125,7 @@ public final class SqlIntentRepository implements IntentRepository {
         db.write(c -> {
             try (PreparedStatement s = c.prepareStatement(
                     "INSERT INTO purchase_intent (" + INTENT_COLUMNS + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
-                            + " ?, ?, ?, ?, ?, ?, ?, ?)")) {
+                            + " ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
                 int n = 1;
                 s.setString(n++, i.id().value());
                 s.setString(n++, i.owner().value());
@@ -136,7 +147,8 @@ public final class SqlIntentRepository implements IntentRepository {
                 s.setString(n++, i.leaseUntil().map(SqlTimes::format).orElse(null));
                 s.setString(n++, SqlTimes.format(i.createdAt()));
                 s.setString(n++, SqlTimes.format(i.updatedAt()));
-                s.setString(n, handoffUrl(i));
+                s.setString(n++, handoffUrl(i));
+                n = setHandoffWatch(s, n, i.handoffWatch());
                 s.executeUpdate();
             } catch (SQLException e) {
                 // The primary key (a repeated id) and ux_intent_active_dedupe (an active dedupe key) both land here.
@@ -370,8 +382,9 @@ public final class SqlIntentRepository implements IntentRepository {
                     : " AND id NOT IN (" + String.join(", ", java.util.Collections.nCopies(excluded.size(), "?")) + ")";
             try (PreparedStatement s = c.prepareStatement(
                     "SELECT id FROM purchase_intent WHERE (" + RECOVERABLE_FILTER + ") AND " + LEASE_FREE + notExcluded
-                            + " ORDER BY created_at, id LIMIT ?")) {
+                            + RECOVERABLE_ORDER + " LIMIT ?")) {
                 int n = 1;
+                s.setString(n++, nowText);
                 s.setString(n++, owner);
                 s.setString(n++, nowText);
                 for (String id : excluded) {
@@ -443,7 +456,8 @@ public final class SqlIntentRepository implements IntentRepository {
         try (PreparedStatement s = c.prepareStatement(
                 "UPDATE purchase_intent SET state = ?, version = ?, session_id = ?, approved_snapshot_hash = ?,"
                         + " requote_count = ?, order_id = ?, failure_reason = ?, uncertain_since = ?,"
-                        + " cancel_pending = ?, updated_at = ?, handoff_url = ? WHERE id = ? AND lease_owner = ?"
+                        + " cancel_pending = ?, updated_at = ?, handoff_url = ?, handoff_watch_until = ?,"
+                        + " handoff_next_read_at = ?, store_order_id = ?, store_order_label = ? WHERE id = ? AND lease_owner = ?"
                         + " AND version = ?"
                         + " AND merchant_id = ?")) {
             int n = 1;
@@ -459,6 +473,8 @@ public final class SqlIntentRepository implements IntentRepository {
             s.setString(n++, SqlTimes.format(i.updatedAt()));
             // 7.2 hand_off: the continue_url is written in the same fenced write as the move to HANDED_OFF.
             s.setString(n++, handoffUrl(i));
+            // 7.6: the follow-up is written in the same fenced write, as V10's CHECKs keep it to HANDED_OFF.
+            n = setHandoffWatch(s, n, i.handoffWatch());
             s.setString(n++, i.id().value());
             s.setString(n++, leaseOwner);
             s.setLong(n++, expectedVersion);
@@ -630,7 +646,26 @@ public final class SqlIntentRepository implements IntentRepository {
                 Optional.ofNullable(r.getString("lease_owner")),
                 Optional.ofNullable(r.getString("lease_until")).map(SqlTimes::parse),
                 SqlTimes.parse(r.getString("created_at")),
-                SqlTimes.parse(r.getString("updated_at")));
+                SqlTimes.parse(r.getString("updated_at")), handoffWatch(r));
+    }
+
+    /** V10's four columns, from {@code n} on; returns the next index. No lambda, as for handoffUrl. */
+    private static int setHandoffWatch(PreparedStatement s, int n, HandoffWatch w) throws SQLException {
+        s.setString(n, w.until().isPresent() ? SqlTimes.format(w.until().get()) : null);
+        s.setString(n + 1, w.nextReadAt().isPresent() ? SqlTimes.format(w.nextReadAt().get()) : null);
+        s.setString(n + 2, w.storeOrder().isPresent() ? w.storeOrder().get().id() : null);
+        s.setString(n + 3, w.storeOrder().isPresent() ? w.storeOrder().get().label().orElse(null) : null);
+        return n + 4;
+    }
+
+    private static HandoffWatch handoffWatch(ResultSet r) throws SQLException {
+        String until = r.getString("handoff_watch_until");
+        String next = r.getString("handoff_next_read_at");
+        String order = r.getString("store_order_id");
+        Optional<StoreOrder> storeOrder = order == null ? Optional.empty()
+                : Optional.of(new StoreOrder(order, Optional.ofNullable(r.getString("store_order_label"))));
+        return new HandoffWatch(until == null ? Optional.empty() : Optional.of(SqlTimes.parse(until)),
+                next == null ? Optional.empty() : Optional.of(SqlTimes.parse(next)), storeOrder);
     }
 
     private static MerchantAttempt attempt(ResultSet r) throws SQLException {

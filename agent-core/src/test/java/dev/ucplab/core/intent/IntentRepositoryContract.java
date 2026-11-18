@@ -216,7 +216,7 @@ public abstract class IntentRepositoryContract {
                 claimed.id(), BOB, SHOP, "{\"forged\":true}", "forged", List.of(new ProposedLine("other", 5)),
                 "forged@example.com", IntentState.COMPLETING, 99,
                 Optional.empty(), Optional.empty(), 0, Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(),
-                false, Optional.of(W2), Optional.of(T0.plusSeconds(9999)), T0.minusSeconds(5), clock.instant());
+                false, Optional.of(W2), Optional.of(T0.plusSeconds(9999)), T0.minusSeconds(5), clock.instant(), HandoffWatch.NONE);
 
         repo.update(forged, 0, W1);
 
@@ -238,7 +238,7 @@ public abstract class IntentRepositoryContract {
     private static PurchaseIntent atMerchant(PurchaseIntent i, MerchantId merchant) {
         return new PurchaseIntent(i.id(), i.owner(), merchant, i.merchantFingerprint(), i.dedupeKey(), i.lines(), i.buyerEmail(), i.state(),
                 i.version(), i.sessionId(), i.approvedSnapshotHash(), i.requoteCount(), i.orderId(), i.handoffUrl(), i.failureReason(),
-                i.uncertainSince(), i.cancelPending(), i.leaseOwner(), i.leaseUntil(), i.createdAt(), i.updatedAt());
+                i.uncertainSince(), i.cancelPending(), i.leaseOwner(), i.leaseUntil(), i.createdAt(), i.updatedAt(), HandoffWatch.NONE);
     }
 
     // Covers: I11, 19 (an update whose merchant differs from the stored one is refused and changes nothing: the stored
@@ -320,6 +320,81 @@ public abstract class IntentRepositoryContract {
         assertThat(stored.state()).isEqualTo(IntentState.HANDED_OFF);
         assertThat(stored.handoffUrl()).contains(url);
         assertThat(repo.find(ALICE, claimed.id()).orElseThrow().handoffUrl()).contains(url);
+    }
+
+    /** A claimed QUOTING intent moved to HANDED_OFF with the follow-up {@code watch}; returns the stored copy. */
+    private PurchaseIntent handedOff(String id, String dedupeKey, HandoffWatch watch) {
+        PurchaseIntent claimed = insertAndClaim(id, ALICE, dedupeKey, W1);
+        repo.update(claimed.withState(IntentState.HANDED_OFF, clock.instant()).withHandoffWatch(watch), 0, W1);
+        repo.releaseLease(claimed.id(), W1);
+        return repo.findForSystem(claimed.id()).orElseThrow();
+    }
+
+    // Covers: 7.2 hand_off, 7.6, 10 V10 (the follow-up is written in the fenced write and read back whole: the window, the
+    // next read and the store's order with its label; a stale write stores none of it)
+    @Test
+    void update_writesTheHandoffFollowUp_andReadsItBack() {
+        PurchaseIntent claimed = insertAndClaim("i1", ALICE, "d1", W1);
+        Instant until = clock.instant().plus(Duration.ofHours(24));
+        Instant next = clock.instant().plus(Duration.ofMinutes(1));
+        HandoffWatch watching = new HandoffWatch(Optional.of(until), Optional.of(next), Optional.empty());
+        PurchaseIntent handedOff = claimed.withState(IntentState.HANDED_OFF, clock.instant()).withHandoffWatch(watching);
+
+        assertThatThrownBy(() -> repo.update(handedOff, 5, W1)).isInstanceOf(StaleVersionException.class);
+        assertThat(repo.findForSystem(claimed.id()).orElseThrow().handoffWatch()).isEqualTo(HandoffWatch.NONE);
+
+        repo.update(handedOff, 0, W1);
+        assertThat(repo.findForSystem(claimed.id()).orElseThrow().handoffWatch()).isEqualTo(watching);
+
+        HandoffWatch seen = new HandoffWatch(Optional.empty(), Optional.empty(),
+                Optional.of(new StoreOrder("gid://shopify/Order/42", Optional.of("CANARYLABEL7"))));
+        repo.update(repo.findForSystem(claimed.id()).orElseThrow().withHandoffWatch(seen), 1, W1);
+        assertThat(repo.findForSystem(claimed.id()).orElseThrow().handoffWatch()).isEqualTo(seen);
+        assertThat(repo.find(ALICE, claimed.id()).orElseThrow().handoffWatch()).isEqualTo(seen);
+
+        HandoffWatch noLabel = new HandoffWatch(Optional.empty(), Optional.empty(),
+                Optional.of(new StoreOrder("gid://shopify/Order/43", Optional.empty())));
+        repo.update(repo.findForSystem(claimed.id()).orElseThrow().withHandoffWatch(noLabel), 2, W1);
+        assertThat(repo.findForSystem(claimed.id()).orElseThrow().handoffWatch()).isEqualTo(noLabel);
+    }
+
+    // Covers: 7.6, Appendix B claimRecoverable (a HANDED_OFF intent is claimed while its follow-up is watching and its
+    // next read is due, and not before it is due, nor once the follow-up has ended, nor with none; it comes after the
+    // other recoverable intents, so follow-ups cannot crowd them out of a pass)
+    @Test
+    void claimRecoverable_takesAHandedOffIntent_onlyWhenItsFollowUpReadIsDue() {
+        Instant until = clock.instant().plus(Duration.ofHours(24));
+        PurchaseIntent due = handedOff("due", "d1", new HandoffWatch(Optional.of(until),
+                Optional.of(clock.instant().plus(Duration.ofMinutes(1))), Optional.empty()));
+        handedOff("later", "d2", new HandoffWatch(Optional.of(until),
+                Optional.of(clock.instant().plus(Duration.ofMinutes(2))), Optional.empty()));
+        handedOff("ended", "d3", new HandoffWatch(Optional.empty(), Optional.empty(),
+                Optional.of(new StoreOrder("gid://shopify/Order/42", Optional.empty()))));
+        handedOff("none", "d4", HandoffWatch.NONE);
+        clock.advance(Duration.ofMinutes(1));
+        PurchaseIntent quoting = proposed("quoting", ALICE, "d5").withState(IntentState.QUOTING, clock.instant());
+        repo.insert(quoting);
+
+        assertThat(repo.claimRecoverable(W2, LEASE, 10)).extracting(i -> i.id().value())
+                .containsExactly("quoting", due.id().value());
+        assertThat(repo.claimRecoverable(W2, LEASE, 1, java.util.Set.of(quoting.id()))).extracting(i -> i.id().value())
+                .containsExactly(due.id().value());
+    }
+
+    // Covers: 7.6, 10, port parity (the follow-up belongs to HANDED_OFF: an update that carries a window or a store order
+    // in any other state is refused and stores nothing; the exception type is the adapter's own)
+    @Test
+    void theHandoffFollowUp_isRefused_inAnyOtherState() {
+        PurchaseIntent claimed = insertAndClaim("i1", ALICE, "d1", W1);
+        HandoffWatch order = new HandoffWatch(Optional.empty(), Optional.empty(),
+                Optional.of(new StoreOrder("gid://shopify/Order/42", Optional.empty())));
+        HandoffWatch window = new HandoffWatch(Optional.of(clock.instant()), Optional.of(clock.instant()), Optional.empty());
+
+        for (HandoffWatch watch : List.of(order, window)) {
+            assertThatThrownBy(() -> repo.update(claimed.withState(IntentState.REJECTED, clock.instant())
+                    .withHandoffWatch(watch), 0, W1)).isInstanceOf(RuntimeException.class);
+            assertThat(repo.findForSystem(claimed.id()).orElseThrow().state()).isEqualTo(IntentState.QUOTING);
+        }
     }
 
     // Covers: 7.2, 10 (handoff_url is empty in every state but HANDED_OFF, whether inserted in that state or moved there)

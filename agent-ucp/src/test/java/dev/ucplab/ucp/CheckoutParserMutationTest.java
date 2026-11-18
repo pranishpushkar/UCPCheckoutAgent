@@ -156,6 +156,24 @@ class CheckoutParserMutationTest {
         invalid(checkout("\"order\":{}"), "id missing");
     }
 
+    // Covers: VERIFY 7, VERIFY 11, 7.6, I8 (a completed checkout as the store answered after payment, every value replaced:
+    // the order's id and its label, the confirmation code, are read; its permalink_url, whose session_token opens the
+    // buyer's order page, is never read; a label that is not a non-blank string is left out, not refused)
+    @Test
+    void aCompletedShopifyCheckout_readsTheOrderIdAndLabel_andIgnoresThePermalink() {
+        String paid = "{\"id\":\"gid://shopify/Checkout/tok?key=k\",\"status\":\"completed\",\"currency\":\"USD\","
+                + "\"line_items\":[" + LINE + "],\"totals\":" + TOTALS + ",\"order\":{\"id\":\"gid://shopify/Order/42\","
+                + "\"label\":\"CANARYLABEL7\",\"permalink_url\":\"https://shop.example/checkouts/cn/t/thank_you"
+                + "?session_token=canary-session-666\"}}";
+        CheckoutView view = view(paid);
+
+        assertThat(view.status()).isEqualTo(dev.ucplab.core.merchant.CheckoutStatus.COMPLETED);
+        assertThat(view.order()).contains(new OrderRef("gid://shopify/Order/42", Optional.of("CANARYLABEL7")));
+        assertThat(view.toString()).doesNotContain("canary-session-666");
+        assertThat(view(checkout("\"order\":{\"id\":\"o\",\"label\":5}")).order()).contains(new OrderRef("o"));
+        assertThat(view(checkout("\"order\":{\"id\":\"o\",\"label\":\" \"}")).order()).contains(new OrderRef("o"));
+    }
+
     // Covers: 8.1. Kills CheckoutParser.lenientText:308 (the buyer: every field optional, a field of another type is left out)
     @Test
     void theBuyer_isLeniant_aboutEveryField() {

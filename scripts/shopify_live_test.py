@@ -412,6 +412,29 @@ class Console(unittest.TestCase):
         self.assertIn("left open", out.getvalue())
         self.assertNotIn("canarykey777", out.getvalue())
 
+    # 7.6 handoff follow-up, VERIFY 11, I8: on exit a handed-off intent whose follow-up saw the store's order says so with
+    # the order id; its confirmation code (store_order.label) is kept out of the terminal and out of the saved evidence.
+    def test_onExit_aSeenStoreOrder_isNamedByItsId_neverItsLabel(self):
+        evidence = os.path.join(self.work, "evidence")
+        os.makedirs(evidence)
+
+        class Api:
+            def json(self, method, path, body=None):
+                if path.endswith("/events"):
+                    return {"items": []}
+                intent = path.rsplit("/", 1)[1]
+                if intent != Console.HANDED:
+                    return {"id": intent, "state": "FAILED_NOT_CHARGED"}
+                return {"id": intent, "state": "HANDED_OFF", "follow_up": {"watching": False},
+                        "store_order": {"id": "gid://shopify/Order/42", "label": "CANARYLABEL7"}}
+
+        out = io.StringIO()
+        with redirect_stdout(out):
+            live.console_exit(Api(), self.db, evidence, lambda db, intents: [])
+        self.assertIn("the store reported order gid://shopify/Order/42", out.getvalue())
+        self.assertNotIn("CANARYLABEL7", out.getvalue())
+        self.assertNotIn("CANARYLABEL7", open(os.path.join(evidence, self.HANDED, "intent.json")).read())
+
     def test_serving_endsOnCtrlC_orWhenTheServiceStops(self):
         class Proc:
             def __init__(self, code):

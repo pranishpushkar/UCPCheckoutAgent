@@ -49,7 +49,8 @@ public record PurchaseIntent(
         Optional<String> leaseOwner,
         Optional<Instant> leaseUntil,
         Instant createdAt,
-        Instant updatedAt) {
+        Instant updatedAt,
+        HandoffWatch handoffWatch) {
 
     public PurchaseIntent {
         Objects.requireNonNull(id, "id");
@@ -70,6 +71,7 @@ public record PurchaseIntent(
         Objects.requireNonNull(leaseUntil, "leaseUntil");
         Objects.requireNonNull(createdAt, "createdAt");
         Objects.requireNonNull(updatedAt, "updatedAt");
+        Objects.requireNonNull(handoffWatch, "handoffWatch");
         if (dedupeKey.isBlank()) {
             throw new IllegalArgumentException("dedupeKey must not be blank");
         }
@@ -98,14 +100,14 @@ public record PurchaseIntent(
         return new PurchaseIntent(
                 id, owner, merchantId, merchantFingerprint, dedupeKey, lines, buyerEmail, IntentState.PROPOSED, 0,
                 Optional.empty(), Optional.empty(), 0, Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), false,
-                Optional.empty(), Optional.empty(), now, now);
+                Optional.empty(), Optional.empty(), now, now, HandoffWatch.NONE);
     }
 
     public PurchaseIntent withState(IntentState newState, Instant now) {
         return new PurchaseIntent(
                 id, owner, merchantId, merchantFingerprint, dedupeKey, lines, buyerEmail, newState, version, sessionId,
                 approvedSnapshotHash, requoteCount, orderId, handoffUrl, failureReason, uncertainSince, cancelPending, leaseOwner, leaseUntil,
-                createdAt, now);
+                createdAt, now, handoffWatch);
     }
 
     /**
@@ -122,33 +124,33 @@ public record PurchaseIntent(
         return new PurchaseIntent(
                 id, owner, merchantId, merchantFingerprint, dedupeKey, lines, buyerEmail, state, version, sessionId,
                 approvedSnapshotHash, requoteCount, orderId, handoffUrl, failureReason, uncertainSince, pending, leaseOwner,
-                leaseUntil, createdAt, updatedAt);
+                leaseUntil, createdAt, updatedAt, handoffWatch);
     }
 
     public PurchaseIntent withSessionId(SessionId session) {
         return new PurchaseIntent(
                 id, owner, merchantId, merchantFingerprint, dedupeKey, lines, buyerEmail, state, version, Optional.of(session),
                 approvedSnapshotHash, requoteCount, orderId, handoffUrl, failureReason, uncertainSince, cancelPending, leaseOwner, leaseUntil,
-                createdAt, updatedAt);
+                createdAt, updatedAt, handoffWatch);
     }
 
     public PurchaseIntent withApprovedSnapshotHash(Optional<String> hash) {
         return new PurchaseIntent(
                 id, owner, merchantId, merchantFingerprint, dedupeKey, lines, buyerEmail, state, version, sessionId, hash, requoteCount,
-                orderId, handoffUrl, failureReason, uncertainSince, cancelPending, leaseOwner, leaseUntil, createdAt, updatedAt);
+                orderId, handoffUrl, failureReason, uncertainSince, cancelPending, leaseOwner, leaseUntil, createdAt, updatedAt, handoffWatch);
     }
 
     public PurchaseIntent withRequoteCount(int newRequoteCount) {
         return new PurchaseIntent(
                 id, owner, merchantId, merchantFingerprint, dedupeKey, lines, buyerEmail, state, version, sessionId, approvedSnapshotHash,
-                newRequoteCount, orderId, handoffUrl, failureReason, uncertainSince, cancelPending, leaseOwner, leaseUntil, createdAt, updatedAt);
+                newRequoteCount, orderId, handoffUrl, failureReason, uncertainSince, cancelPending, leaseOwner, leaseUntil, createdAt, updatedAt, handoffWatch);
     }
 
     public PurchaseIntent withOrderId(String newOrderId) {
         return new PurchaseIntent(
                 id, owner, merchantId, merchantFingerprint, dedupeKey, lines, buyerEmail, state, version, sessionId, approvedSnapshotHash,
                 requoteCount, Optional.of(newOrderId), handoffUrl, failureReason, uncertainSince, cancelPending, leaseOwner, leaseUntil,
-                createdAt, updatedAt);
+                createdAt, updatedAt, handoffWatch);
     }
 
     /** Sets the continue_url the buyer was handed (7.2 hand_off, 10); set once, with the move to HANDED_OFF. */
@@ -156,42 +158,50 @@ public record PurchaseIntent(
         return new PurchaseIntent(
                 id, owner, merchantId, merchantFingerprint, dedupeKey, lines, buyerEmail, state, version, sessionId, approvedSnapshotHash,
                 requoteCount, orderId, Optional.of(url), failureReason, uncertainSince, cancelPending, leaseOwner, leaseUntil,
-                createdAt, updatedAt);
+                createdAt, updatedAt, handoffWatch);
     }
 
     public PurchaseIntent withFailureReason(String reason) {
         return new PurchaseIntent(
                 id, owner, merchantId, merchantFingerprint, dedupeKey, lines, buyerEmail, state, version, sessionId, approvedSnapshotHash,
                 requoteCount, orderId, handoffUrl, Optional.of(reason), uncertainSince, cancelPending, leaseOwner, leaseUntil, createdAt,
-                updatedAt);
+                updatedAt, handoffWatch);
     }
 
     public PurchaseIntent withUncertainSince(Instant since) {
         return new PurchaseIntent(
                 id, owner, merchantId, merchantFingerprint, dedupeKey, lines, buyerEmail, state, version, sessionId, approvedSnapshotHash,
                 requoteCount, orderId, handoffUrl, failureReason, Optional.of(since), cancelPending, leaseOwner, leaseUntil, createdAt,
-                updatedAt);
+                updatedAt, handoffWatch);
     }
 
     /** Clears uncertain_since when a new complete key is issued: the deadline is per key (7.5 rule 1). */
     public PurchaseIntent withoutUncertainSince() {
         return new PurchaseIntent(
                 id, owner, merchantId, merchantFingerprint, dedupeKey, lines, buyerEmail, state, version, sessionId, approvedSnapshotHash,
-                requoteCount, orderId, handoffUrl, failureReason, Optional.empty(), cancelPending, leaseOwner, leaseUntil, createdAt, updatedAt);
+                requoteCount, orderId, handoffUrl, failureReason, Optional.empty(), cancelPending, leaseOwner, leaseUntil, createdAt, updatedAt, handoffWatch);
+    }
+
+    /** Sets the handoff follow-up (7.6): opened with the move to HANDED_OFF, advanced or ended by each follow-up read. */
+    public PurchaseIntent withHandoffWatch(HandoffWatch watch) {
+        return new PurchaseIntent(
+                id, owner, merchantId, merchantFingerprint, dedupeKey, lines, buyerEmail, state, version, sessionId,
+                approvedSnapshotHash, requoteCount, orderId, handoffUrl, failureReason, uncertainSince, cancelPending, leaseOwner,
+                leaseUntil, createdAt, updatedAt, watch);
     }
 
     public PurchaseIntent withVersion(long newVersion) {
         return new PurchaseIntent(
                 id, owner, merchantId, merchantFingerprint, dedupeKey, lines, buyerEmail, state, newVersion, sessionId,
                 approvedSnapshotHash, requoteCount, orderId, handoffUrl, failureReason, uncertainSince, cancelPending, leaseOwner, leaseUntil,
-                createdAt, updatedAt);
+                createdAt, updatedAt, handoffWatch);
     }
 
     public PurchaseIntent withLease(Optional<String> newLeaseOwner, Optional<Instant> newLeaseUntil) {
         return new PurchaseIntent(
                 id, owner, merchantId, merchantFingerprint, dedupeKey, lines, buyerEmail, state, version, sessionId,
                 approvedSnapshotHash, requoteCount, orderId, handoffUrl, failureReason, uncertainSince, cancelPending, newLeaseOwner,
-                newLeaseUntil, createdAt, updatedAt);
+                newLeaseUntil, createdAt, updatedAt, handoffWatch);
     }
 
     @Override
@@ -199,6 +209,6 @@ public record PurchaseIntent(
         return "PurchaseIntent[id=" + id + ", owner=" + owner + ", merchantId=" + merchantId + ", state=" + state
                 + ", version=" + version + ", sessionId=" + sessionId + ", requoteCount=" + requoteCount
                 // handoffUrl: ContinueUrl shows the host only (I8)
-                + ", orderId=" + orderId + ", handoffUrl=" + handoffUrl + ", failureReason=" + failureReason + ", cancelPending=" + cancelPending + ", leaseOwner=" + leaseOwner + ']';
+                + ", orderId=" + orderId + ", handoffUrl=" + handoffUrl + ", failureReason=" + failureReason + ", cancelPending=" + cancelPending + ", leaseOwner=" + leaseOwner + ", handoffWatch=" + handoffWatch + ']';
     }
 }

@@ -8,6 +8,7 @@ import dev.ucplab.core.identity.UserId;
 import dev.ucplab.core.intent.AttemptId;
 import dev.ucplab.core.intent.AttemptOp;
 import dev.ucplab.core.intent.AttemptStatus;
+import dev.ucplab.core.intent.HandoffWatch;
 import dev.ucplab.core.intent.IntentEvent;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentState;
@@ -88,7 +89,7 @@ final class CheckFixture {
                 List.of(new ProposedLine("item_123", 2)), "buyer@eval.example", state, 6,
                 storedSession.map(SessionId::new), Optional.of(snapshot.hash()), 0,
                 state == IntentState.COMPLETED ? Optional.of(ORDER) : Optional.empty(), Optional.empty(), Optional.empty(),
-                Optional.empty(), cancelPending, Optional.empty(), Optional.empty(), T0, at(400));
+                Optional.empty(), cancelPending, Optional.empty(), Optional.empty(), T0, at(400), HandoffWatch.NONE);
         return new RunEvidence("S0", 0, 1000, 0, owner, Optional.ofNullable(aborted), proposed,
                 List.of(new RunEvidence.Persisted(intent, attempts, events, approvalRows)), orders, sessions, log,
                 approvals, T0, terminalSeenAt);

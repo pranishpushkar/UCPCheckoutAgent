@@ -265,10 +265,12 @@ public final class InMemoryIntentRepository implements IntentRepository {
             Instant until = now.plus(lease);
             List<PurchaseIntent> candidates = intents.values().stream()
                     .filter(i -> !exclude.contains(i.id()))
-                    .filter(i -> RECOVERABLE.contains(i.state()) || i.cancelPending())
+                    .filter(i -> RECOVERABLE.contains(i.state()) || i.cancelPending() || followUpDue(i, now))
                     .filter(i -> i.leaseOwner().equals(Optional.of(owner))
                             || i.leaseUntil().map(t -> t.isBefore(now)).orElse(true))
-                    .sorted(Comparator.comparing(PurchaseIntent::createdAt).thenComparing(i -> i.id().value()))
+                    // Follow-ups last (7.6), so they cannot crowd the other recoverable intents out of a pass.
+                    .sorted(Comparator.comparing(InMemoryIntentRepository::handedOff)
+                            .thenComparing(PurchaseIntent::createdAt).thenComparing(i -> i.id().value()))
                     .limit(limit)
                     .toList();
             List<PurchaseIntent> claimed = new ArrayList<>(candidates.size());
@@ -401,6 +403,25 @@ public final class InMemoryIntentRepository implements IntentRepository {
             throw new IllegalArgumentException("7.2: intent " + intent.id() + " has a handoff_url in state "
                     + intent.state());
         }
+        // 7.6, 10: the follow-up too, as V10's CHECKs hold it in SQL.
+        if (!intent.handoffWatch().equals(HandoffWatch.NONE) && intent.state() != IntentState.HANDED_OFF) {
+            throw new IllegalArgumentException("7.6: intent " + intent.id() + " has a handoff follow-up in state "
+                    + intent.state());
+        }
+    }
+
+    /**
+     * 7.6: an intent whose follow-up read is due at {@code now}. Only a watching follow-up has a next read
+     * ({@link HandoffWatch}), and only a HANDED_OFF intent has a follow-up (the guard above), as SQL's filter states.
+     */
+    private static boolean followUpDue(PurchaseIntent i, Instant now) {
+        Optional<Instant> next = i.handoffWatch().nextReadAt();
+        return next.isPresent() && !next.get().isAfter(now);
+    }
+
+    /** The claim's first key: follow-ups last (7.6), as SQL's ORDER BY. */
+    private static boolean handedOff(PurchaseIntent i) {
+        return i.state() == IntentState.HANDED_OFF;
     }
 
     /** Caller holds the lock. Refuses a session change once a complete attempt exists (I4). */
@@ -423,6 +444,6 @@ public final class InMemoryIntentRepository implements IntentRepository {
                 stored.id(), stored.owner(), stored.merchantId(), stored.merchantFingerprint(), stored.dedupeKey(), stored.lines(),
                 stored.buyerEmail(), update.state(), newVersion, update.sessionId(), update.approvedSnapshotHash(),
                 update.requoteCount(), update.orderId(), update.handoffUrl(), update.failureReason(), update.uncertainSince(),
-                update.cancelPending(), stored.leaseOwner(), stored.leaseUntil(), stored.createdAt(), update.updatedAt());
+                update.cancelPending(), stored.leaseOwner(), stored.leaseUntil(), stored.createdAt(), update.updatedAt(), update.handoffWatch());
     }
 }

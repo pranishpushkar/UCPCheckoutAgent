@@ -79,6 +79,7 @@ final class ScheduleExecutor {
     private boolean fulfillment;
     /** H5 C7a: every intent starts at an owned handoff merchant (7.2, 19), whose answers carry a continue_url. */
     private boolean handoff;
+    private boolean followUp;
     private final FaultyMerchantModel.Mode mode;
     private final java.util.function.Function<dev.ucplab.core.MutableClock, CrashHarness.Stores> storeFactory;
 
@@ -120,6 +121,17 @@ final class ScheduleExecutor {
             java.util.function.Function<dev.ucplab.core.MutableClock, CrashHarness.Stores> storeFactory) {
         ScheduleExecutor e = new ScheduleExecutor(DEFAULT_ORCHESTRATOR, mode, storeFactory);
         e.handoff = true;
+        return e;
+    }
+
+    /**
+     * The handoff runs with the handoff follow-up driven (7.6): a HANDED_OFF intent whose follow-up is watching stays due
+     * at its next read, after any other worker's lease and within the horizon, so the runs make follow-up reads between
+     * the schedule's other steps. The other runs leave a HANDED_OFF intent once its step is idle.
+     */
+    static ScheduleExecutor atHandoffWithFollowUp(FaultyMerchantModel.Mode mode) {
+        ScheduleExecutor e = atHandoff(mode);
+        e.followUp = true;
         return e;
     }
 
@@ -439,6 +451,25 @@ final class ScheduleExecutor {
                 } else if (atHandoffEntry(intent) && intent.state() == dev.ucplab.core.intent.IntentState.APPROVED) {
                     // 7.2: a failed hand_off read waits for the recovery worker's next pass (7.6), one period later.
                     due.put(id, now.plus(Invariants.WORKER_PASS));
+                } else if (followUp && intent.state() == dev.ucplab.core.intent.IntentState.HANDED_OFF
+                        && intent.handoffWatch().nextReadAt().isPresent()) {
+                    // 7.6: the next follow-up read, as the worker's pass would find it due; a read that was due but
+                    // idle (another worker's lease) waits one pass.
+                    Instant at = intent.handoffWatch().nextReadAt().get();
+                    Optional<Instant> held = intent.leaseUntil()
+                            .filter(t -> !t.isBefore(now) && !intent.leaseOwner().equals(Optional.of(currentWorkerId())))
+                            .map(t -> t.plus(CLAIM_GRANULARITY));
+                    if (held.isPresent() && held.get().isAfter(at)) {
+                        at = held.get();
+                    }
+                    if (!at.isAfter(now)) {
+                        at = now.plus(Invariants.WORKER_PASS);
+                    }
+                    if (at.isBefore(Lab.T0.plus(HORIZON))) {
+                        due.put(id, at);
+                    } else {
+                        due.remove(id);
+                    }
                 } else {
                     due.remove(id); // terminal, or stuck: I5 reports a stuck intent at the end
                 }
