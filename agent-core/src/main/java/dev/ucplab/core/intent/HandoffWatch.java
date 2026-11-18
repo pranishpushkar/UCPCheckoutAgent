@@ -9,7 +9,7 @@ import java.util.Optional;
  * The handoff follow-up of a HANDED_OFF intent (7.6, section 10 V10): {@code until} ends the window
  * ({@code handoff_watch_until}), {@code nextReadAt} is when the next read is due ({@code handoff_next_read_at}), and
  * {@code storeOrder} is the order the store reported ({@code store_order_id}, {@code store_order_label}). The follow-up
- * is watching while {@code until} is set; it never changes the intent's state.
+ * is watching while {@code until} is set, and a next read is set exactly then; it never changes the intent's state.
  */
 public record HandoffWatch(Optional<Instant> until, Optional<Instant> nextReadAt, Optional<StoreOrder> storeOrder) {
 
@@ -34,6 +34,9 @@ public record HandoffWatch(Optional<Instant> until, Optional<Instant> nextReadAt
         Objects.requireNonNull(until, "until");
         Objects.requireNonNull(nextReadAt, "nextReadAt");
         Objects.requireNonNull(storeOrder, "storeOrder");
+        if (until.isPresent() != nextReadAt.isPresent()) {
+            throw new IllegalArgumentException("7.6: a follow-up has both a window and a next read, or neither");
+        }
     }
 
     public boolean watching() {

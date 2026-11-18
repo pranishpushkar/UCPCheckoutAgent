@@ -1839,7 +1839,8 @@ public final class DefaultOrchestrator implements Orchestrator {
     private Step followUp(PurchaseIntent intent, List<MerchantAttempt> attempts, Optional<MerchantEntry> entry) {
         HandoffWatch watch = intent.handoffWatch();
         Instant now = clock.instant();
-        if (!watch.watching() || watch.nextReadAt().map(now::isBefore).orElse(true)) {
+        // Only a watching follow-up has a next read (HandoffWatch).
+        if (watch.nextReadAt().map(now::isBefore).orElse(true)) {
             return idle(intent);
         }
         int reads = (int) attempts.stream().filter(DefaultOrchestrator::followUpRead).count();
@@ -1913,9 +1914,12 @@ public final class DefaultOrchestrator implements Orchestrator {
         return moved(intent, next);
     }
 
-    /** A counted follow-up read: a {@code get} attempt the follow-up wrote (a NotSent read writes none). */
+    /**
+     * A counted follow-up read: an attempt the follow-up wrote, which is always a {@code get} (a NotSent read writes
+     * none). No other attempt's summary has its resolved_by.
+     */
     private static boolean followUpRead(MerchantAttempt a) {
-        return a.op() == AttemptOp.GET && a.responseJson().filter(j -> j.contains(FOLLOW_UP_MARK)).isPresent();
+        return a.responseJson().filter(j -> j.contains(FOLLOW_UP_MARK)).isPresent();
     }
 
     /** Ends the follow-up without reading: one fenced write and the event with the reason and the counted reads. */

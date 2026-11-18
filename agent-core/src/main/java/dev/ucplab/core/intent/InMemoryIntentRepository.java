@@ -269,7 +269,7 @@ public final class InMemoryIntentRepository implements IntentRepository {
                     .filter(i -> i.leaseOwner().equals(Optional.of(owner))
                             || i.leaseUntil().map(t -> t.isBefore(now)).orElse(true))
                     // Follow-ups last (7.6), so they cannot crowd the other recoverable intents out of a pass.
-                    .sorted(Comparator.comparing((PurchaseIntent i) -> followUpDue(i, now))
+                    .sorted(Comparator.comparing(InMemoryIntentRepository::handedOff)
                             .thenComparing(PurchaseIntent::createdAt).thenComparing(i -> i.id().value()))
                     .limit(limit)
                     .toList();
@@ -410,10 +410,18 @@ public final class InMemoryIntentRepository implements IntentRepository {
         }
     }
 
-    /** 7.6: a HANDED_OFF intent whose follow-up is watching and whose next read is due at {@code now}. */
+    /**
+     * 7.6: an intent whose follow-up read is due at {@code now}. Only a watching follow-up has a next read
+     * ({@link HandoffWatch}), and only a HANDED_OFF intent has a follow-up (the guard above), as SQL's filter states.
+     */
     private static boolean followUpDue(PurchaseIntent i, Instant now) {
-        return i.state() == IntentState.HANDED_OFF && i.handoffWatch().watching()
-                && i.handoffWatch().nextReadAt().map(t -> !t.isAfter(now)).orElse(false);
+        Optional<Instant> next = i.handoffWatch().nextReadAt();
+        return next.isPresent() && !next.get().isAfter(now);
+    }
+
+    /** The claim's first key: follow-ups last (7.6), as SQL's ORDER BY. */
+    private static boolean handedOff(PurchaseIntent i) {
+        return i.state() == IntentState.HANDED_OFF;
     }
 
     /** Caller holds the lock. Refuses a session change once a complete attempt exists (I4). */

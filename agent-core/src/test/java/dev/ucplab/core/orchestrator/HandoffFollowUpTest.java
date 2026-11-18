@@ -30,6 +30,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.UnaryOperator;
@@ -268,9 +269,73 @@ class HandoffFollowUpTest {
         assertThat(events(id, "handoff_order_seen")).containsExactly("{\"order_id\":\"" + ORDER + "\",\"reads\":1}");
     }
 
-    /** Records {@code n} counted follow-up reads for the intent, as earlier steps would have. */
+    // Covers: 7.6 (a NotSent read writes no attempt but moves the next read on, so a pass tries it once, not again at once)
+    @Test
+    void aNotSentRead_movesTheNextReadOn_andIsTriedOncePerPass() {
+        IntentId id = handedOff();
+        store.afterHandoff(always(new CallOutcome.NotSent<>("circuit_open")));
+
+        pass(id, Duration.ofMinutes(1));
+
+        assertThat(store.reads).hasSize(1);
+        assertThat(followUpReads(id)).isEmpty();
+        assertThat(lab.intent(id).handoffWatch().nextReadAt()).hasValueSatisfying(
+                t -> assertThat(t).isAfter(lab.clock.instant()));
+    }
+
+    // Covers: 7.6, I8 (a read the store answered with a failure, or whose outcome is unknown, is counted: its attempt has
+    // only resolved_by, its status is UNCERTAIN for an unknown outcome and RESPONDED otherwise, with the http status the
+    // store sent; the follow-up keeps watching)
+    @Test
+    void aFailedRead_isCounted_withItsAttemptStatusAndHttpStatus() {
+        IntentId id = handedOff();
+        store.afterHandoff(always(new CallOutcome.Uncertain<>("timeout")),
+                always(new CallOutcome.Rejected<>(422, List.of())),
+                always(new CallOutcome.ProtocolError<>(500, "server_error", "", Optional.empty())));
+
+        run(id, Duration.ofMinutes(5));
+
+        List<MerchantAttempt> reads = followUpReads(id).stream()
+                .sorted(Comparator.comparing(MerchantAttempt::sentAt)).toList();
+        assertThat(reads).extracting(MerchantAttempt::status)
+                .containsExactly(AttemptStatus.UNCERTAIN, AttemptStatus.RESPONDED, AttemptStatus.RESPONDED);
+        assertThat(reads).extracting(MerchantAttempt::httpStatus)
+                .containsExactly(Optional.empty(), Optional.of(422), Optional.of(500));
+        assertThat(reads).extracting(a -> a.responseJson().orElseThrow())
+                .containsOnly("{\"resolved_by\":\"handoff_follow_up\"}");
+        assertThat(lab.intent(id).handoffWatch().watching()).isTrue();
+    }
+
+    // Covers: 7.6 (only a completed checkout's order is the store's order: an open checkout that carries one is read and
+    // counted, and the follow-up keeps watching)
+    @Test
+    void anOpenCheckoutCarryingAnOrder_isNotTheStoresOrder() {
+        IntentId id = handedOff();
+        store.afterHandoff(o -> o instanceof CallOutcome.Ok<CheckoutView> ok
+                ? new CallOutcome.Ok<>(ok.httpStatus(), with(ok.value(), CheckoutStatus.COMPLETE_IN_PROGRESS,
+                        Optional.of(new OrderRef(ORDER, Optional.of(LABEL))), Optional.empty()), List.of())
+                : o);
+
+        run(id, Duration.ofMinutes(5));
+
+        assertThat(followUpReads(id)).hasSize(3);
+        assertThat(lab.intent(id).handoffWatch().storeOrder()).isEmpty();
+        assertThat(lab.intent(id).handoffWatch().watching()).isTrue();
+        assertThat(events(id, "handoff_order_seen")).isEmpty();
+    }
+
+    /**
+     * Records {@code n} counted follow-up reads for the intent, as earlier steps would have, and one get that is not a
+     * follow-up read (a quote's read), which is never counted.
+     */
     private void seedReads(IntentId id, int n) {
         PurchaseIntent intent = lab.intents.claim(id, "w", Duration.ofSeconds(30)).orElseThrow();
+        Instant quoted = lab.clock.instant();
+        lab.intents.recordAttempt(new MerchantAttempt(new AttemptId("seeded-quote-read"), id, AttemptOp.GET,
+                intent.requoteCount(), Optional.empty(), Optional.empty(), Optional.empty(), AttemptStatus.RESPONDED,
+                Optional.of(200), Optional.of("{\"status\":\"ready_for_complete\"}"), quoted, Optional.of(quoted)),
+                intent, intent.version(), "w");
+        intent = lab.intent(id);
         for (int i = 0; i < n; i++) {
             Instant at = lab.clock.instant();
             MerchantAttempt read = new MerchantAttempt(new AttemptId("seeded-" + i), id, AttemptOp.GET,
@@ -283,8 +348,9 @@ class HandoffFollowUpTest {
         lab.intents.releaseLease(id, "w");
     }
 
-    // Covers: 7.6 (the cap of 60 counted reads is a backstop: at 59 the step still reads; after the 60th the next due step
-    // ends the follow-up with reads_exhausted, ahead of the window's end, and reads nothing)
+    // Covers: 7.6 (the cap of 60 counted reads is a backstop: at 59 the step still reads, a get that is not a follow-up
+    // read is not counted; after the 60th the next due step ends the follow-up with reads_exhausted, ahead of the window's
+    // end, and reads nothing)
     @Test
     void sixtyCountedReads_endIt_withReadsExhausted_andFiftyNineDoNot() {
         IntentId id = handedOff();
