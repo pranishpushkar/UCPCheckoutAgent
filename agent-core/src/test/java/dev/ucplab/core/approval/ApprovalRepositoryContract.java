@@ -91,6 +91,19 @@ public abstract class ApprovalRepositoryContract {
     }
 
     // Covers: T6 (another user gets empty, the same as for an intent with no approval)
+    // Covers: 9.2, 10 (a snapshot's line titles are stored and read back with it, an empty title as empty)
+    @Test
+    void findLatest_returnsTheLinesTitles() {
+        ApprovalSnapshot snapshot = new ApprovalSnapshot(I1, new MerchantId("merchant-a"), new SessionId("chk_1"),
+                List.of(new SnapshotLine("item_1", 1, 69995, "The Complete Snowboard - Ice"),
+                        new SnapshotLine("item_2", 1, 1200)), "USD", 71195, 71195, T0.plusSeconds(600));
+        put(new ApprovalRecord("a-titled", I1, ALICE, snapshot, snapshot.hash(), "token-hash-titled",
+                snapshot.expiresAt(), ApprovalStatus.PENDING, Optional.empty(), Optional.empty()));
+
+        assertThat(repo.findLatest(ALICE, I1).orElseThrow().snapshot().lines()).containsExactlyInAnyOrder(
+                new SnapshotLine("item_1", 1, 69995, "The Complete Snowboard - Ice"), new SnapshotLine("item_2", 1, 1200));
+    }
+
     @Test
     void findLatest_returnsEmpty_forAnotherUserAndForUnknownIntent() {
         put(approval("a1", I1, ALICE));

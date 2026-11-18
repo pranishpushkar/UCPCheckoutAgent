@@ -153,6 +153,45 @@ class ApprovalSnapshotTest {
         assertThat(sample().hash()).isEqualTo("37bd4b1e6bfbdb0fde5ee59cf333a620a3ab239b63d2f574c241a56cadb228fa");
     }
 
+    private static ApprovalSnapshot titled(String title) {
+        return new ApprovalSnapshot(new IntentId("intent-1"), new MerchantId("merchant-a"), new SessionId("chk_1001"),
+                List.of(new SnapshotLine("item_456", 1, 1200),
+                        new SnapshotLine("gid://shopify/ProductVariant/1", 1, 69995, title)),
+                "USD", 71195, 71195, Instant.parse("2026-11-08T10:10:00Z"));
+    }
+
+    // Covers: 9.2, D4, I2 (a line's non-empty title is in the canonical form; an empty one is left out, so a snapshot
+    // without titles hashes exactly as before). Expected string and hash from Python json.dumps(sort_keys=True,
+    // separators=(',',':')) and hashlib.
+    @Test
+    void aLinesTitle_isInTheCanonicalForm_andAnEmptyOneIsLeftOut() {
+        ApprovalSnapshot snowboard = titled("The Complete Snowboard - Ice");
+
+        assertThat(snowboard.canonicalJson()).isEqualTo("{\"currency\":\"USD\",\"expiresAt\":\"2026-11-08T10:10:00Z\","
+                + "\"intentId\":\"intent-1\",\"lines\":[{\"itemId\":\"gid://shopify/ProductVariant/1\",\"quantity\":1,"
+                + "\"title\":\"The Complete Snowboard - Ice\",\"unitPriceMinor\":69995},{\"itemId\":\"item_456\","
+                + "\"quantity\":1,\"unitPriceMinor\":1200}],\"maxTotalMinor\":71195,\"merchantId\":\"merchant-a\","
+                + "\"sessionId\":\"chk_1001\",\"totalMinor\":71195}");
+        assertThat(snowboard.hash()).isEqualTo("9dfabfdadce2523a6e90377605a091107753791b4f6ec4f79ee3236b465d8c9e");
+        assertThat(titled("").canonicalJson()).doesNotContain("title");
+        assertThat(sample().hash()).isEqualTo("37bd4b1e6bfbdb0fde5ee59cf333a620a3ab239b63d2f574c241a56cadb228fa");
+    }
+
+    // Covers: 9.2, D4, I2, I3 (the hash changes when only a title changes: an approval of one title cannot authorise
+    // another; and lines that differ only in their titles hash the same in any order)
+    @Test
+    void theHash_changesWithTheTitle_andIgnoresTheOrderOfLinesDifferingOnlyInTitle() {
+        assertThat(titled("The Complete Snowboard - Ice").hash()).isNotEqualTo(titled("The Complete Snowboard").hash())
+                .isNotEqualTo(titled("").hash());
+        SnapshotLine a = new SnapshotLine("item_1", 1, 100, "A");
+        SnapshotLine b = new SnapshotLine("item_1", 1, 100, "B");
+        ApprovalSnapshot ab = new ApprovalSnapshot(new IntentId("i"), new MerchantId("m"), new SessionId("s"),
+                List.of(a, b), "USD", 200, 200, Instant.parse("2026-11-08T10:10:00Z"));
+        ApprovalSnapshot ba = new ApprovalSnapshot(new IntentId("i"), new MerchantId("m"), new SessionId("s"),
+                List.of(b, a), "USD", 200, 200, Instant.parse("2026-11-08T10:10:00Z"));
+        assertThat(ab.hash()).isEqualTo(ba.hash());
+    }
+
     // Covers: 9.2, D4, I2, I3, P7 (the hash changes when only the option, its label, its price or the country changes:
     // an approval of the old snapshot cannot authorise the new one)
     @Test
