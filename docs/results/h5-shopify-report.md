@@ -122,3 +122,4 @@ page with its test gateway and pressed Ctrl-C; the script read the handed-off ch
 | 8 | A business refusal over MCP | `result.isError: true`, with a UCP error envelope in `structuredContent` (`ucp.status: error`, `messages[]` with code and severity, no id); not a JSON-RPC error |
 | 9 | The arguments of `get_checkout` and `update_checkout` | `get_checkout`: `{id}`. `update_checkout`: `{id, checkout: {line_items: [{id, item: {id}, quantity}]}}`, each line with its `CartLine` id; the recorded update's `meta` held `ucp-agent` and `idempotency-key`. The store accepted both |
 | 10 | Whether the MCP endpoint differs between versions | Not tested in H5; still open |
+| 11 | What `order.label` is | The confirmation code the store's thank-you page and confirmation email show the buyer ("Confirmation #<label>"), not the admin order name (`#1001` style) |
