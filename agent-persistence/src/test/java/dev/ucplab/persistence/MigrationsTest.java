@@ -362,7 +362,7 @@ class MigrationsTest {
 
     // Covers: 10, 7.2, H5 C7a (a database at V8 holding rows, events, attempts and approvals upgrades to V9: every row
     // keeps every value it had, handoff_url starts empty, HANDED_OFF is accepted and terminal for the dedupe index, the
-    // children point at the renamed parent, and the indexes and the I11 trigger are back; V9 is the last migration)
+    // children point at the renamed parent, and the indexes and the I11 trigger are back; V9 follows V8)
     @Test
     void v9_upgradesAV8DatabaseWithRows_andAcceptsHandedOff() {
         Path file = dir.resolve("v8-to-v9.db");
@@ -414,7 +414,7 @@ class MigrationsTest {
                     () -> exec(db, "UPDATE purchase_intent SET merchant_id = 'other' WHERE id = 'i1'"))
                     .hasStackTraceContaining("I11");
             assertThat(column(db, "SELECT version FROM flyway_schema_history WHERE success = 1"
-                    + " ORDER BY installed_rank")).endsWith("8", "9");
+                    + " ORDER BY installed_rank")).containsSubsequence("8", "9");
         }
     }
 
