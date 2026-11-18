@@ -165,6 +165,24 @@ class ConsoleStaticTest {
         assertThat(card).contains("Price and stock are not held").contains("expires_at").contains("Other charges (tax)");
     }
 
+    // Covers: 24.3, 19 (at a handoff merchant the store adds shipping and tax after the handoff: no "Other charges (tax)"
+    // line, an "Other charges" line only when the total differs from the lines' sum, and a total labelled as before the
+    // store's shipping and tax; an agent merchant's card keeps "Other charges (tax)" and "Total")
+    @Test
+    void approvalCard_atAHandoffMerchant_hasNoTaxLine_andItsTotalIsBeforeTheStoresShippingAndTax() throws IOException {
+        String card = card(read("console.js"));
+
+        assertThat(card).contains("function cardCharges(snapshot, handoff, linesTotal) {\n"
+                + "  const rows = [];\n"
+                + "  const other = snapshot.total_minor - linesTotal;\n"
+                + "  if (!handoff) {\n    rows.push([\"Other charges (tax)\", other]);\n"
+                + "  } else if (other !== 0) {\n    rows.push([\"Other charges\", other]);\n  }\n"
+                + "  rows.push([handoff ? \"Total before the store's shipping and tax\" : \"Total\", snapshot.total_minor]);\n"
+                + "  return rows;\n}\n");
+        assertThat(card).contains("const rows = cardCharges(snapshot, approval.completion === \"handoff\", linesTotal);");
+        assertThat(count(card, "Other charges (tax)")).as("only in cardCharges' agent branch").isEqualTo(1);
+    }
+
     // Covers: 23.2, 24.3, H5 C7c (a handoff merchant's card shows the answer's note, our fixed text, as text; only when
     // the answer's completion is handoff)
     @Test
