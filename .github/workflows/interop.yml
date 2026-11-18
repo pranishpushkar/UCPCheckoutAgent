@@ -25,7 +25,8 @@ permissions:
 jobs:
   interop:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # About twice the job's length: with -DskipTests it runs only the build and the interop rows, 3:02 on run 44373564686.
+    timeout-minutes: 6
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09        # v5
         with:
@@ -42,7 +43,9 @@ jobs:
       - name: Fetch the pinned sample (fails unless HEAD is the pinned commit and the dependency lock matches)
         run: scripts/interop-fetch.sh
       - name: Interop rows
-        run: ./mvnw -B -ntp -Pinterop -pl eval-harness -am verify
+        # -DskipTests: the verify job tests every module on the same push. The interop rows run in exec-maven-plugin at
+        # verify, which -DskipTests does not skip (eval-harness/pom.xml, profile interop).
+        run: ./mvnw -B -ntp -Pinterop -DskipTests -pl eval-harness -am verify
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         if: always()
         with:
