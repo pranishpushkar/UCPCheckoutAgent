@@ -123,6 +123,7 @@ live run: the service calls the store over MCP. It is never run in CI, and only 
 ```sh
 scripts/shopify-console.sh --dry-run --i-own-this-store --with-buyer-ip   # shows every step; reads no Keychain
 scripts/shopify-console.sh --i-own-this-store --with-buyer-ip
+scripts/shopify-console.sh --i-own-this-store --with-buyer-ip --after-payment   # also reads each handed-off checkout on exit
 ```
 
 It starts the service with a temporary merchants file that lists the store alone (handoff, owned, buyer IP), listening on
@@ -150,3 +151,14 @@ terminal.
 - [ ] **Ctrl-C** in the terminal. Each intent's evidence is saved under `notes/h5/console/evidence/<intent>/`, with the
   handoff URL cut to its host. Owed cancels are drained for up to 30 s, and any still owed is named. The handed-off
   checkout is not cancelled: the script says it is left open at the store.
+
+**After paying, with `--after-payment` (VERIFY 7).** Start the console with the flag, pay at the store, then press Ctrl-C.
+Without the flag nothing is sent to the store on exit.
+
+- [ ] After the evidence, the script reads each HANDED_OFF checkout once with `get_checkout` (read-only), waits 60 s,
+  and reads it again. Ctrl-C is ignored during that minute. The owed cancels are drained after.
+- [ ] Each answer is saved, sanitized and redacted, as `notes/h5/console/evidence/<intent>/after_payment_get_checkout_0s.json`
+  and `..._60s.json`. The terminal prints one line per read: the checkout's status and any order id.
+- [ ] Write down what the store said of the paid checkout: its status (`completed`?), whether it names an order
+  (`order.id`, `permalink_url`), and whether the checkout id still resolved. That answers VERIFY 7, and decides part 2 of
+  `notes/h5/after-handoff-order-proposal.md`.

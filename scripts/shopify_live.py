@@ -474,9 +474,9 @@ def serve_console(proc, base, sleep=time.sleep):
         say("stopping")
 
 
-def console_exit(api, db, evidence, drain=drain_cancels):
+def console_exit(api, db, evidence, drain=drain_cancels, after_payment=None):
     """On the way out of --console: keeps each intent's evidence (in evidence/<intent>/, redacted, the handoff URL cut
-    to its host) and drains every owed cancel (7.6). It sends nothing itself: a HANDED_OFF checkout is left open, since
+    to its host), runs the --after-payment reads when given, and drains every owed cancel (7.6). It never cancels: a HANDED_OFF checkout is left open, since
     the owner may be paying at the store. Returns the cancels still owed."""
     intents = console_intents(db)
     for intent in intents:
@@ -486,10 +486,70 @@ def console_exit(api, db, evidence, drain=drain_cancels):
         state = (api.json("GET", "/api/intents/%s" % intent) or {}).get("state")
         if state == "HANDED_OFF":
             say("intent %s HANDED_OFF: its checkout is left open at the store" % intent)
+    if after_payment:
+        try:
+            after_payment()
+        except Exception as e:          # the drain must still run
+            say("WARNING: the after-payment reads stopped: %s" % e)
     return drain(db, intents) if intents else []
 
 
-def console_dry_run(domain, port, evidence, jar):
+def handed_off_sessions(db, api):
+    """The (intent, checkout id) of every intent the console handed off, oldest first."""
+    out = []
+    for intent in console_intents(db):
+        if (api.json("GET", "/api/intents/%s" % intent) or {}).get("state") == "HANDED_OFF":
+            session = (db_row(db, "SELECT session_id FROM purchase_intent WHERE id = ?", (intent,)) or [None])[0]
+            if session:
+                out.append((intent, session))
+    return out
+
+
+def after_payment_reads(store, db, api, evidence, sleep=time.sleep, gap=PROBE_GAP):
+    """--after-payment (VERIFY 7): one read-only get_checkout of each HANDED_OFF checkout, and one more `gap` seconds
+    later, each answer recorded sanitized and redacted as evidence/<intent>/after_payment_get_checkout_<n>s.json. It
+    shows what the store says of a checkout the buyer paid for at the store. Returns the names it recorded."""
+    handed = handed_off_sessions(db, api)
+    if not handed:
+        say("after payment: no HANDED_OFF checkout to read")
+        return []
+    store.open()
+    recorded = []
+    old = spike.RECORD[0]
+    try:
+        for round_no, label in enumerate(("0s", "%ds" % gap)):
+            if round_no:
+                say("after payment: wait %d s, then read again (Ctrl-C is ignored while the script cleans up)" % gap)
+                sleep(gap)
+            for intent, session in handed:
+                folder = os.path.join(evidence, intent)
+                os.makedirs(folder, exist_ok=True)
+                spike.RECORD[0] = folder
+                name = "after_payment_get_checkout_" + label
+                try:
+                    answer = store.tool("get_checkout (intent %s, after payment, %s)" % (intent, label), "get_checkout",
+                                        {"id": session}, name)
+                except Exception as e:
+                    say("WARNING: after payment: get_checkout of intent %s (%s) failed: %s" % (intent, label, e))
+                    continue
+                order = answer.get("order") if isinstance(answer, dict) else None
+                say("after payment: intent %s %s: status %s, order %s" % (
+                    intent, label, answer.get("status") if isinstance(answer, dict) else None,
+                    spike.redact(json.dumps(spike.sanitize(order.get("id") if isinstance(order, dict) else None)))))
+                recorded.append(os.path.join(intent, name))
+    finally:
+        spike.RECORD[0] = old
+    return recorded
+
+
+def after_payment_for(argv, store_factory, db, api, evidence):
+    """The after-payment reads to run on exit, or None: nothing is sent to the store without --after-payment."""
+    if "--after-payment" not in argv:
+        return None
+    return lambda: after_payment_reads(store_factory(), db, api, evidence)
+
+
+def console_dry_run(domain, port, evidence, jar, after_payment=False):
     say("DRY-RUN --console: merchants.yaml (temporary, deleted on exit):\n" + merchants_yaml(domain))
     say("DRY-RUN policy.yaml (temporary): " + POLICY_YAML.strip().replace("\n", ", "))
     shown = {k: ("<redacted>" if k in ("SHOPIFY_CLIENT", "BUYER_IP", "APPROVAL_SECRET") else v)
@@ -503,6 +563,15 @@ def console_dry_run(domain, port, evidence, jar):
         "wait up to %d s for owed cancels to drain, naming any still owed or given up; a HANDED_OFF checkout is not "
         "cancelled (you may be paying at the store); stop the service; delete the temporary directory"
         % (evidence, DRAIN_TIMEOUT))
+    if after_payment:
+        say("DRY-RUN --after-payment, on Ctrl-C after the evidence and before the drain, for each HANDED_OFF checkout:")
+        store = Store(domain, True)
+        store.open()
+        store.tool("get_checkout (after payment, 0 s)", "get_checkout", {"id": "<handed-off checkout>"}, None)
+        say("DRY-RUN wait %d s" % PROBE_GAP)
+        store.tool("get_checkout (after payment, %d s)" % PROBE_GAP, "get_checkout", {"id": "<handed-off checkout>"}, None)
+        say("DRY-RUN record each answer (redacted) as %s/<intent>/after_payment_get_checkout_{0s,%ds}.json"
+            % (evidence, PROBE_GAP))
     return 0
 
 
@@ -536,7 +605,7 @@ def console_main(argv, domain, root, port, jar):
     evidence = os.path.abspath(option(argv, "--evidence", os.path.join(root, "notes/h5/console/evidence")))
     base = "http://localhost:%d" % port
     if "--dry-run" in argv:
-        return console_dry_run(domain, port, evidence, jar)
+        return console_dry_run(domain, port, evidence, jar, "--after-payment" in argv)
     if not os.path.isfile(jar):
         raise SystemExit("build first: ./mvnw -B -ntp -DskipTests package")
     os.makedirs(evidence, exist_ok=True)
@@ -556,7 +625,8 @@ def console_main(argv, domain, root, port, jar):
         ignore_signals()
         if proc and proc.poll() is None and api:
             try:
-                console_exit(api, db, evidence)
+                console_exit(api, db, evidence,
+                             after_payment=after_payment_for(argv, lambda: Store(domain, False), db, api, evidence))
             except Exception as e:      # the service must still be stopped
                 say("WARNING: the evidence or the owed cancels could not be read: %s" % e)
         stop_service(proc, log, tmp)
@@ -567,6 +637,8 @@ def main(argv):
     domain = configuration(os.environ, argv, dry)
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     port = int(option(argv, "--port", "8080"))
+    if "--after-payment" in argv and "--console" not in argv:
+        raise SystemExit("refused: --after-payment belongs to --console (scripts/shopify-console.sh)")
     if "--console" in argv:
         return console_main(argv, domain, root, port,
                             os.path.join(root, "agent-service/target/agent-service-0.1.0-SNAPSHOT.jar"))

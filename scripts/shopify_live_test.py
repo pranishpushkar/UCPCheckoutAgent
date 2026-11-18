@@ -431,5 +431,147 @@ class Console(unittest.TestCase):
         self.assertIn("the service stopped", text)
 
 
+
+class ReadStore(live.Store):
+    """A fake store for the after-payment reads: answers get_checkout from `answers` (a value, or an exception), records
+    each answer through spike.record as spike.call does, and counts open() and every call."""
+
+    def __init__(self, answers):
+        super().__init__("my-dev-store.myshopify.com", False)
+        self.answers = answers
+        self.opened = 0
+        self.calls = []
+
+    def open(self):
+        self.opened += 1
+
+    def tool(self, step, name, arguments, record_as, mutating=False, key=None):
+        self.calls.append((name, arguments.get("id"), record_as, mutating))
+        answer = self.answers.get(arguments.get("id"), {})
+        if isinstance(answer, list):
+            answer = answer.pop(0)
+        if isinstance(answer, BaseException):
+            raise answer
+        live.spike.record(record_as, answer)
+        return answer
+
+
+class AfterPayment(unittest.TestCase):
+    """--after-payment (part 1 of notes/h5/after-handoff-order-proposal.md, VERIFY 7): on the console's way out, one
+    read-only get_checkout per HANDED_OFF checkout, recorded redacted under evidence/<intent>/, then one more 60 s later.
+    Nothing is sent to the store without the flag."""
+
+    HANDED = Console.HANDED
+    OWED = Console.OWED
+    SESSION = Console.SESSION
+    HANDED_2 = "01a1ea58-0000-7000-8000-0000000000c3"
+    SESSION_2 = "gid://shopify/Checkout/tok888?key=canarykey888"
+
+    def setUp(self):
+        Console.setUp(self)
+        with sqlite3.connect(self.db) as c:
+            c.execute("INSERT INTO purchase_intent VALUES (?, ?, 0, 't2', 0)", (self.HANDED_2, self.SESSION_2))
+        self.evidence = os.path.join(self.work, "evidence")
+        os.makedirs(self.evidence)
+        self.naps = []
+
+    def tearDown(self):
+        live.spike.RECORD[0] = None
+        shutil.rmtree(self.work)
+
+    class Api:
+        def json(self, method, path, body=None):
+            if path.endswith("/events"):
+                return {"items": []}
+            intent = path.rsplit("/", 1)[1]
+            state = "FAILED_NOT_CHARGED" if intent == AfterPayment.OWED else "HANDED_OFF"
+            return {"id": intent, "state": state}
+
+    def paid(self, session):
+        return {"id": session, "status": "completed", "currency": "USD",
+                "continue_url": "https://shop.example/cart/c/tok777?key=canarykey777",
+                "order": {"id": "gid://shopify/Order/42", "permalink_url": "https://shop.example/orders/abc?key=canarykey777"}}
+
+    def reads(self, store):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            names = live.after_payment_reads(store, self.db, self.Api(), self.evidence, self.naps.append, 60)
+        return out.getvalue(), names
+
+    def test_withoutTheFlag_nothingIsRead(self):
+        store = ReadStore({})
+        self.assertIsNone(live.after_payment_for(["--console"], lambda: store, self.db, self.Api(), self.evidence))
+        self.assertIsNotNone(live.after_payment_for(["--console", "--after-payment"], lambda: store, self.db, self.Api(),
+                                                    self.evidence))
+        self.assertEqual(store.calls, [])
+        self.assertEqual(store.opened, 0)
+
+    def test_eachHandedOffCheckout_isReadTwice_60sApart_readOnly_andRecordedRedacted(self):
+        store = ReadStore({self.SESSION: [{"id": self.SESSION, "status": "incomplete"}, self.paid(self.SESSION)],
+                           self.SESSION_2: [{"id": self.SESSION_2, "status": "incomplete"}] * 2})
+        out, names = self.reads(store)
+
+        self.assertEqual(store.opened, 1)
+        self.assertEqual(self.naps, [60], "one wait of 60 s between the two rounds")
+        self.assertEqual([(n, i, m) for n, i, _, m in store.calls], [
+            ("get_checkout", self.SESSION, False), ("get_checkout", self.SESSION_2, False),
+            ("get_checkout", self.SESSION, False), ("get_checkout", self.SESSION_2, False)])
+        for intent in (self.HANDED, self.HANDED_2):
+            for name in ("after_payment_get_checkout_0s", "after_payment_get_checkout_60s"):
+                self.assertTrue(os.path.isfile(os.path.join(self.evidence, intent, name + ".json")), (intent, name))
+        self.assertFalse(os.path.exists(os.path.join(self.evidence, self.OWED, "after_payment_get_checkout_0s.json")))
+        saved = open(os.path.join(self.evidence, self.HANDED, "after_payment_get_checkout_60s.json")).read()
+        self.assertIn("completed", saved)
+        self.assertIn("gid://shopify/Order/42", saved)
+        self.assertNotIn("canarykey777", saved)
+        self.assertNotIn("/cart/c/", saved)
+        self.assertIn("completed", out)
+        self.assertNotIn("canarykey", out)
+        self.assertEqual(len(names), 4)
+
+    def test_withNoHandedOffCheckout_nothingIsSent(self):
+        with sqlite3.connect(self.db) as c:
+            c.execute("DELETE FROM purchase_intent WHERE id != ?", (self.OWED,))
+        store = ReadStore({})
+        out, names = self.reads(store)
+        self.assertEqual((store.opened, store.calls, self.naps, names), (0, [], [], []))
+        self.assertIn("no HANDED_OFF checkout", out)
+
+    def test_aReadThatFails_isNamed_andTheRestStillRun(self):
+        store = ReadStore({self.SESSION: [RuntimeError("the store did not answer"), self.paid(self.SESSION)],
+                           self.SESSION_2: [{"id": self.SESSION_2}] * 2})
+        out, names = self.reads(store)
+        self.assertEqual(len(store.calls), 4)
+        self.assertIn("WARNING", out)
+        self.assertEqual(len(names), 3)
+
+    def test_onExit_theReadsComeAfterTheEvidence_andBeforeTheDrain(self):
+        order = []
+        with redirect_stdout(io.StringIO()):
+            live.console_exit(self.Api(), self.db, self.evidence,
+                              lambda db, intents: order.append("drain") or [], lambda: order.append("reads"))
+        self.assertEqual(order, ["reads", "drain"])
+        self.assertTrue(os.path.isfile(os.path.join(self.evidence, self.HANDED, "intent.json")))
+
+    def test_theFlag_isForTheConsoleOnly(self):
+        with self.assertRaises(SystemExit) as e:
+            live.main(["--after-payment", "--dry-run", "--i-own-this-store", "--with-buyer-ip"])
+        self.assertIn("refused", str(e.exception))
+
+    def test_theDryRun_showsTheTwoReads_withTheSecretsReplaced(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = live.main(["--console", "--after-payment", "--dry-run", "--i-own-this-store", "--with-buyer-ip"])
+        text = out.getvalue()
+        self.assertEqual(code, 0)
+        self.assertEqual(text.count('"name": "get_checkout"'), 2, "exactly two calls")
+        self.assertEqual(text.count('"method": "tools/call"'), 2, "and no other tool call")
+        self.assertIn("wait 60 s", text)
+        self.assertIn('"Authorization": "<redacted>"', text)
+        self.assertIn('"Shopify-Buyer-IP": "<redacted>"', text)
+        for never in ("cancel_checkout", "create_checkout", "update_checkout", "complete_checkout"):
+            self.assertNotIn(never, text)
+
+
 if __name__ == "__main__":
     unittest.main()

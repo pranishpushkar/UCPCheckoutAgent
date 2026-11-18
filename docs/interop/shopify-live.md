@@ -34,6 +34,10 @@ scripts/shopify-live.sh --i-own-this-store --with-buyer-ip --cancel-after       
   apply, and `--approve`, `--cancel-after`, `--query` and `--record` are refused. On exit it keeps each intent's
   evidence under `notes/h5/console/evidence/<intent>/` and drains owed cancels. It never cancels a handed-off checkout,
   since you may be paying at the store.
+- `--after-payment`, with `--console` only: on Ctrl-C, after the evidence and before the drain, one read-only
+  `get_checkout` of each handed-off checkout, then another 60 s later. Each answer is recorded, redacted, as
+  `notes/h5/console/evidence/<intent>/after_payment_get_checkout_{0s,60s}.json` (VERIFY 7: what the store says of a
+  checkout the buyer paid for). Nothing is sent without the flag.
 - The service listens on `127.0.0.1` only, in both modes: the local dev sign-in must not be reachable from the network.
 
 ## What it does
