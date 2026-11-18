@@ -17,7 +17,9 @@ TOKEN = []          # the access token, once there is one (memory only)
 RECORD = [None]     # the directory --record writes the answers to, if any
 TEST_BASE = os.environ.get("SHOPIFY_SPIKE_TEST_BASE")   # tests only: every call goes to this local URL
 DEFAULT_QUERY = "snowboard"   # the dev store's generated test data has snowboards
-URL_FIELDS = ("continue_url", "checkout_url")   # the path and query of a checkout URL open that checkout
+URL_FIELDS = ("continue_url", "checkout_url", "permalink_url")   # their path and query open the checkout or the order
+BUYER_FIELDS = ("email", "phone_number", "first_name", "last_name", "street_address", "extended_address",
+                "address_locality", "address_region", "postal_code")   # a paid checkout's buyer and destination
 
 
 def secrets():
@@ -49,8 +51,9 @@ def host_only(url):
 
 def sanitize(value, key=None):
     """An answer made safe to keep: walked recursively, JSON held in a string (Shopify sends each payload twice, once as
-    a JSON string in result.content[].text) decoded and walked too, continue_url and checkout_url cut to their host, and
-    any "?key=" (Shopify's checkout ids and URLs carry an access key) masked."""
+    a JSON string in result.content[].text) decoded and walked too, continue_url, checkout_url and an order's
+    permalink_url (its query holds a session_token) cut to their host, the buyer's contact and address masked, and any
+    "?key=" (Shopify's checkout ids and URLs carry an access key) masked."""
     if isinstance(value, dict):
         return {k: sanitize(v, k) for k, v in value.items()}
     if isinstance(value, list):
@@ -58,6 +61,8 @@ def sanitize(value, key=None):
     if isinstance(value, str):
         if key in URL_FIELDS:
             return host_only(value)
+        if key in BUYER_FIELDS:
+            return "<redacted>"
         if value.strip()[:1] in ("{", "["):
             try:
                 return json.dumps(sanitize(json.loads(value)), sort_keys=True)

@@ -247,6 +247,29 @@ class SpikeTest(unittest.TestCase):
         self.assertIn(STORE, text)
         self.assertIn("gid://shopify/Checkout/chk_1", text)
 
+    # H5, VERIFY 7 (the console's after-payment read): a paid checkout names its order with a permalink_url that carries a
+    # session_token, and the buyer's email and address come back in the answer. None of it is kept: the permalink is cut
+    # to its host as continue_url is, and the buyer's details are masked, in both copies of the payload. The order id,
+    # its label and the status stay: they are what the read is for. (I8)
+    def test_sanitize_cuts_the_order_permalink_and_masks_the_buyer(self):
+        paid = {"id": "gid://shopify/Checkout/chk_1?key=canary-key-444", "status": "completed",
+                "buyer": {"email": "canary-buyer@example.com", "phone_number": "+15550000000"},
+                "fulfillment": {"methods": [{"destinations": [{
+                    "first_name": "Canaryfirst", "last_name": "Canarylast", "street_address": "1 Canary St",
+                    "extended_address": "Apt canary", "address_locality": "Canaryville", "address_region": "CN",
+                    "postal_code": "99999", "address_country": "United States", "id": "destination_0"}]}]},
+                "order": {"id": "gid://shopify/Order/42", "label": "5J6C8", "permalink_url":
+                          "https://" + STORE + "/checkouts/cn/canary-path/thank_you?session_token=canary-session-666"}}
+        answer = {"result": {"structuredContent": paid, "content": [{"type": "text", "text": json.dumps(paid)}]}}
+        text = json.dumps(s.sanitize(answer))
+        for canary in ("canary-session-666", "session_token", "canary-path", "thank_you", "canary-buyer", "+1555",
+                       "Canaryfirst", "Canarylast", "1 Canary St", "Apt canary", "Canaryville", "99999", "canary-key-444"):
+            self.assertNotIn(canary, text)
+        for kept in ("gid://shopify/Order/42", "5J6C8", "completed", "United States", "destination_0"):
+            self.assertIn(kept, text)
+        self.assertEqual(s.sanitize(answer)["result"]["structuredContent"]["order"]["permalink_url"],
+                         s.host_only(paid["order"]["permalink_url"]))
+
     # H5 (the first real run): the MCP endpoint is the one the profile names in ucp.services, not a guess.
     def test_the_endpoint_comes_from_the_profiles_services(self):
         self.run_main(["--i-own-this-store"])

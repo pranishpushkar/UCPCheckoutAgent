@@ -75,10 +75,39 @@ value, no bearer token and no `shpat_` token. It also found one `/cart/c/<token>
 wrote the handoff URL there with only its key masked; it now cuts it to the host, and the saved file was cut the same
 way before the scan.
 
+Over the console evidence (VERIFY 7), the shape checks found nothing once the two after-payment answers were masked:
+no unmasked `?key=`, no buyer IP header, no bearer token, no `session_token` with a value, no `/cart/c/` URL, and no
+buyer email or street address.
+
+## After payment at the store (VERIFY 7)
+
+The console run (`scripts/shopify-console.sh --after-payment`, 2026-11-18; [demo.md](../demo.md) section 8): one
+intent, the same snowboard at 699.95 USD, approved on the console's card, handed off. The owner paid on the store's
+page with its test gateway and pressed Ctrl-C; the script read the handed-off checkout twice, 60 s apart.
+
+| | 0 s | 60 s |
+| --- | --- | --- |
+| Answer | `isError: false` | `isError: false` |
+| `status` | `completed` | `completed` |
+| `order.id` | `gid://shopify/Order/<n>` | the same |
+| `order.label` | the confirmation code | the same |
+| `order.permalink_url` | `https://<store>/checkouts/cn/<token>/thank_you?session_token=<token>` | a new `session_token` |
+| `expires_at` | absent | absent |
+
+- The `order` has those three fields and no others. The total, shipping and tax were unchanged (699.95, 0, 0), and
+  `payment` held no handler or instrument.
+- The checkout id, with its `?key=`, still resolved after payment.
+- The answer carries the buyer's email and shipping address. The recorder now masks them, and cuts `permalink_url` to
+  its host like `continue_url`, because its `session_token` opens the buyer's order-status page. The first recording
+  had kept both. The two saved files were masked in place, and the leak scan gained a `session_token` shape.
+- The parser reads the answer as it stands (`COMPLETED`, `order.id`), but nothing reads a handed-off checkout, so the
+  agent still does not learn of the order.
+
 ## What is not covered
 
 - N1: no `complete` at Shopify; the buyer pays at the store.
-- Order reads (VERIFY 7).
+- Reading the order after a handoff: VERIFY 7 shows the store reports it, but `HANDED_OFF` is terminal and nothing
+  reads the checkout again.
 - The per-user buyer IP: `BUYER_IP` is the owner's own address, `local` profile only (19).
 - Shipping selection at a real handoff merchant: Shopify's answers always carry messages, and the orchestrator sends a
   selection only for an answer without any, so that path never runs there. Tests cover it only with the messages
@@ -89,6 +118,7 @@ way before the scan.
 | # | Question | Answer |
 | --- | --- | --- |
 | 5 | `continue_url`'s form and lifetime; cancel of a handed-off checkout | `https://<store>/cart/c/<token>?key=<key>`, `<token>` being the checkout id's; `expires_at` is 30 days after the last read or write; cancel after the buyer opened the page answered HTTP 200, `canceled` |
+| 7 | What the store says of a handed-off checkout the buyer paid for | `completed`, with `order: {id, label, permalink_url}`; the id still resolves; a read 60 s later is the same apart from a new `session_token` in the permalink; no `expires_at` |
 | 8 | A business refusal over MCP | `result.isError: true`, with a UCP error envelope in `structuredContent` (`ucp.status: error`, `messages[]` with code and severity, no id); not a JSON-RPC error |
 | 9 | The arguments of `get_checkout` and `update_checkout` | `get_checkout`: `{id}`. `update_checkout`: `{id, checkout: {line_items: [{id, item: {id}, quantity}]}}`, each line with its `CartLine` id; the recorded update's `meta` held `ucp-agent` and `idempotency-key`. The store accepted both |
 | 10 | Whether the MCP endpoint differs between versions | Not tested in H5; still open |
