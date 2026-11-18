@@ -173,8 +173,11 @@ public final class CheckoutParser {
             if (quantity < 1 || quantity > Integer.MAX_VALUE) {
                 throw new Bad("quantity out of range");
             }
+            // 9.2: the merchant's title, shown on the approval card; read leniently, as it decides no amount.
+            String title = item.get("title") instanceof String t ? clean(t, 100).trim() : "";
             out.add(new LineView(text(item, "id"), (int) quantity, minor(item.get("price"), "item.price"),
-                    line.get("id") instanceof String lineId && !lineId.isBlank() ? Optional.of(lineId) : Optional.empty()));
+                    line.get("id") instanceof String lineId && !lineId.isBlank() ? Optional.of(lineId) : Optional.empty(),
+                    title));
         }
         return out;
     }

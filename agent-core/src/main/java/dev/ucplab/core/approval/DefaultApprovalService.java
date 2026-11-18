@@ -84,7 +84,7 @@ public final class DefaultApprovalService implements ApprovalService {
         }
         ApprovalSnapshot snapshot = new ApprovalSnapshot(
                 intent.id(), intent.merchantId(), quote.id(),
-                quote.lines().stream().map(l -> new SnapshotLine(l.itemId(), l.quantity(), l.unitPriceMinor())).toList(),
+                quote.lines().stream().map(l -> new SnapshotLine(l.itemId(), l.quantity(), l.unitPriceMinor(), l.title())).toList(),
                 quote.currency(), quote.totalMinor(), quote.totalMinor(), now.plus(ttl), shipping(quote));
         String hash = snapshot.hash();
         String approvalId = ids.next();

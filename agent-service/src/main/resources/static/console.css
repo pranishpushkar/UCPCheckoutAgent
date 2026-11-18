@@ -63,3 +63,10 @@ td.num, th.num { text-align: right; }
 @media (max-width: 720px) {
   main { grid-template-columns: 1fr; }
 }
+
+/* 24.3: under a line's title on the approval card, the merchant's item id. */
+.item-id {
+  color: var(--muted);
+  font-size: 0.85em;
+  overflow-wrap: anywhere;
+}

@@ -1795,7 +1795,8 @@ public final class DefaultOrchestrator implements Orchestrator {
     private static boolean sameAsApproved(CheckoutView view, ApprovalSnapshot snapshot) {
         Map<SnapshotLine, Integer> shown = new java.util.HashMap<>();
         for (LineView l : view.lines()) {
-            shown.merge(new SnapshotLine(l.itemId(), l.quantity(), l.unitPriceMinor()), 1, Integer::sum);
+            // 9.2: the title too, so a GET that shows another title is a change, as another price is.
+            shown.merge(new SnapshotLine(l.itemId(), l.quantity(), l.unitPriceMinor(), l.title()), 1, Integer::sum);
         }
         Map<SnapshotLine, Integer> approved = new java.util.HashMap<>();
         for (SnapshotLine l : snapshot.lines()) {

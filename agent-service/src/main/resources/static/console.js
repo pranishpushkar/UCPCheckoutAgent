@@ -239,7 +239,12 @@ function showApprovalCard(id, approvalResponse) {
   let linesTotal = 0;
   snapshot.lines.forEach((line) => {
     const row = el("tr");
-    row.appendChild(el("td", line.item_id));
+    const name = el("td");
+    if (line.title) {
+      name.appendChild(el("div", line.title));
+    }
+    name.appendChild(el("div", line.item_id, "item-id"));
+    row.appendChild(name);
     row.appendChild(el("td", line.quantity, "num"));
     row.appendChild(el("td", money(line.unit_price_minor, snapshot.currency), "num"));
     row.appendChild(el("td", money(line.quantity * line.unit_price_minor, snapshot.currency), "num"));

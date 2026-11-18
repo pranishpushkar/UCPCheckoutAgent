@@ -176,6 +176,7 @@ public final class SqlApprovalRepository implements ApprovalRepository {
             line.put("itemId", l.itemId());
             line.put("quantity", l.quantity());
             line.put("unitPriceMinor", l.unitPriceMinor());
+            line.put("title", l.title());
             lines.add(line);
         }
         Map<String, Object> m = new LinkedHashMap<>();
@@ -204,8 +205,10 @@ public final class SqlApprovalRepository implements ApprovalRepository {
         List<SnapshotLine> lines = new ArrayList<>();
         for (Object o : (List<Object>) m.get("lines")) {
             Map<String, Object> l = (Map<String, Object>) o;
+            // 9.2: a snapshot stored before titles has none.
+            String title = l.get("title") instanceof String t ? t : "";
             lines.add(new SnapshotLine((String) l.get("itemId"), ((Long) l.get("quantity")).intValue(),
-                    (Long) l.get("unitPriceMinor")));
+                    (Long) l.get("unitPriceMinor"), title));
         }
         return new ApprovalSnapshot(
                 new IntentId((String) m.get("intentId")), new MerchantId((String) m.get("merchantId")),
