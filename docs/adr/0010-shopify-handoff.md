@@ -1,6 +1,6 @@
 # ADR 0010: A Shopify store over MCP, by handoff (H5)
 
-Status: proposed. The H5 plan, `docs/interop/shopify-spike.md` and `docs/interop/shopify-live.md` are the working notes.
+Status: accepted (2026-11-18), after the Stage 3 live run ([h5-shopify-report.md](../results/h5-shopify-report.md)). The H5 plan, `docs/interop/shopify-spike.md` and `docs/interop/shopify-live.md` are the working notes.
 
 ## Decision
 
@@ -39,4 +39,8 @@ Status: proposed. The H5 plan, `docs/interop/shopify-spike.md` and `docs/interop
   not ours (VERIFY 7).
 - `hand_off_changed` compares the session the store shows with the approved snapshot exactly (7.2, I2); a store that
   adds charges between quote and handoff costs a re-quote and, past the P8 cap, ends `price_unstable`. The live run
-  measures whether Shopify does (`<Stage 3 result>`).
+  measures whether Shopify does. In Stage 3 it did not: the session at handoff matched the approved snapshot exactly, with
+  no re-quote (`requote_count` 0); that store charged no tax or shipping for the item, so nothing that usually drifts was
+  present.
+- At a handoff merchant the agent sends no buyer identity: the store asks the buyer at its own checkout, and refused the
+  local sign-in's email (`buyer_identity_email_is_invalid`) in the second Stage 3 run.

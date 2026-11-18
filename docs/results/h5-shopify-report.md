@@ -1,5 +1,3 @@
-DRAFT
-
 # H5: one live run at a Shopify development store
 
 Filled in from the Stage 3 run (`scripts/shopify-live.sh`, [shopify-live.md](../interop/shopify-live.md)). Items
@@ -33,11 +31,13 @@ The run left nothing open: the probe checkout was canceled, and there were no ow
 2. **Second run:** the store refused the create with `buyer_identity_email_is_invalid` (unrecoverable) because the agent
    sent the local sign-in's email. The refusal came as `isError: true`, which the transport read as an unreadable
    answer; it was retried 4 times, and the orphan probe then opened the circuit breaker. Fixed by sending no buyer
-   identity at a handoff merchant (`0b11bc7`). The refusal and breaker handling are Stage 3 items 2–3.
+   identity at a handoff merchant (`0b11bc7`). A refusal like it is now a definite answer (`ded75dc`), an answer from the
+   store no longer counts toward the circuit breaker (`8718551`), and a probe the breaker refuses neither counts nor
+   writes a row, ending at a 10-minute deadline (item 3b).
 
 ## What the buyer saw
 
-`<the store's checkout page: what it showed, what it asked for; no URL, no screenshot with a key>`
+The handoff URL opened the store's cart page showing <what you saw, e.g. one Complete Snowboard, Ice, $699.95>; after cancel, <what reloading showed, if you checked>.
 
 **The buyer may not be able to finish.** Every answer carried `delivery_no_delivery_available_for_merchandise_line`
 (recoverable). The development store has no shipping rate for this product, so the store's own checkout may refuse to
@@ -64,8 +64,11 @@ could differ between create and GET. That would show as `hand_off_changed` re-qu
 
 ## The leak scan
 
-`scripts/h5-leak-scan.sh`: `<PASSED / FAILED>`, over the run's evidence and recordings and the branch
-`develop..HEAD`. `<counts per pattern>`.
+`scripts/h5-leak-scan.sh`, over the run's evidence and recordings and the branch `develop..HEAD`:
+
+```
+<paste the scan output here>
+```
 
 A shape check without secrets, over the evidence and recordings, found no unmasked `?key=`, no buyer IP header with a
 value, no bearer token and no `shpat_` token. It also found one `/cart/c/<token>` URL in `intent.json`. The script
@@ -88,4 +91,4 @@ way before the scan.
 | 5 | `continue_url`'s form and lifetime; cancel of a handed-off checkout | `https://<store>/cart/c/<token>?key=<key>`, `<token>` being the checkout id's; `expires_at` is 30 days after the last read or write; cancel after the buyer opened the page answered HTTP 200, `canceled` |
 | 8 | A business refusal over MCP | `result.isError: true`, with a UCP error envelope in `structuredContent` (`ucp.status: error`, `messages[]` with code and severity, no id); not a JSON-RPC error |
 | 9 | The arguments of `get_checkout` and `update_checkout` | `get_checkout`: `{id}`. `update_checkout`: `{id, checkout: {line_items: [{id, item: {id}, quantity}]}}`, each line with its `CartLine` id; the recorded update's `meta` held `ucp-agent` and `idempotency-key`. The store accepted both |
-| 10 | Whether the MCP endpoint differs between versions | `<not answered by this run: only 2026-04-08 was spoken>` |
+| 10 | Whether the MCP endpoint differs between versions | Not tested in H5; still open |
