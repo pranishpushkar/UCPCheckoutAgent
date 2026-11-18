@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from contextlib import redirect_stdout
 
@@ -323,6 +324,322 @@ class OwedCancels(unittest.TestCase):
         self.assertIn("gave up", out)
         self.assertIn("gid://shopify/Checkout/tok123", out)
         self.assertNotIn("canarykey999", out)
+
+
+
+class Console(unittest.TestCase):
+    """--console (scripts/shopify-console.sh): the service and its owned store, left running for the owner's browser.
+    The Stage 3 guards stay; approval is the console's card only; on exit every owed cancel is drained, and a handed-off
+    checkout is left open, since the owner may be paying at the store."""
+
+    HANDED = "01a1ea58-0000-7000-8000-0000000000c1"
+    OWED = "01a1ea58-0000-7000-8000-0000000000c2"
+    SESSION = "gid://shopify/Checkout/tok777?key=canarykey777"
+
+    def setUp(self):
+        self.work = tempfile.mkdtemp()
+        self.db = os.path.join(self.work, "ucplab.db")
+        with sqlite3.connect(self.db) as c:
+            c.execute("CREATE TABLE purchase_intent (id TEXT PRIMARY KEY, session_id TEXT, cancel_pending INTEGER, "
+                      "created_at TEXT, requote_count INTEGER)")
+            c.execute("CREATE TABLE intent_event (intent_id TEXT, seq INTEGER, type TEXT, payload_json TEXT, at TEXT)")
+            c.execute("CREATE TABLE merchant_attempt (id TEXT PRIMARY KEY, intent_id TEXT, seq INTEGER, op TEXT, revision "
+                      "INTEGER, idempotency_key TEXT, request_hash TEXT, request_body TEXT, status TEXT, http_status "
+                      "INTEGER, response_json TEXT, sent_at TEXT, responded_at TEXT)")
+            c.execute("INSERT INTO purchase_intent VALUES (?, ?, 0, 't0', 0)", (self.HANDED, self.SESSION))
+            c.execute("INSERT INTO purchase_intent VALUES (?, NULL, 1, 't1', 0)", (self.OWED,))
+
+    def tearDown(self):
+        shutil.rmtree(self.work)
+
+    def test_theScriptedRunsOptions_areRefused(self):
+        for flag in ("--approve", "--cancel-after", "--query", "--record"):
+            with self.assertRaises(SystemExit, msg=flag):
+                live.console_options(["--console", flag])
+        live.console_options(["--console", "--i-own-this-store", "--with-buyer-ip", "--port", "8080"])
+
+    def test_theStage3Guards_stay(self):
+        for missing in ("--i-own-this-store", "--with-buyer-ip"):
+            argv = [a for a in ("--console", "--dry-run", "--i-own-this-store", "--with-buyer-ip") if a != missing]
+            with self.assertRaises(SystemExit) as e:
+                live.main(argv)
+            self.assertIn("refused", str(e.exception))
+
+    def test_theServiceListensOnLoopbackOnly(self):
+        env = live.service_env({"PATH": "/bin"}, self.work, 8080)
+        self.assertEqual(env.get("SERVER_ADDRESS"), "127.0.0.1")
+
+    def test_theDryRun_callsNothing_approvesOnTheCardOnly_andLeavesAHandedOffCheckoutOpen(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = live.main(["--console", "--dry-run", "--i-own-this-store", "--with-buyer-ip"])
+        text = out.getvalue()
+        self.assertEqual(code, 0)
+        self.assertIn("127.0.0.1", text)
+        self.assertIn("sign in as alice", text)
+        self.assertIn("approve on the console's card", text)
+        self.assertIn("Ctrl-C", text)
+        self.assertIn("owed cancels", text)
+        self.assertIn("a HANDED_OFF checkout is not cancelled", text)
+        for never in ("cancel_checkout", "create_checkout", "get_checkout", "POST /api/runs", "Approve this card"):
+            self.assertNotIn(never, text)
+
+    def test_theIntents_areEveryOneTheConsoleMade_inOrder(self):
+        self.assertEqual(live.console_intents(self.db), [self.HANDED, self.OWED])
+
+    def test_onExit_everyOwedCancelIsDrained_theEvidenceKept_andAHandedOffCheckoutLeftOpen(self):
+        evidence = os.path.join(self.work, "evidence")
+        os.makedirs(evidence)
+        drained = []
+
+        class Api:
+            def json(self, method, path, body=None):
+                if path.endswith("/events"):
+                    return {"items": []}
+                intent = path.rsplit("/", 1)[1]
+                state = "HANDED_OFF" if intent == Console.HANDED else "FAILED_NOT_CHARGED"
+                return {"id": intent, "state": state, "handoff_url": "https://shop.example/cart/c/tok777?key=canarykey777"}
+
+        out = io.StringIO()
+        with redirect_stdout(out):
+            live.console_exit(Api(), self.db, evidence, lambda db, intents: drained.append(list(intents)) or [])
+        self.assertEqual(drained, [[self.HANDED, self.OWED]])
+        for intent in (self.HANDED, self.OWED):
+            self.assertTrue(os.path.isfile(os.path.join(evidence, intent, "intent.json")), intent)
+        saved = open(os.path.join(evidence, self.HANDED, "intent.json")).read()
+        self.assertNotIn("canarykey777", saved)
+        self.assertNotIn("/cart/c/", saved)
+        self.assertIn("left open", out.getvalue())
+        self.assertNotIn("canarykey777", out.getvalue())
+
+    def test_serving_endsOnCtrlC_orWhenTheServiceStops(self):
+        class Proc:
+            def __init__(self, code):
+                self.code = code
+
+            def poll(self):
+                return self.code
+
+        def ctrl_c(seconds):
+            raise KeyboardInterrupt()
+        out = io.StringIO()
+        with redirect_stdout(out):
+            live.serve_console(Proc(None), "http://127.0.0.1:8080", ctrl_c)
+            live.serve_console(Proc(1), "http://127.0.0.1:8080", ctrl_c)
+        text = out.getvalue()
+        self.assertIn("http://127.0.0.1:8080", text)
+        self.assertIn("stopping", text)
+        self.assertIn("the service stopped", text)
+
+
+
+class ReadStore(live.Store):
+    """A fake store for the after-payment reads: answers get_checkout from `answers` (a value, or an exception), records
+    each answer through spike.record as spike.call does, and counts open() and every call."""
+
+    def __init__(self, answers):
+        super().__init__("my-dev-store.myshopify.com", False)
+        self.answers = answers
+        self.opened = 0
+        self.calls = []
+
+    def open(self):
+        self.opened += 1
+
+    def tool(self, step, name, arguments, record_as, mutating=False, key=None):
+        self.calls.append((name, arguments.get("id"), record_as, mutating))
+        answer = self.answers.get(arguments.get("id"), {})
+        if isinstance(answer, list):
+            answer = answer.pop(0)
+        if isinstance(answer, BaseException):
+            raise answer
+        live.spike.record(record_as, answer)
+        return answer
+
+
+class AfterPayment(unittest.TestCase):
+    """--after-payment (part 1 of notes/h5/after-handoff-order-proposal.md, VERIFY 7): on the console's way out, one
+    read-only get_checkout per HANDED_OFF checkout, recorded redacted under evidence/<intent>/, then one more 60 s later.
+    Nothing is sent to the store without the flag."""
+
+    HANDED = Console.HANDED
+    OWED = Console.OWED
+    SESSION = Console.SESSION
+    HANDED_2 = "01a1ea58-0000-7000-8000-0000000000c3"
+    SESSION_2 = "gid://shopify/Checkout/tok888?key=canarykey888"
+
+    def setUp(self):
+        Console.setUp(self)
+        with sqlite3.connect(self.db) as c:
+            c.execute("INSERT INTO purchase_intent VALUES (?, ?, 0, 't2', 0)", (self.HANDED_2, self.SESSION_2))
+        self.evidence = os.path.join(self.work, "evidence")
+        os.makedirs(self.evidence)
+        self.naps = []
+
+    def tearDown(self):
+        live.spike.RECORD[0] = None
+        shutil.rmtree(self.work)
+
+    class Api:
+        def json(self, method, path, body=None):
+            if path.endswith("/events"):
+                return {"items": []}
+            intent = path.rsplit("/", 1)[1]
+            state = "FAILED_NOT_CHARGED" if intent == AfterPayment.OWED else "HANDED_OFF"
+            return {"id": intent, "state": state}
+
+    def paid(self, session):
+        return {"id": session, "status": "completed", "currency": "USD",
+                "continue_url": "https://shop.example/cart/c/tok777?key=canarykey777",
+                "order": {"id": "gid://shopify/Order/42", "permalink_url": "https://shop.example/orders/abc?key=canarykey777"}}
+
+    def reads(self, store):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            names = live.after_payment_reads(store, self.db, self.Api(), self.evidence, self.naps.append, 60)
+        return out.getvalue(), names
+
+    def test_withoutTheFlag_nothingIsRead(self):
+        store = ReadStore({})
+        self.assertIsNone(live.after_payment_for(["--console"], lambda: store, self.db, self.Api(), self.evidence))
+        self.assertIsNotNone(live.after_payment_for(["--console", "--after-payment"], lambda: store, self.db, self.Api(),
+                                                    self.evidence))
+        self.assertEqual(store.calls, [])
+        self.assertEqual(store.opened, 0)
+
+    def test_eachHandedOffCheckout_isReadTwice_60sApart_readOnly_andRecordedRedacted(self):
+        store = ReadStore({self.SESSION: [{"id": self.SESSION, "status": "incomplete"}, self.paid(self.SESSION)],
+                           self.SESSION_2: [{"id": self.SESSION_2, "status": "incomplete"}] * 2})
+        out, names = self.reads(store)
+
+        self.assertEqual(store.opened, 1)
+        self.assertEqual(self.naps, [60], "one wait of 60 s between the two rounds")
+        self.assertEqual([(n, i, m) for n, i, _, m in store.calls], [
+            ("get_checkout", self.SESSION, False), ("get_checkout", self.SESSION_2, False),
+            ("get_checkout", self.SESSION, False), ("get_checkout", self.SESSION_2, False)])
+        for intent in (self.HANDED, self.HANDED_2):
+            for name in ("after_payment_get_checkout_0s", "after_payment_get_checkout_60s"):
+                self.assertTrue(os.path.isfile(os.path.join(self.evidence, intent, name + ".json")), (intent, name))
+        self.assertFalse(os.path.exists(os.path.join(self.evidence, self.OWED, "after_payment_get_checkout_0s.json")))
+        saved = open(os.path.join(self.evidence, self.HANDED, "after_payment_get_checkout_60s.json")).read()
+        self.assertIn("completed", saved)
+        self.assertIn("gid://shopify/Order/42", saved)
+        self.assertNotIn("canarykey777", saved)
+        self.assertNotIn("/cart/c/", saved)
+        self.assertIn("completed", out)
+        self.assertNotIn("canarykey", out)
+        self.assertEqual(len(names), 4)
+
+    def test_withNoHandedOffCheckout_nothingIsSent(self):
+        with sqlite3.connect(self.db) as c:
+            c.execute("DELETE FROM purchase_intent WHERE id != ?", (self.OWED,))
+        store = ReadStore({})
+        out, names = self.reads(store)
+        self.assertEqual((store.opened, store.calls, self.naps, names), (0, [], [], []))
+        self.assertIn("no HANDED_OFF checkout", out)
+
+    def test_aReadThatFails_isNamed_andTheRestStillRun(self):
+        store = ReadStore({self.SESSION: [RuntimeError("the store did not answer"), self.paid(self.SESSION)],
+                           self.SESSION_2: [{"id": self.SESSION_2}] * 2})
+        out, names = self.reads(store)
+        self.assertEqual(len(store.calls), 4)
+        self.assertIn("WARNING", out)
+        self.assertEqual(len(names), 3)
+
+    def test_onExit_theReadsComeAfterTheEvidence_andBeforeTheDrain(self):
+        order = []
+        with redirect_stdout(io.StringIO()):
+            live.console_exit(self.Api(), self.db, self.evidence,
+                              lambda db, intents: order.append("drain") or [], lambda: order.append("reads"))
+        self.assertEqual(order, ["reads", "drain"])
+        self.assertTrue(os.path.isfile(os.path.join(self.evidence, self.HANDED, "intent.json")))
+
+    def test_theFlag_isForTheConsoleOnly(self):
+        with self.assertRaises(SystemExit) as e:
+            live.main(["--after-payment", "--dry-run", "--i-own-this-store", "--with-buyer-ip"])
+        self.assertIn("refused", str(e.exception))
+
+    def test_theDryRun_showsTheTwoReads_withTheSecretsReplaced(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = live.main(["--console", "--after-payment", "--dry-run", "--i-own-this-store", "--with-buyer-ip"])
+        text = out.getvalue()
+        self.assertEqual(code, 0)
+        self.assertEqual(text.count('"name": "get_checkout"'), 2, "exactly two calls")
+        self.assertEqual(text.count('"method": "tools/call"'), 2, "and no other tool call")
+        self.assertIn("wait 60 s", text)
+        self.assertIn('"Authorization": "<redacted>"', text)
+        self.assertIn('"Shopify-Buyer-IP": "<redacted>"', text)
+        for never in ("cancel_checkout", "create_checkout", "update_checkout", "complete_checkout"):
+            self.assertNotIn(never, text)
+
+
+
+# "The script" for CtrlC: spawns a sleeper as the service is spawned, says the sleeper's pid, and waits for Ctrl-C. On
+# it, it says whether the sleeper is still alive, then stops it with stop_service and says how it ended.
+HARNESS = textwrap.dedent("""
+    import os, subprocess, sys, tempfile, time
+    sys.path.insert(0, sys.argv[1])
+    import shopify_live as live
+    tmp = tempfile.mkdtemp()
+    child = live.spawn([sys.executable, "-I", "-c", "import time; time.sleep(60)"], {"PATH": os.environ.get("PATH", "")},
+                       subprocess.DEVNULL, tmp)
+    print("child", child.pid, flush=True)
+    try:
+        time.sleep(30)
+        print("no ctrl-c", flush=True)
+    except KeyboardInterrupt:
+        time.sleep(1)                       # a child that got the SIGINT too has died by now
+        print("after ctrl-c, child alive:", child.poll() is None, flush=True)
+        live.stop_service(child, None, tmp)
+        print("after stop_service, child exit:", child.poll(), flush=True)
+""")
+
+
+class CtrlC(unittest.TestCase):
+    """Ctrl-C in the terminal reaches the script alone: the service runs in its own session, so its cleanup (the
+    evidence, the after-payment reads, the owed-cancel drain) can still talk to it; the script stops it after."""
+
+    def test_ctrlC_toTheScriptsProcessGroup_leavesTheServiceRunning_untilStopService(self):
+        harness = subprocess.Popen([sys.executable, "-I", "-c", HARNESS, HERE], stdout=subprocess.PIPE, text=True,
+                                   start_new_session=True)      # its own group, so the SIGINT never reaches this runner
+        child = None
+        try:
+            first = harness.stdout.readline().split()
+            self.assertEqual(first[0], "child", first)
+            child = int(first[1])
+            time.sleep(0.5)
+            os.killpg(harness.pid, signal.SIGINT)              # what the terminal does on Ctrl-C
+            out, _ = harness.communicate(timeout=60)
+        finally:
+            if harness.poll() is None:
+                harness.kill()
+            if child:
+                try:
+                    os.kill(child, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        self.assertIn("after ctrl-c, child alive: True", out)
+        self.assertRegex(out, r"after stop_service, child exit: -?\d+")
+
+    def test_bothRuns_startTheServiceInItsOwnSession(self):
+        seen = []
+
+        class Popen:
+            def __init__(self, command, **kwargs):
+                seen.append(kwargs)
+
+        work = tempfile.mkdtemp()
+        real = live.subprocess.Popen
+        try:
+            live.subprocess.Popen = Popen
+            proc, log = live.start_service("agent-service.jar", work, "my-dev-store.myshopify.com", work, 8080)
+            log.close()
+        finally:
+            live.subprocess.Popen = real
+            shutil.rmtree(work)
+        self.assertEqual(len(seen), 1)
+        self.assertIs(seen[0].get("start_new_session"), True)
 
 
 if __name__ == "__main__":

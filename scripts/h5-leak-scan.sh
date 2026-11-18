@@ -37,8 +37,10 @@ fixed_patterns() {
 }
 
 # The shape patterns (extended regular expressions, case-insensitive); no value of ours is in them.
-REGEX_NAMES=("a ?key= that is not ?key=<redacted>" "Shopify-Buyer-IP with a value" "Authorization: Bearer with a value")
-REGEXES=('\?key=([^<]|$)' 'shopify-buyer-ip"?[[:space:]]*[:=][[:space:]]*"?[0-9a-f:.]{3,}' 'bearer[[:space:]]+[a-z0-9_.-]{8,}')
+REGEX_NAMES=("a ?key= that is not ?key=<redacted>" "Shopify-Buyer-IP with a value" "Authorization: Bearer with a value"
+             "a session_token with a value")
+REGEXES=('\?key=([^<]|$)' 'shopify-buyer-ip"?[[:space:]]*[:=][[:space:]]*"?[0-9a-f:.]{3,}' 'bearer[[:space:]]+[a-z0-9_.-]{8,}'
+         'session_token=([^<]|$)')
 
 hits=0
 report() {   # $1 name  $2 count
@@ -109,13 +111,15 @@ if [ "$SELF" = 1 ]; then
   printf '%s\n' "{\"Shopify-Buyer-IP\": \"$BUYER_IP\"}" > "$WORK/c.json"
   printf '%s\n' "https://$SHOPIFY_STORE_DOMAIN/cart/c/abc" "gid://shopify/Checkout/x?key=realkey123" \
     "Authorization: Bearer canarytokenvalue123" > "$WORK/d.txt"
+  printf '%s\n' "https://shop.example/checkouts/cn/x/thank_you?session_token=canarysession123" > "$WORK/e.json"
   # The clean shapes must not count.
-  printf '%s\n' "?key=<redacted>" "Bearer <redacted>" "Shopify-Buyer-IP: <redacted>" > "$WORK/clean.txt"
+  printf '%s\n' "?key=<redacted>" "Bearer <redacted>" "Shopify-Buyer-IP: <redacted>" "session_token=<redacted>" > "$WORK/clean.txt"
   out=$(scan 0 "$WORK")
   echo "$out"
   missed=$(echo "$out" | grep -c '^ok' || true)
   [ "$missed" -eq 0 ] || { echo "SELF-TEST FAILED: $missed canary pattern(s) not found: the scan is blind" >&2; exit 1; }
   [ "$(count_regex_dirs '\?key=([^<]|$)' "$WORK/clean.txt")" = 0 ] || { echo "SELF-TEST FAILED: ?key=<redacted> counted" >&2; exit 1; }
+  [ "$(count_regex_dirs 'session_token=([^<]|$)' "$WORK/clean.txt")" = 0 ] || { echo "SELF-TEST FAILED: session_token=<redacted> counted" >&2; exit 1; }
   echo "SELF-TEST PASSED: every planted canary was found by its pattern name"
   exit 0
 fi
