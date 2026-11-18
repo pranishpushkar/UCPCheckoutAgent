@@ -64,7 +64,14 @@ could differ between create and GET. That would show as `hand_off_changed` re-qu
 
 ## The leak scan
 
-`scripts/h5-leak-scan.sh`: **LEAK SCAN PASSED** over `notes/h5/stage3/evidence` and the recordings, and over
+**After the handoff follow-up (PR #22).** `scripts/h5-leak-scan.sh`: **LEAK SCAN PASSED** over
+`notes/h5/console/evidence`, `notes/h5/stage3/evidence` and `notes/h5/stage3/recordings`, and over `develop..HEAD`.
+Every check was 0: client secret, client id, buyer IP, the store domain with `/cart/c/`, an unredacted `?key=`,
+`Shopify-Buyer-IP` with a value, `Authorization: Bearer` with a value, and a `session_token` with a value. On the branch,
+40 `?key=`, 16 `Shopify-Buyer-IP`, 17 `Bearer` and 19 `session_token` matches are test and doc fakes, reported as info
+only. This is the scan with values that VERIFY 7's shape checks below stood in for.
+
+**Stage 3.** `scripts/h5-leak-scan.sh`: **LEAK SCAN PASSED** over `notes/h5/stage3/evidence` and the recordings, and over
 `develop..HEAD`. It was run twice, with `BUYER_IP` set to the owner's current address and to the first run's address.
 Every check was 0: client secret, client id, buyer IP, the store domain with `/cart/c/`, an unredacted `?key=`,
 `Shopify-Buyer-IP` with a value, and `Authorization: Bearer` with a value. On the branch, 130 `?key=`, 43
@@ -100,14 +107,30 @@ page with its test gateway and pressed Ctrl-C; the script read the handed-off ch
 - The answer carries the buyer's email and shipping address. The recorder now masks them, and cuts `permalink_url` to
   its host like `continue_url`, because its `session_token` opens the buyer's order-status page. The first recording
   had kept both. The two saved files were masked in place, and the leak scan gained a `session_token` shape.
-- The parser reads the answer as it stands (`COMPLETED`, `order.id`), but nothing reads a handed-off checkout, so the
-  agent still does not learn of the order.
+- The parser reads the answer as it stands (`COMPLETED`, `order.id`). At the time nothing read a handed-off checkout;
+  the handoff follow-up (below) now does.
+
+## The handoff follow-up (acceptance, PR #22)
+
+The console run (`scripts/shopify-console.sh`, 2026-11-18; [demo.md](../demo.md) section 8), without `--after-payment`:
+one intent, the snowboard at 699.95 USD, approved on the console's card and handed off. The owner paid on the store's
+page with its test gateway. The read below was the follow-up's own (`resolved_by: handoff_follow_up`), made while the
+console ran; the evidence was saved later, on Ctrl-C.
+
+- The handoff opened the follow-up. Its first read, attempt 2, a `get` sent 64 s after the handoff, saw `completed` with
+  the order `gid://shopify/Order/<n>`.
+- The attempt's summary was only `{order_id, resolved_by: handoff_follow_up, status: completed}`, and the event
+  `handoff_order_seen` was `{order_id, reads: 1}`. Neither carried the confirmation code.
+- The intent stayed `HANDED_OFF`, with `store_order {id, label}` and `follow_up {watching: false}` on the owner's read:
+  what the console turns into "Order placed at the store, confirmation #<label>", with no Continue at the store link
+  (24.3). The saved `intent.json` has the label redacted.
+- After the handoff, only that one `get` was sent: no update, complete or cancel.
 
 ## What is not covered
 
 - N1: no `complete` at Shopify; the buyer pays at the store.
-- Reading the order after a handoff: VERIFY 7 shows the store reports it, but `HANDED_OFF` is terminal and nothing
-  reads the checkout again.
+- The follow-up's other endings at a real store (canceled, session_gone, the window's end): tests cover them; the
+  acceptance run saw an order on the first read.
 - The per-user buyer IP: `BUYER_IP` is the owner's own address, `local` profile only (19).
 - Shipping selection at a real handoff merchant: Shopify's answers always carry messages, and the orchestrator sends a
   selection only for an answer without any, so that path never runs there. Tests cover it only with the messages
