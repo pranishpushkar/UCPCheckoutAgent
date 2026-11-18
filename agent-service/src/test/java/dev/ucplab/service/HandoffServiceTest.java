@@ -172,6 +172,11 @@ class HandoffServiceTest {
         return run;
     }
 
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> snapshotOf(Object entry) {
+        return (Map<String, Object>) entry;
+    }
+
     private static void pause(long millis) {
         try {
             Thread.sleep(millis);
@@ -181,9 +186,10 @@ class HandoffServiceTest {
         }
     }
 
-    // Covers: 7.2 hand_off, 19, 23.2, 6.2, I6, I8, I9, H5 C7c (a completion: handoff MCP merchant builds a stack and
+    // Covers: 7.2 hand_off, 19, 23.2, 23.3, 24.3, 6.2, I6, I8, I9, H5 C7c (a completion: handoff MCP merchant builds a stack and
     // starts; its approval answer carries completion and the fixed note outside the snapshot; an approval over the API
-    // hands the intent off; the owner's intent answer carries handoff_url, another user's is 404 like a missing one; the
+    // hands the intent off; the owner's intent answer carries handoff_url and the live store's merchant, and the lab list
+    // marks the store live with its domain; another user's intent is 404 like a missing one; the
     // handed_off event holds the host only; the model's get_purchase_status sees the fixed note, never the URL; and the
     // URL is in no log line, trace line, event, other answer or database column but handoff_url)
     @Test
@@ -211,6 +217,11 @@ class HandoffServiceTest {
 
         Map<String, Object> intent = awaitIntent(api, alice, id, "HANDED_OFF");
         assertThat(intent).containsEntry("state", "HANDED_OFF").containsEntry("handoff_url", url);
+        // 23.2, 23.3, 24.3: the owner's intent and the lab list both name the live store, for the badge.
+        assertThat(intent).containsEntry("merchant", Map.of("completion", "handoff", "shop_domain", HOST));
+        Map<String, Object> listed = snapshotOf(((List<?>) json(api.get(alice, "/api/lab/merchants")).get("merchants")).get(0));
+        assertThat(listed).containsEntry("merchant_id", "dev-store").containsEntry("completion", "handoff")
+                .containsEntry("live", true).containsEntry("shop_domain", HOST);
         assertThat(api.get(alice, "/api/intents").statusCode()).isEqualTo(200);
         assertThat(api.get(alice, "/api/intents/" + id.value() + "/events").statusCode()).isEqualTo(200);
         HttpResponse<String> other = api.get(bob, "/api/intents/" + id.value());

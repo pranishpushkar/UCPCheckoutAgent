@@ -18,6 +18,7 @@ import dev.ucplab.core.intent.StoreOrder;
 import dev.ucplab.core.json.LenientJson;
 import dev.ucplab.core.orchestrator.DefaultOrchestrator;
 import dev.ucplab.core.recovery.RecoveryWorker;
+import dev.ucplab.persistence.Database;
 import dev.ucplab.persistence.SqlApprovalRepository;
 import dev.ucplab.persistence.SqlIntentQueries;
 import dev.ucplab.persistence.SqlIntentRepository;
@@ -28,6 +29,7 @@ import dev.ucplab.service.web.IntentDriver;
 import java.io.IOException;
 import java.net.http.HttpResponse;
 import java.nio.file.Path;
+import java.sql.PreparedStatement;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -309,6 +311,52 @@ class IntentsApiTest {
         HttpResponse<String> other = api.get(bob, "/api/intents/" + seen.value());
         assertThat(other.statusCode()).isEqualTo(404);
         assertThat(other.body()).doesNotContain("CANARYLABEL7");
+    }
+
+    /** Overwrites the merchant values stored on the intent at creation, as a different merchants file once gave. */
+    private void storeFingerprint(IntentId id, String fingerprint) {
+        int rows = service.bean(Database.class).write(c -> {
+            try (PreparedStatement s = c.prepareStatement(
+                    "UPDATE purchase_intent SET merchant_fingerprint = ? WHERE id = ?")) {
+                s.setString(1, fingerprint);
+                s.setString(2, id.value());
+                return s.executeUpdate();
+            }
+        });
+        assertThat(rows).isEqualTo(1);
+    }
+
+    // Covers: 23.2, 19, H5, I9 (the intent's merchant comes from the values stored on it at creation, never from the
+    // merchants file, which here lists only the lab merchant: completion always, shop_domain only for a live store,
+    // owned with a non-loopback domain; another user's read is 404 like a missing intent and names no merchant)
+    @Test
+    void theIntentsMerchant_comesFromItsStoredValues_withAShopDomainOnlyForALiveStore() throws IOException {
+        start();
+        Session alice = api.signIn("alice");
+        Session bob = api.signIn("bob");
+        IntentId lab = propose("alice", List.of(new ProposedLine("item_123", 1)));
+        IntentId live = propose("alice", List.of(new ProposedLine("item_123", 2)));
+        IntentId loopback = propose("alice", List.of(new ProposedLine("item_123", 3)));
+        IntentId unowned = propose("alice", List.of(new ProposedLine("item_123", 4)));
+        storeFingerprint(live, "{\"completion\":\"handoff\",\"owned\":true,"
+                + "\"shop_domain\":\"canary-store.myshopify.com\",\"transport\":\"mcp\"}");
+        storeFingerprint(loopback, "{\"completion\":\"handoff\",\"owned\":true,\"shop_domain\":\"127.0.0.1\","
+                + "\"transport\":\"mcp\"}");
+        storeFingerprint(unowned, "{\"completion\":\"handoff\",\"owned\":false,"
+                + "\"shop_domain\":\"canary-store.myshopify.com\",\"transport\":\"mcp\"}");
+
+        assertThat(json(api.get(alice, "/api/intents/" + lab.value())))
+                .containsEntry("merchant", Map.of("completion", "agent"));
+        assertThat(json(api.get(alice, "/api/intents/" + live.value())))
+                .containsEntry("merchant", Map.of("completion", "handoff", "shop_domain", "canary-store.myshopify.com"));
+        assertThat(json(api.get(alice, "/api/intents/" + loopback.value())))
+                .containsEntry("merchant", Map.of("completion", "handoff"));
+        assertThat(json(api.get(alice, "/api/intents/" + unowned.value())))
+                .containsEntry("merchant", Map.of("completion", "handoff"));
+        HttpResponse<String> other = api.get(bob, "/api/intents/" + live.value());
+        HttpResponse<String> missing = api.get(bob, "/api/intents/no-such-intent");
+        assertSameNotFound("another user's intent", other, missing);
+        assertThat(other.body()).doesNotContain("canary-store").doesNotContain("merchant");
     }
 
     // Covers: 23.2, 9.2 (the quote card on the intent is the newest approval's snapshot, field for field; the approval
