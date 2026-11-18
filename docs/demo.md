@@ -102,3 +102,51 @@ purchase; to see two cards, use the CLI (`scripts/ucplab`) or a live model.
 - [ ] **aria-live:** with a screen reader (or the accessibility tree), a status change ("Run done", "Intent completed",
   "Fault set") is announced once, politely.
 - [ ] Dark mode (system setting): text stays readable and the focus ring stays visible.
+
+## 8. Handoff at a real store (H5, the owner only)
+
+This section runs the console against the owner's own Shopify development store instead of the lab merchants. It is a
+live run: the service calls the store over MCP. It is never run in CI, and only against a development store you own.
+
+**Before you start.**
+
+- `scripts/shopify-live.sh` works for you, with the client id and secret in the Keychain and `SHOPIFY_STORE_DOMAIN`,
+  `AGENT_PROFILE_URL` and `BUYER_IP` in your shell ([shopify-live.md](interop/shopify-live.md)).
+- The store has a shipping rate for the product, or sells one that needs no shipping. Without one, the store's checkout
+  stops at delivery: the Stage 3 store had none, so every answer carried
+  `delivery_no_delivery_available_for_merchandise_line`.
+- Test payments are on at the store, through Shopify's test gateway (in the store admin's payment settings).
+- Build the jar: `./mvnw -B -ntp -DskipTests package`. The Compose stack need not run; stop it if it holds port 8080.
+
+**Start.**
+
+```sh
+scripts/shopify-console.sh --dry-run --i-own-this-store --with-buyer-ip   # shows every step; reads no Keychain
+scripts/shopify-console.sh --i-own-this-store --with-buyer-ip
+```
+
+It starts the service with a temporary merchants file that lists the store alone (handoff, owned, buyer IP), listening on
+`127.0.0.1:8080` only. When it prints `console ready`, it stays up until you press Ctrl-C. Nothing is approved on the
+terminal.
+
+- [ ] Open `http://localhost:8080/` and sign in as `alice`.
+- [ ] Send `snowboard` (send the product's name, not `hi`: the scripted model answers `hi` by asking, then searches for
+  a mug).
+- [ ] The run proposes one item, and an approval card opens.
+- [ ] The card shows the store's line: its variant id, quantity 1, the unit price and the total, in the store's
+  currency (699.95 USD in Stage 3).
+- [ ] The card marks a handoff merchant with its note: "Shipping and tax are added by the store; you see the final
+  total before you pay there." An agent merchant's card has no such note.
+- [ ] **Approve.** The timeline goes from APPROVED to HANDED_OFF, with no re-quote when the store's checkout still
+  matches the card.
+- [ ] A **Continue at the store** link appears, under the timeline only. The address is not shown as text anywhere on the
+  page.
+- [ ] The link opens in a new tab. In that tab's developer tools, the request to the store has no `Referer` header, and
+  `window.opener` is `null`.
+- [ ] The store's page shows the approved item at the approved price.
+- [ ] Check out with Shopify's test gateway. The store's final total, with its shipping and tax, is shown there before you
+  pay.
+- [ ] Back in the console, the intent stays HANDED_OFF: the agent does not learn that you paid (H5 reads no order).
+- [ ] **Ctrl-C** in the terminal. Each intent's evidence is saved under `notes/h5/console/evidence/<intent>/`, with the
+  handoff URL cut to its host. Owed cancels are drained for up to 30 s, and any still owed is named. The handed-off
+  checkout is not cancelled: the script says it is left open at the store.

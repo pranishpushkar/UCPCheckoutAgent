@@ -325,5 +325,111 @@ class OwedCancels(unittest.TestCase):
         self.assertNotIn("canarykey999", out)
 
 
+
+class Console(unittest.TestCase):
+    """--console (scripts/shopify-console.sh): the service and its owned store, left running for the owner's browser.
+    The Stage 3 guards stay; approval is the console's card only; on exit every owed cancel is drained, and a handed-off
+    checkout is left open, since the owner may be paying at the store."""
+
+    HANDED = "01a1ea58-0000-7000-8000-0000000000c1"
+    OWED = "01a1ea58-0000-7000-8000-0000000000c2"
+    SESSION = "gid://shopify/Checkout/tok777?key=canarykey777"
+
+    def setUp(self):
+        self.work = tempfile.mkdtemp()
+        self.db = os.path.join(self.work, "ucplab.db")
+        with sqlite3.connect(self.db) as c:
+            c.execute("CREATE TABLE purchase_intent (id TEXT PRIMARY KEY, session_id TEXT, cancel_pending INTEGER, "
+                      "created_at TEXT, requote_count INTEGER)")
+            c.execute("CREATE TABLE intent_event (intent_id TEXT, seq INTEGER, type TEXT, payload_json TEXT, at TEXT)")
+            c.execute("CREATE TABLE merchant_attempt (id TEXT PRIMARY KEY, intent_id TEXT, seq INTEGER, op TEXT, revision "
+                      "INTEGER, idempotency_key TEXT, request_hash TEXT, request_body TEXT, status TEXT, http_status "
+                      "INTEGER, response_json TEXT, sent_at TEXT, responded_at TEXT)")
+            c.execute("INSERT INTO purchase_intent VALUES (?, ?, 0, 't0', 0)", (self.HANDED, self.SESSION))
+            c.execute("INSERT INTO purchase_intent VALUES (?, NULL, 1, 't1', 0)", (self.OWED,))
+
+    def tearDown(self):
+        shutil.rmtree(self.work)
+
+    def test_theScriptedRunsOptions_areRefused(self):
+        for flag in ("--approve", "--cancel-after", "--query", "--record"):
+            with self.assertRaises(SystemExit, msg=flag):
+                live.console_options(["--console", flag])
+        live.console_options(["--console", "--i-own-this-store", "--with-buyer-ip", "--port", "8080"])
+
+    def test_theStage3Guards_stay(self):
+        for missing in ("--i-own-this-store", "--with-buyer-ip"):
+            argv = [a for a in ("--console", "--dry-run", "--i-own-this-store", "--with-buyer-ip") if a != missing]
+            with self.assertRaises(SystemExit) as e:
+                live.main(argv)
+            self.assertIn("refused", str(e.exception))
+
+    def test_theServiceListensOnLoopbackOnly(self):
+        env = live.service_env({"PATH": "/bin"}, self.work, 8080)
+        self.assertEqual(env.get("SERVER_ADDRESS"), "127.0.0.1")
+
+    def test_theDryRun_callsNothing_approvesOnTheCardOnly_andLeavesAHandedOffCheckoutOpen(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = live.main(["--console", "--dry-run", "--i-own-this-store", "--with-buyer-ip"])
+        text = out.getvalue()
+        self.assertEqual(code, 0)
+        self.assertIn("127.0.0.1", text)
+        self.assertIn("sign in as alice", text)
+        self.assertIn("approve on the console's card", text)
+        self.assertIn("Ctrl-C", text)
+        self.assertIn("owed cancels", text)
+        self.assertIn("a HANDED_OFF checkout is not cancelled", text)
+        for never in ("cancel_checkout", "create_checkout", "get_checkout", "POST /api/runs", "Approve this card"):
+            self.assertNotIn(never, text)
+
+    def test_theIntents_areEveryOneTheConsoleMade_inOrder(self):
+        self.assertEqual(live.console_intents(self.db), [self.HANDED, self.OWED])
+
+    def test_onExit_everyOwedCancelIsDrained_theEvidenceKept_andAHandedOffCheckoutLeftOpen(self):
+        evidence = os.path.join(self.work, "evidence")
+        os.makedirs(evidence)
+        drained = []
+
+        class Api:
+            def json(self, method, path, body=None):
+                if path.endswith("/events"):
+                    return {"items": []}
+                intent = path.rsplit("/", 1)[1]
+                state = "HANDED_OFF" if intent == Console.HANDED else "FAILED_NOT_CHARGED"
+                return {"id": intent, "state": state, "handoff_url": "https://shop.example/cart/c/tok777?key=canarykey777"}
+
+        out = io.StringIO()
+        with redirect_stdout(out):
+            live.console_exit(Api(), self.db, evidence, lambda db, intents: drained.append(list(intents)) or [])
+        self.assertEqual(drained, [[self.HANDED, self.OWED]])
+        for intent in (self.HANDED, self.OWED):
+            self.assertTrue(os.path.isfile(os.path.join(evidence, intent, "intent.json")), intent)
+        saved = open(os.path.join(evidence, self.HANDED, "intent.json")).read()
+        self.assertNotIn("canarykey777", saved)
+        self.assertNotIn("/cart/c/", saved)
+        self.assertIn("left open", out.getvalue())
+        self.assertNotIn("canarykey777", out.getvalue())
+
+    def test_serving_endsOnCtrlC_orWhenTheServiceStops(self):
+        class Proc:
+            def __init__(self, code):
+                self.code = code
+
+            def poll(self):
+                return self.code
+
+        def ctrl_c(seconds):
+            raise KeyboardInterrupt()
+        out = io.StringIO()
+        with redirect_stdout(out):
+            live.serve_console(Proc(None), "http://127.0.0.1:8080", ctrl_c)
+            live.serve_console(Proc(1), "http://127.0.0.1:8080", ctrl_c)
+        text = out.getvalue()
+        self.assertIn("http://127.0.0.1:8080", text)
+        self.assertIn("stopping", text)
+        self.assertIn("the service stopped", text)
+
+
 if __name__ == "__main__":
     unittest.main()

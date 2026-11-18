@@ -29,6 +29,12 @@ scripts/shopify-live.sh --i-own-this-store --with-buyer-ip --cancel-after       
   asks.
 - `--query` (default `snowboard`), `--port` (default 8080), `--record DIR` and `--evidence DIR` (defaults under
   `notes/h5/stage3/`, never committed).
+- `--console` (or `scripts/shopify-console.sh`) runs no scripted purchase. It leaves the service up for the browser
+  until Ctrl-C, and you sign in, ask and approve on the console ([demo.md](../demo.md), section 8). The same guards
+  apply, and `--approve`, `--cancel-after`, `--query` and `--record` are refused. On exit it keeps each intent's
+  evidence under `notes/h5/console/evidence/<intent>/` and drains owed cancels. It never cancels a handed-off checkout,
+  since you may be paying at the store.
+- The service listens on `127.0.0.1` only, in both modes: the local dev sign-in must not be reachable from the network.
 
 ## What it does
 

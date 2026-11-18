@@ -93,6 +93,7 @@ def service_env(env, tmp, port):
         "AGENT_PROFILE": "local",
         "AGENT_MODEL": "scripted",
         "SERVER_PORT": str(port),
+        "SERVER_ADDRESS": "127.0.0.1",   # loopback only: the dev sign-in must not be reachable from the network
         "PUBLIC_ORIGIN": "http://localhost:%d" % port,
         "DATABASE_URL": "jdbc:sqlite:" + os.path.join(tmp, "ucplab.db"),
         "MERCHANTS_FILE": os.path.join(tmp, "merchants.yaml"),
@@ -446,11 +447,129 @@ def approve_all(api, intent, db, interactive, auto):
     return body, approvals
 
 
+CONSOLE_REFUSED = ("--approve", "--cancel-after", "--query", "--record")
+
+
+def console_options(argv):
+    """--console runs no scripted purchase: the options of one are refused rather than silently ignored."""
+    for flag in CONSOLE_REFUSED:
+        if flag in argv:
+            raise SystemExit("refused: %s belongs to the scripted run; in --console the owner works in the browser" % flag)
+
+
+def console_intents(db):
+    """Every intent the console made in this session's temporary database, oldest first."""
+    return [i for i, in db_rows(db, "SELECT id FROM purchase_intent ORDER BY created_at, id", ())]
+
+
+def serve_console(proc, base, sleep=time.sleep):
+    """Leaves the service running for the owner's browser until Ctrl-C (or SIGTERM, SIGHUP), or until it stops."""
+    print("console ready: open %s and sign in as %s; approve on the console's card. Ctrl-C stops it." % (base, USER),
+          flush=True)
+    try:
+        while proc.poll() is None:
+            sleep(1)
+        say("the service stopped (exit %s); see service.log" % proc.poll())
+    except KeyboardInterrupt:
+        say("stopping")
+
+
+def console_exit(api, db, evidence, drain=drain_cancels):
+    """On the way out of --console: keeps each intent's evidence (in evidence/<intent>/, redacted, the handoff URL cut
+    to its host) and drains every owed cancel (7.6). It sends nothing itself: a HANDED_OFF checkout is left open, since
+    the owner may be paying at the store. Returns the cancels still owed."""
+    intents = console_intents(db)
+    for intent in intents:
+        folder = os.path.join(evidence, intent)
+        os.makedirs(folder, exist_ok=True)
+        save_intent_evidence(api, db, intent, folder)
+        state = (api.json("GET", "/api/intents/%s" % intent) or {}).get("state")
+        if state == "HANDED_OFF":
+            say("intent %s HANDED_OFF: its checkout is left open at the store" % intent)
+    return drain(db, intents) if intents else []
+
+
+def console_dry_run(domain, port, evidence, jar):
+    say("DRY-RUN --console: merchants.yaml (temporary, deleted on exit):\n" + merchants_yaml(domain))
+    say("DRY-RUN policy.yaml (temporary): " + POLICY_YAML.strip().replace("\n", ", "))
+    shown = {k: ("<redacted>" if k in ("SHOPIFY_CLIENT", "BUYER_IP", "APPROVAL_SECRET") else v)
+             for k, v in service_env(os.environ, "<tmp>", port).items() if k not in ("PATH", "HOME", "LANG", "TMPDIR")}
+    say("DRY-RUN service: java -jar %s, environment %s, log to %s/service.log" % (jar, json.dumps(shown, sort_keys=True),
+                                                                                  evidence))
+    say("DRY-RUN wait for http://localhost:%d/readyz; then leave it running: open it, sign in as %s, ask for a product; "
+        "approve on the console's card (nothing is approved on the terminal); the store is called only by the service"
+        % (port, USER))
+    say("DRY-RUN on Ctrl-C: save each intent's intent.json, events.json and attempts.json (redacted) to %s/<intent>/; "
+        "wait up to %d s for owed cancels to drain, naming any still owed or given up; a HANDED_OFF checkout is not "
+        "cancelled (you may be paying at the store); stop the service; delete the temporary directory"
+        % (evidence, DRAIN_TIMEOUT))
+    return 0
+
+
+def start_service(jar, tmp, domain, evidence, port):
+    """Writes the temporary merchants and policy files and starts the service; returns the process and its log."""
+    with open(os.path.join(tmp, "merchants.yaml"), "w") as f:
+        f.write(merchants_yaml(domain))
+    with open(os.path.join(tmp, "policy.yaml"), "w") as f:
+        f.write(POLICY_YAML)
+    log = open(os.path.join(evidence, "service.log"), "w")
+    proc = subprocess.Popen(["java", "-jar", jar], env=service_env(os.environ, tmp, port), stdout=log,
+                            stderr=subprocess.STDOUT, cwd=tmp)
+    return proc, log
+
+
+def stop_service(proc, log, tmp):
+    if proc and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    if log:
+        log.close()
+    shutil.rmtree(tmp, ignore_errors=True)
+
+
+def console_main(argv, domain, root, port, jar):
+    """--console: the service and the owner's store, for the browser, until Ctrl-C (docs/demo.md)."""
+    console_options(argv)
+    evidence = os.path.abspath(option(argv, "--evidence", os.path.join(root, "notes/h5/console/evidence")))
+    base = "http://localhost:%d" % port
+    if "--dry-run" in argv:
+        return console_dry_run(domain, port, evidence, jar)
+    if not os.path.isfile(jar):
+        raise SystemExit("build first: ./mvnw -B -ntp -DskipTests package")
+    os.makedirs(evidence, exist_ok=True)
+    remember(os.environ["BUYER_IP"])
+    stop_on_signals()
+    tmp = tempfile.mkdtemp(prefix="ucplab-console-")
+    db = os.path.join(tmp, "ucplab.db")
+    proc = log = api = None
+    try:
+        proc, log = start_service(jar, tmp, domain, evidence, port)
+        wait_ready(base, proc)
+        api = Api(base)
+        api.sign_in(USER)          # the script's own session, to read each intent's evidence on the way out
+        serve_console(proc, base)
+        return 0
+    finally:
+        ignore_signals()
+        if proc and proc.poll() is None and api:
+            try:
+                console_exit(api, db, evidence)
+            except Exception as e:      # the service must still be stopped
+                say("WARNING: the evidence or the owed cancels could not be read: %s" % e)
+        stop_service(proc, log, tmp)
+
+
 def main(argv):
     dry = "--dry-run" in argv
     domain = configuration(os.environ, argv, dry)
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     port = int(option(argv, "--port", "8080"))
+    if "--console" in argv:
+        return console_main(argv, domain, root, port,
+                            os.path.join(root, "agent-service/target/agent-service-0.1.0-SNAPSHOT.jar"))
     query = option(argv, "--query", "snowboard")
     record = os.path.abspath(option(argv, "--record", os.path.join(root, "notes/h5/stage3/recordings")))
     evidence = os.path.abspath(option(argv, "--evidence", os.path.join(root, "notes/h5/stage3/evidence")))
@@ -512,13 +631,7 @@ def main(argv):
     intents = []
     db = os.path.join(tmp, "ucplab.db")
     try:
-        with open(os.path.join(tmp, "merchants.yaml"), "w") as f:
-            f.write(merchants_yaml(domain))
-        with open(os.path.join(tmp, "policy.yaml"), "w") as f:
-            f.write(POLICY_YAML)
-        log = open(os.path.join(evidence, "service.log"), "w")
-        proc = subprocess.Popen(["java", "-jar", jar], env=service_env(os.environ, tmp, port), stdout=log,
-                                stderr=subprocess.STDOUT, cwd=tmp)
+        proc, log = start_service(jar, tmp, domain, evidence, port)
         wait_ready(base, proc)
         say("service ready")
         api = Api(base)
@@ -584,15 +697,7 @@ def main(argv):
                 drain_cancels(db, intents)
             except Exception as e:      # the service must still be stopped
                 say("WARNING: the owed cancels could not be read: %s" % e)
-        if proc and proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-        if log:
-            log.close()
-        shutil.rmtree(tmp, ignore_errors=True)
+        stop_service(proc, log, tmp)
 
 
 if __name__ == "__main__":
