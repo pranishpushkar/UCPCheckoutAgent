@@ -76,6 +76,13 @@
                 <artifactId>agent-ucp</artifactId>
                 <version>${project.version}</version>
             </dependency>
+            <!-- H5 C10: the scripted Shopify store and its recorded answers, for the service's configuration tests. -->
+            <dependency>
+                <groupId>dev.ucplab</groupId>
+                <artifactId>agent-ucp</artifactId>
+                <version>${project.version}</version>
+                <type>test-jar</type>
+            </dependency>
             <dependency>
                 <groupId>dev.ucplab</groupId>
                 <artifactId>agent-runtime</artifactId>

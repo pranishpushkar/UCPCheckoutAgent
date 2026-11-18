@@ -95,7 +95,7 @@ class ConsoleStaticTest {
         String card = card(js);
 
         Set<String> allowed = Set.of("snapshot", "lines", "item_id", "quantity", "unit_price_minor", "currency",
-                "total_minor", "expires_at", "token", "merchant_id");
+                "total_minor", "expires_at", "token", "merchant_id", "completion", "note");
         Set<String> read = new LinkedHashSet<>();
         Matcher fields = Pattern.compile("\\b(?:approval|snapshot|line)\\.([A-Za-z_]+)").matcher(card);
         while (fields.find()) {
@@ -161,6 +161,85 @@ class ConsoleStaticTest {
         String card = card(read("console.js"));
 
         assertThat(card).contains("Price and stock are not held").contains("expires_at").contains("Other charges (tax)");
+    }
+
+    // Covers: 23.2, 24.3, H5 C7c (a handoff merchant's card shows the answer's note, our fixed text, as text; only when
+    // the answer's completion is handoff)
+    @Test
+    void approvalCard_showsTheHandoffNote_onlyAtAHandoffMerchant() throws IOException {
+        String card = card(read("console.js"));
+
+        assertThat(card).contains("if (approval.completion === \"handoff\") {")
+                .contains("card.appendChild(el(\"p\", approval.note, \"fixed\"));");
+    }
+
+    /** The code between {@code // <handoff-link>} and {@code // </handoff-link>} in console.js. */
+    private static String handoffLink(String js) {
+        int from = js.indexOf("// <handoff-link>");
+        int to = js.indexOf("// </handoff-link>");
+        assertThat(from).as("the link's start marker").isGreaterThanOrEqualTo(0);
+        assertThat(to).as("the link's end marker").isGreaterThan(from);
+        return js.substring(from, to);
+    }
+
+    private static int count(String text, String part) {
+        int n = 0;
+        for (int i = text.indexOf(part); i >= 0; i = text.indexOf(part, i + 1)) {
+            n++;
+        }
+        return n;
+    }
+
+    // Covers: 24.3, 23.2, I9, H5 (the Continue at the store link: built only in HANDED_OFF, from the handoff_url of the
+    // owner's GET /api/intents/{id}, read once and nowhere else; removed when another intent is watched; a link in a new
+    // tab with rel="noopener noreferrer" and referrerpolicy="no-referrer")
+    @Test
+    void handoffLink_existsOnlyInHandedOff_fromTheIntentsHandoffUrl() throws IOException {
+        String js = read("console.js");
+        String link = handoffLink(js);
+
+        assertThat(count(js, "handoff_url")).as("handoff_url is read once").isEqualTo(1);
+        assertThat(js).contains("    if (state === \"HANDED_OFF\") {\n      showHandoffLink(result.data.handoff_url);\n"
+                + "    } else {\n      clear($(\"handoff\"));\n    }\n");
+        assertThat(count(js, "showHandoffLink(")).as("one definition, one call").isEqualTo(2);
+        int watch = js.indexOf("function watchIntent(id) {");
+        assertThat(js.indexOf("clear($(\"handoff\"));", watch)).as("watching another intent drops the link")
+                .isBetween(watch, js.indexOf("pollIntent();", watch));
+        assertThat(link).contains("const anchor = el(\"a\", \"Continue at the store\");")
+                .contains("anchor.href = url;").contains("anchor.target = \"_blank\";")
+                .contains("anchor.rel = \"noopener noreferrer\";")
+                .contains("anchor.referrerPolicy = \"no-referrer\";");
+    }
+
+    // Covers: 24.3, I8, H5 (the handoff URL is never page text: inside the link's code it is only checked and set as the
+    // href; the code writes no text from it, no status, no console line, no location, history or storage)
+    @Test
+    void handoffLink_neverShowsTheUrlAsText() throws IOException {
+        String link = handoffLink(read("console.js"));
+
+        assertThat(count(link, "url")).as("url: the parameter, the https check and the href only").isEqualTo(4);
+        for (String forbidden : List.of("textContent", "innerText", "setStatus", "console.", "location", "history",
+                "Storage", "title", "aria-", "setAttribute", "alert(", "prompt(")) {
+            assertThat(link).as("the link's code uses " + forbidden).doesNotContain(forbidden);
+        }
+        assertThat(read("console.js")).as("no console line anywhere").doesNotContain("console.");
+    }
+
+    // Covers: 24.3, I8, H5 (the link's holder is outside the aria-live region, which stays an empty container)
+    @Test
+    void handoffLink_isOutsideTheAriaLiveRegion() throws IOException {
+        String html = read("index.html");
+
+        assertThat(html).contains("<div id=\"status\" class=\"status\" role=\"status\" aria-live=\"polite\"></div>")
+                .contains("<p id=\"handoff\"></p>");
+        assertThat(count(html, "aria-live")).as("one live region").isEqualTo(1);
+    }
+
+    // Covers: 7.1, H5 C7c (HANDED_OFF is terminal: the timeline stops polling a handed-off intent)
+    @Test
+    void timeline_stopsAtHandedOff() throws IOException {
+        assertThat(read("console.js"))
+                .contains("const TERMINAL = [\"COMPLETED\", \"HANDED_OFF\", \"REJECTED\", \"FAILED_NOT_CHARGED\", \"ESCALATED\"];");
     }
 
     // Covers: 24.3 (a 401 goes to /auth/login, reauth_required goes to /auth/login?reauth=true&return_to=/intents/{id})

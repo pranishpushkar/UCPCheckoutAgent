@@ -80,6 +80,29 @@ class ApprovalCheckBeforeSendTest {
         assertEscalatedWithNothingSent(id);
     }
 
+    // Covers: 7.2 approval_invalid, I3, I5, 9.2 (an APPROVED approval with no decision time, which ApprovalService
+    // never writes: ESCALATED with nothing sent and no attempt, never a throw)
+    @Test
+    void advance_escalatesWithoutSending_whenTheApprovalHasNoDecisionTime() {
+        CrashingApprovalRepository crashing = new CrashingApprovalRepository(lab.approvals);
+        Lab.Worker dying = lab.worker("worker-x", lab.merchant, crashing);
+        IntentId id = lab.propose(dying, TWO_SHIRTS).intentId();
+        crashing.crashBeforeNext(CrashingApprovalRepository.Op.TRANSITION);
+        try {
+            lab.decide(dying, id, true);
+        } catch (InterceptingGateway.SimulatedCrash expected) {
+            // a crash inside decide: the intent is APPROVED, the approval still PENDING
+        }
+        ApprovalRecord pending = lab.approvals.findLatestForSystem(id).orElseThrow();
+        // A forged decision: PENDING to APPROVED with no decider, so no decision time is kept.
+        lab.approvals.transition(pending.id(), ApprovalStatus.PENDING, ApprovalStatus.APPROVED, lab.clock.instant(),
+                Optional.empty());
+        assertThat(lab.approvals.findLatestForSystem(id).orElseThrow().decidedAt()).isEmpty();
+        lab.clock.advance(lab.config.lease().plusSeconds(1));
+
+        assertEscalatedWithNothingSent(id);
+    }
+
     // Covers: I3 (a valid approval is untouched by the check: PENDING, APPROVED and CONSUMED all send)
     @Test
     void advance_completes_whenApprovalIsApproved() {

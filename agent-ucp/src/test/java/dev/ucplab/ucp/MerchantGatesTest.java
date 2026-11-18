@@ -511,4 +511,44 @@ class MerchantGatesTest {
         assertThatThrownBy(() -> labDefaultAtSample.discover(A)).isInstanceOf(DiscoveryFailedException.class)
                 .hasMessageContaining(UcpHttpGateway.HANDLER_MISSING);
     }
+
+    // Covers: 8.3, 7.6 M3 note (admitsCalls reads the merchant's breaker without changing it: true while closed, false
+    // once five failures open it, for that merchant only; asking does not use the half-open slot, and after the open
+    // period it says true again)
+    @Test
+    void admitsCalls_followsTheMerchantsBreaker_withoutChangingIt() {
+        Transport t = twoMerchants(call -> reply(503, "{}"));
+        UcpHttpGateway a = gateway(ENTRY_A, t);
+        UcpHttpGateway b = gateway(ENTRY_B, t);
+        assertThat(b.admitsCalls()).isTrue();
+
+        for (int i = 0; i < 5; i++) {
+            b.create(request(), KEY);
+        }
+
+        assertThat(b.admitsCalls()).isFalse();
+        assertThat(a.admitsCalls()).isTrue();
+        clock.advance(Duration.ofSeconds(30));
+        assertThat(b.admitsCalls()).isTrue();
+        assertThat(b.admitsCalls()).isTrue();
+        assertThat(gates.forMerchant(B).state()).as("asking used no half-open slot").isEqualTo(CircuitBreaker.State.OPEN);
+    }
+
+    // Covers: 8.3 (admitsCalls is false while a Retry-After blocks the merchant's bucket, and takes no token)
+    @Test
+    void admitsCalls_isFalseWhileARetryAfterBlocks_andTakesNoToken() {
+        Transport t = twoMerchants(call -> reply(429, "{}", Map.of("retry-after", List.of("7"))));
+        UcpHttpGateway b = gateway(ENTRY_B, t);
+        RateLimiter fresh = new RateLimiter(1, 1, clock);
+        for (int i = 0; i < 5; i++) {
+            assertThat(Gates.all(fresh).admitting()).isTrue();
+        }
+        assertThat(fresh.tryAcquire()).as("the one token is still there").isTrue();
+
+        b.create(request(), KEY);
+
+        assertThat(b.admitsCalls()).isFalse();
+        clock.advance(Duration.ofSeconds(7));
+        assertThat(b.admitsCalls()).isTrue();
+    }
 }

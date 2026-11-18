@@ -5,8 +5,10 @@ import dev.ucplab.core.approval.ApprovalStatus;
 import dev.ucplab.core.merchant.MerchantId;
 import java.time.Instant;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
@@ -41,14 +43,16 @@ public final class InMemoryRecoveryScan implements RecoveryScan, InFlightMerchan
     }
 
     @Override
-    public Set<MerchantId> merchantsInFlight() {
-        Set<MerchantId> out = new HashSet<>();
+    public Map<MerchantId, Set<String>> fingerprintsInFlight() {
+        Map<MerchantId, Set<String>> out = new HashMap<>();
         for (IntentState state : IntentState.values()) {
-            if (!state.isTerminal()) {
-                intents.inState(state).forEach(i -> out.add(i.merchantId()));
-            }
+            intents.inState(state).stream()
+                    .filter(i -> !state.isTerminal() || i.cancelPending())
+                    .forEach(i -> out.computeIfAbsent(i.merchantId(), m -> new HashSet<>()).add(i.merchantFingerprint()));
         }
-        return Set.copyOf(out);
+        Map<MerchantId, Set<String>> copy = new HashMap<>();
+        out.forEach((m, f) -> copy.put(m, Set.copyOf(f)));
+        return Map.copyOf(copy);
     }
 
     private record Due(IntentId id, Instant expiresAt) {

@@ -145,12 +145,12 @@ class CatalogParserTest {
         assertThat(page.products().get(0).description()).contains("x");
     }
 
-    // Covers: FR1, 8.4 (a missing description, another shape, or a format other than plain reads as none; the
-    // product still parses)
+    // Covers: FR1, 8.4, 6.4 (a missing description, another shape, a format other than plain or html, or html with
+    // no text, reads as none; the product still parses)
     @Test
     void parseSearch_descriptionMissingOrOtherShape_readsAsNone() {
         String base = product("a", "A", "");
-        for (String replacement : List.of("", "\"description\":\"flat\",", "\"description\":{\"html\":\"<b>x</b>\"},",
+        for (String replacement : List.of("", "\"description\":\"flat\",", "\"description\":{\"markdown\":\"**x**\"},", "\"description\":{\"html\":\"<b></b>\"},",
                 "\"description\":{\"plain\":\"  \"},", "\"description\":{\"plain\":7},", "\"description\":null,")) {
             String body = "{\"products\":[" + base.replace("\"description\":{\"plain\":\"x\"},", replacement) + "]}";
 

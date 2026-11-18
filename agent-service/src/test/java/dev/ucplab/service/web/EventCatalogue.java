@@ -28,13 +28,23 @@ public final class EventCatalogue {
             Map.entry("reconcile_wait", Set.of("reason")),
             Map.entry("fulfillment_selection_needed", Set.of("status")),
             Map.entry("fulfillment_unsupported", Set.of("reason")),
+            // 7.2 create_rejected, update_rejected: the refusal's bounded codes, never its content (I8).
+            Map.entry("quote_refused", Set.of("codes")),
+            // 7.2 quote_unsupported (handoff): the status and the blocking codes, never message content (I8).
+            Map.entry("quote_unsupported", Set.of("status", "codes")),
             Map.entry("escalated", Set.of("attempts")),
+            Map.entry("merchant_changed", Set.of("from")),
+            Map.entry("merchant_not_owned", Set.of("from")),
+            Map.entry("cancel_blocked_i12", Set.of()),
+            Map.entry("complete_unavailable", Set.of("from")),
+            Map.entry("handed_off", Set.of("host")),
+            Map.entry("hand_off_refused", Set.of("host")),
             Map.entry("cancel_sent", Set.of("outcome", "attempt")),
             Map.entry("cancel_gave_up", Set.of("attempts")),
             Map.entry("orphan_session_found", Set.of("probe")),
             Map.entry("orphan_probe_no_session", Set.of("probe")),
             Map.entry("orphan_probe_sent", Set.of("outcome", "probe")),
-            Map.entry("orphan_probe_gave_up", Set.of("probes")),
+            Map.entry("orphan_probe_gave_up", Set.of("probes", "reason")),
             Map.entry("orphan_probe_no_create", Set.of()),
             Map.entry("orphan_probe_body_mismatch", Set.of("attempt_id")));
 
@@ -46,5 +56,5 @@ public final class EventCatalogue {
      * and the approval's amounts are allowed (Stage 3 review, point 4). Redacted by the allowlist's default.
      */
     public static final Set<String> REDACTED = Set.of("rationale", "cause", "snapshot_hash", "attempt_id",
-            "attempts");
+            "attempts", "host");   // host (7.2 hand_off): kept out of the console in H5; showing it is a post-H5 choice
 }

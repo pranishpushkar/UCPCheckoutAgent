@@ -6,7 +6,11 @@ import dev.ucplab.core.config.AgentProfile;
 import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantStatus;
+import dev.ucplab.core.merchant.Transport;
 import dev.ucplab.core.policy.PolicyConfig;
+import dev.ucplab.ucp.UcpHttpGateway;
+import dev.ucplab.ucp.auth.ClientCredentials;
+import dev.ucplab.ucp.registry.BuyerIp;
 import dev.ucplab.ucp.registry.MerchantSettings;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -45,6 +49,25 @@ public final class ServiceProperties {
     static final String SECRET_PLACEHOLDER = "APPROVAL_SECRET is a placeholder, which the prod profile refuses";
     static final String APPROVAL_OFF = "POLICY_FILE turns approval off, which the prod profile refuses";
     static final String MERCHANT_INVALID = "MERCHANT_URL must be an http URL";
+    static final String MERCHANT_NOT_LOOPBACK =
+            "MERCHANT_URL must be on a loopback host (I12); list any other merchant in MERCHANTS_FILE with owned: true";
+    static final String BUYER_IP_REQUIRED = "BUYER_IP must be set for a merchant with requires_buyer_ip";
+    static final String BUYER_IP_NOT_LOCAL = "BUYER_IP is only accepted in the local profile";
+    static final String CREDENTIAL_UNSET = "a merchant's credential_ref names a variable that is not set";
+    /** 26.4: the value is client_id:client_secret; the reason never holds it (I8). */
+    static final String CREDENTIAL_MALFORMED = "a merchant's credential_ref variable is not client_id:client_secret";
+    static final String TOKEN_ENDPOINT_INVALID =
+            "SHOPIFY_TOKEN_ENDPOINT must be an https URL with a host, and no user info or query";
+    static final String AGENT_VERSION_UNSUPPORTED = "UCP_AGENT_VERSION is not a version the agent supports";
+    static final String AGENT_PROFILE_DEFAULT =
+            "UCP_AGENT_PROFILE must be set, and not to its default, for an MCP merchant or one off loopback";
+    static final String AGENT_PROFILE_INVALID = "UCP_AGENT_PROFILE must be an https URL with a host, and no user info";
+    /** The agent profile's URL (26.2, 8.4) unless UCP_AGENT_PROFILE says otherwise. */
+    static final URI DEFAULT_AGENT_PROFILE = URI.create("https://ucplab.dev/agent");
+    /** The version the default agent profile declares (26.2). */
+    static final String DEFAULT_AGENT_VERSION = "2026-08-25";
+    /** The token endpoint the H5 spike used (26.4). */
+    static final URI DEFAULT_TOKEN_ENDPOINT = URI.create("https://api.shopify.com/auth/access_token");
     static final String USERS_INVALID = "LOCAL_USERS must be a comma-separated list of lowercase names";
     static final String LAB_URL_INVALID = "MERCHANT_LAB_URL must be an http URL";
     static final String MODEL_INVALID = "AGENT_MODEL must be scripted or gemini";
@@ -80,12 +103,17 @@ public final class ServiceProperties {
     private final Optional<ModelKey> modelKey;
     private final Optional<URI> modelBaseUrl;
     private final URI merchantLabUrl;
+    private final Optional<BuyerIp> buyerIp;
+    private final URI shopifyTokenEndpoint;
+    private final URI ucpAgentProfile;
+    private final String ucpAgentVersion;
 
     private ServiceProperties(AgentProfile profile, Path databaseFile, byte[] approvalSecret, ApprovalSecret approvalKey,
                               PolicyConfig policy, MerchantEntry merchant, List<MerchantSettings> merchants,
                               List<String> localUsers,
                               List<String> publicOrigins, AgentModel agentModel, Optional<ModelKey> modelKey,
-                              Optional<URI> modelBaseUrl, URI merchantLabUrl) {
+                              Optional<URI> modelBaseUrl, URI merchantLabUrl, Optional<BuyerIp> buyerIp,
+                              URI shopifyTokenEndpoint, URI ucpAgentProfile, String ucpAgentVersion) {
         this.profile = profile;
         this.databaseFile = databaseFile;
         this.approvalSecret = approvalSecret;
@@ -98,7 +126,11 @@ public final class ServiceProperties {
         this.agentModel = agentModel;
         this.modelKey = modelKey;
         this.modelBaseUrl = modelBaseUrl;
+        this.buyerIp = buyerIp;
         this.merchantLabUrl = merchantLabUrl;
+        this.shopifyTokenEndpoint = shopifyTokenEndpoint;
+        this.ucpAgentProfile = ucpAgentProfile;
+        this.ucpAgentVersion = ucpAgentVersion;
     }
 
     /** Reads and checks every setting; throws {@link IllegalStateException} with a fixed message on the first refusal. */
@@ -189,11 +221,106 @@ public final class ServiceProperties {
         URI fallbackLab = labUrl;
         List<MerchantSettings> merchants = env.get("MERCHANTS_FILE").map(f -> MerchantsFile.load(Path.of(f), profile))
                 .orElseGet(() -> List.of(MerchantSettings.single(fallback, fallbackLab)));
+        if (env.get("MERCHANTS_FILE").isEmpty() && !MerchantEntry.isLoopback(merchantUrl)) {
+            // The fallback merchant cannot say owned: true, so off loopback it would be unowned (I12).
+            throw new IllegalStateException(MERCHANT_NOT_LOOPBACK);
+        }
+        Optional<BuyerIp> buyerIp = buyerIp(env, profile, merchants);
+        for (MerchantSettings m : merchants) {
+            if (m.credentialRef().isPresent()) {
+                Optional<String> value = env.get(m.credentialRef().get().substring("env:".length()));
+                if (value.isEmpty()) {
+                    throw new IllegalStateException(CREDENTIAL_UNSET);
+                }
+                try {
+                    ClientCredentials.parse(value.get());
+                } catch (IllegalArgumentException e) {
+                    throw new IllegalStateException(CREDENTIAL_MALFORMED);   // ClientCredentials' reason, never the value
+                }
+            }
+        }
+        URI tokenEndpoint = tokenEndpoint(env);
+        URI agentProfile = agentProfile(env);
+        // 19, 26.2: the default's host is not ours, so it serves the loopback lab merchants only.
+        boolean realStore = merchants.stream()
+                .anyMatch(m -> m.transport() == Transport.MCP || !MerchantEntry.isLoopback(m.url()));
+        if (realStore && agentProfile.equals(DEFAULT_AGENT_PROFILE)) {
+            throw new IllegalStateException(AGENT_PROFILE_DEFAULT);
+        }
+        String agentVersion = env.get("UCP_AGENT_VERSION").orElse(DEFAULT_AGENT_VERSION);
+        if (!UcpHttpGateway.SUPPORTED_VERSIONS.contains(agentVersion)) {
+            throw new IllegalStateException(AGENT_VERSION_UNSUPPORTED);
+        }
         MerchantSettings first = merchants.getFirst();
 
         return new ServiceProperties(profile, databaseFile, secretBytes, approvalKey, policy, first.entry(first.fileStatus()), merchants, localUsers,
                 origins(env.get("PUBLIC_ORIGIN").orElse(DEFAULT_ORIGINS)), agentModel,
-                agentModel == AgentModel.GEMINI ? modelKey : Optional.empty(), modelBaseUrl, first.labUrl().orElse(fallbackLab));
+                agentModel == AgentModel.GEMINI ? modelKey : Optional.empty(), modelBaseUrl, first.labUrl().orElse(fallbackLab), buyerIp, tokenEndpoint,
+                agentProfile, agentVersion);
+    }
+
+    /**
+     * UCP_AGENT_PROFILE (26.2, 8.4): the agent profile's URL, sent in {@code UCP-Agent} and in each MCP call's meta. An
+     * https URL with a host and no user info; the refusal is a fixed message without the value.
+     */
+    private static URI agentProfile(Environment env) {
+        Optional<String> raw = env.get("UCP_AGENT_PROFILE");
+        if (raw.isEmpty()) {
+            return DEFAULT_AGENT_PROFILE;
+        }
+        URI uri;
+        try {
+            uri = new URI(raw.get());
+        } catch (URISyntaxException e) {
+            throw new IllegalStateException(AGENT_PROFILE_INVALID);   // the exception's message holds the input
+        }
+        if (!"https".equalsIgnoreCase(uri.getScheme()) || uri.getHost() == null || uri.getRawUserInfo() != null) {
+            throw new IllegalStateException(AGENT_PROFILE_INVALID);
+        }
+        return uri;
+    }
+
+    /**
+     * SHOPIFY_TOKEN_ENDPOINT (26.4): the spike's endpoint by default; otherwise an https URL with a host and no user
+     * info or query. The refusal is a fixed message without the value.
+     */
+    private static URI tokenEndpoint(Environment env) {
+        Optional<String> raw = env.get("SHOPIFY_TOKEN_ENDPOINT");
+        if (raw.isEmpty()) {
+            return DEFAULT_TOKEN_ENDPOINT;
+        }
+        URI uri;
+        try {
+            uri = new URI(raw.get());
+        } catch (URISyntaxException e) {
+            throw new IllegalStateException(TOKEN_ENDPOINT_INVALID);   // the exception's message holds the input
+        }
+        if (!"https".equalsIgnoreCase(uri.getScheme()) || uri.getHost() == null || uri.getRawUserInfo() != null
+                || uri.getRawQuery() != null) {
+            throw new IllegalStateException(TOKEN_ENDPOINT_INVALID);
+        }
+        return uri;
+    }
+
+    /**
+     * BUYER_IP (8.4, 19): from the environment only, in the local profile only, a public IP literal ({@link BuyerIp});
+     * required when a merchant has requires_buyer_ip. Every refusal is a fixed message without the value (I8).
+     */
+    private static Optional<BuyerIp> buyerIp(Environment env, AgentProfile profile, List<MerchantSettings> merchants) {
+        Optional<String> raw = env.get("BUYER_IP");
+        if (raw.isPresent() && profile != AgentProfile.LOCAL) {
+            throw new IllegalStateException(BUYER_IP_NOT_LOCAL);
+        }
+        Optional<BuyerIp> ip;
+        try {
+            ip = raw.map(BuyerIp::parse);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalStateException(e.getMessage()); // one of BuyerIp's fixed reasons
+        }
+        if (ip.isEmpty() && merchants.stream().anyMatch(MerchantSettings::requiresBuyerIp)) {
+            throw new IllegalStateException(BUYER_IP_REQUIRED);
+        }
+        return ip;
     }
 
     /** A test points the live client at a loopback stub; any other host could receive the key, so it is refused. */
@@ -254,6 +381,26 @@ public final class ServiceProperties {
     }
 
     /** Every configured merchant, in file order (DESIGN 19); one, from {@code MERCHANT_URL}, without a file. */
+    /** The token endpoint of the MCP merchants' client credentials (26.4). Log its host only. */
+    public URI shopifyTokenEndpoint() {
+        return shopifyTokenEndpoint;
+    }
+
+    /** The agent's {@code UCP-Agent} value (26.2, 8.4): {@code profile="<UCP_AGENT_PROFILE>"}. */
+    public String ucpAgent() {
+        return "profile=\"" + ucpAgentProfile + "\"";
+    }
+
+    /** UCP_AGENT_VERSION: the version the agent profile declares, the one every MCP merchant is spoken in (26.2). */
+    public String ucpAgentVersion() {
+        return ucpAgentVersion;
+    }
+
+    /** The operator's BUYER_IP, when set (local profile only, 8.4). Its toString is masked (I8). */
+    public Optional<BuyerIp> buyerIp() {
+        return buyerIp;
+    }
+
     public List<MerchantSettings> merchants() {
         return merchants;
     }

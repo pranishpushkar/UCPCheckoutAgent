@@ -3,6 +3,7 @@ package dev.ucplab.runtime;
 import dev.ucplab.core.agent.ToolSpec;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentNotFoundException;
+import dev.ucplab.core.intent.IntentState;
 import dev.ucplab.core.intent.IntentStatus;
 import dev.ucplab.core.json.CanonicalJson;
 import java.util.LinkedHashMap;
@@ -18,6 +19,8 @@ import java.util.Set;
 final class GetPurchaseStatusTool implements Tool {
 
     static final String NAME = "get_purchase_status";
+    /** 6.2: the note of a HANDED_OFF intent, a fixed text of ours (never merchant text, never the continue_url, I6). */
+    static final String HANDED_OFF_NOTE = "handed to the store for payment";
     private static final ToolSpec SPEC = new ToolSpec(NAME,
             "Returns the state of a purchase intent, and its order id once completed.",
             CanonicalJson.write(Map.of(
@@ -57,6 +60,9 @@ final class GetPurchaseStatusTool implements Tool {
         result.put("state", status.state().name());
         status.orderId().ifPresent(o -> result.put("order_id", ToolText.merchantId("order_id", o)));
         status.failureReason().ifPresent(r -> result.put("failure_reason", ToolText.failureReason(r)));
+        if (status.state() == IntentState.HANDED_OFF) {
+            result.put("note", HANDED_OFF_NOTE);
+        }
         return ToolOutcome.ok(result);
     }
 }

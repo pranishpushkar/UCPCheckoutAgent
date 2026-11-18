@@ -54,6 +54,17 @@ final class Invariants {
 
     private Invariants() {}
 
+    // ---------------------------------------------------------------- I12
+
+    /**
+     * I12 (H5 C2): no create, update, complete or cancel reached a merchant whose entry, when the call arrived, was not
+     * owned or was not the entry the intent was proposed under. Seen where the call reaches the merchant
+     * ({@link OwnStoreCheckGateway}), so it does not depend on the orchestrator's list of sends.
+     */
+    static List<String> i12(Observations o) {
+        return o.ownStore().violations();
+    }
+
     // ---------------------------------------------------------------- I1
 
     /** I1: the merchant holds at most one order per intent. */
@@ -250,7 +261,7 @@ final class Invariants {
         return switch (state) {
             case PROPOSED, QUOTING, APPROVED, AWAITING_APPROVAL -> Optional.of(state.name());
             case COMPLETING, RECONCILING -> Optional.of("COMPLETING/RECONCILING");
-            case COMPLETED, REJECTED, FAILED_NOT_CHARGED, ESCALATED -> Optional.empty();
+            case COMPLETED, HANDED_OFF, REJECTED, FAILED_NOT_CHARGED, ESCALATED -> Optional.empty();
         };
     }
 
@@ -260,11 +271,26 @@ final class Invariants {
             case PROPOSED -> s.at().plus(WORKER_PASS);
             case QUOTING -> s.at().plus(WORKER_PASS).plus(REQUEST_TIMEOUT.multipliedBy(GATEWAY_RETRIES + 1L))
                     .plus(worstBackoff(GATEWAY_RETRIES));
-            case APPROVED -> s.at().plus(WORKER_PASS).plus(c.completeRequestTimeout());
+            case APPROVED -> o.attemptOps().containsKey(s.intent())
+                    // 7.6: at a handoff merchant, 5 minutes from the approval in all, then one pass and one GET.
+                    ? lastDecision(s, o).plus(DefaultOrchestrator.HANDOFF_DEADLINE).plus(WORKER_PASS)
+                            .plus(REQUEST_TIMEOUT.multipliedBy(GATEWAY_RETRIES + 1L)).plus(worstBackoff(GATEWAY_RETRIES))
+                    : s.at().plus(WORKER_PASS).plus(c.completeRequestTimeout());
             case AWAITING_APPROVAL -> s.approvalExpiresAt().orElse(s.at().plus(DefaultApprovalService.DEFAULT_TTL));
             case COMPLETING, RECONCILING -> s.at().plus(c.reconcileDeadline());
-            case COMPLETED, REJECTED, FAILED_NOT_CHARGED, ESCALATED -> Instant.MAX;
+            case COMPLETED, HANDED_OFF, REJECTED, FAILED_NOT_CHARGED, ESCALATED -> Instant.MAX;
         };
+    }
+
+    /** The time of the user's last accepted approval of the sample's intent, at or before the sample. */
+    private static Instant lastDecision(Observations.Sample s, Observations o) {
+        Instant last = s.at();
+        for (Observations.Decision d : o.decisions()) {
+            if (d.intent().equals(s.intent()) && d.approve() && !d.at().isAfter(s.at())) {
+                last = d.at();
+            }
+        }
+        return last;
     }
 
     private static Instant extendForCrashes(Instant bound, Instant start, List<Instant> crashes, Duration lease) {
@@ -286,6 +312,28 @@ final class Invariants {
             delay = delay.multipliedBy(2);
         }
         return total;
+    }
+
+    // ---------------------------------------------------------------- handoff (7.2)
+
+    /**
+     * 7.2 Handoff merchants (H5 C7a): for an intent proposed at a handoff entry ({@code attemptOps}' keys), no complete
+     * reaches the merchant on its session and no complete attempt row is written, whatever the faults, crashes, flips
+     * and decisions. An intent proposed after a flip to an agent entry completes as usual.
+     */
+    static List<String> handoffNeverCompletes(Observations o) {
+        List<String> v = new ArrayList<>();
+        Set<SessionId> sessions = new HashSet<>();
+        o.samples().stream().filter(s -> o.attemptOps().containsKey(s.intent()))
+                .forEach(s -> s.session().ifPresent(sessions::add));
+        o.calls().stream().filter(c -> c.call() == MerchantCall.COMPLETE && c.session().filter(sessions::contains).isPresent())
+                .forEach(c -> v.add("handoff: complete #" + c.seq() + " reached the merchant"));
+        o.attemptOps().forEach((id, ops) -> {
+            if (ops.contains(dev.ucplab.core.intent.AttemptOp.COMPLETE)) {
+                v.add("handoff: intent " + id.value() + " has a complete attempt row: " + ops);
+            }
+        });
+        return v;
     }
 
     // ---------------------------------------------------------------- I7

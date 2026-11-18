@@ -4,10 +4,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import dev.ucplab.core.merchant.Buyer;
 import dev.ucplab.core.merchant.CheckoutView;
+import dev.ucplab.core.merchant.ContinueUrl;
 import dev.ucplab.core.merchant.FulfillmentView;
 import dev.ucplab.core.merchant.LineView;
 import dev.ucplab.core.merchant.MerchantMessage;
 import dev.ucplab.core.merchant.OrderRef;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
@@ -318,5 +320,16 @@ class CheckoutParserMutationTest {
         assertThat(CheckoutParser.parseError(new byte[] {(byte) 0xC3, 0x28})).isEqualTo(new CheckoutParser.ErrorBody("unknown", ""));
         assertThat(error("{\"code\":\"" + "A".repeat(100) + "\",\"content\":\"" + "y".repeat(600) + "\"}"))
                 .isEqualTo(new CheckoutParser.ErrorBody("a".repeat(64), "y".repeat(500)));
+    }
+
+    // Covers: Appendix B, H5 C6 (continue_url is read only as a string: any other JSON value reads as none, as a string
+    // that is not a URI does). Kills CheckoutParser.continueUrl:160 RemoveConditional (the `instanceof String` test)
+    @Test
+    void aContinueUrl_thatIsNotAString_readsAsNone() {
+        assertThat(view(checkout("\"continue_url\":\"https://shop.example/c/1\"")).continueUrl())
+                .contains(new ContinueUrl(URI.create("https://shop.example/c/1")));
+        assertThat(view(checkout("\"continue_url\":5")).continueUrl()).isEmpty();
+        assertThat(view(checkout("\"continue_url\":{\"url\":\"https://shop.example/c/1\"}")).continueUrl()).isEmpty();
+        assertThat(view(checkout("")).continueUrl()).isEmpty();
     }
 }

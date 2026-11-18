@@ -25,6 +25,7 @@ import dev.ucplab.core.intent.StepResult;
 import dev.ucplab.core.merchant.CallOutcome;
 import dev.ucplab.core.merchant.CheckoutStatus;
 import dev.ucplab.core.merchant.CheckoutView;
+import dev.ucplab.core.merchant.MerchantMessage;
 import dev.ucplab.core.merchant.FrozenBody;
 import dev.ucplab.core.merchant.FulfillmentView;
 import dev.ucplab.core.merchant.IdempotencyKey;
@@ -615,7 +616,7 @@ class OrchestratorQuoteMutationTest {
     }
 
     // Covers: 9.2, 7.2. Kills DefaultOrchestrator.lambda$unsupportedFulfillment$16:539 RemoveConditional_ORDER_IF, onQuoteOutcome:603
-    // area: a merchant that lists more than one group is not supported (the snapshot names one): the quote ends exhausted and
+    // area: a merchant that lists more than one group is not supported (the snapshot names one): the quote ends fulfillment_unsupported and
     // an event says why
     @Test
     void moreThanOneGroup_isUnsupported_andSaidSo() {
@@ -628,7 +629,7 @@ class OrchestratorQuoteMutationTest {
         }
 
         assertThat(lab.intent(id).state()).isEqualTo(IntentState.FAILED_NOT_CHARGED);
-        assertThat(lab.intent(id).failureReason()).contains("quote_retries_exhausted");
+        assertThat(lab.intent(id).failureReason()).contains("fulfillment_unsupported");
         assertThat(events(id, "fulfillment_unsupported")).singleElement()
                 .satisfies(e -> assertThat(e).contains("more than one method or group"));
     }
@@ -658,6 +659,29 @@ class OrchestratorQuoteMutationTest {
         assertThat(attempts(id, AttemptOp.UPDATE)).singleElement().satisfies(a -> assertThat(a.status()).isEqualTo(AttemptStatus.SENT));
     }
 
+    // Covers: I4, I8, H5 C1 (the refusal of an update answered for another session names that session masked: a
+    // checkout id's ?key= never reaches an exception message)
+    @Test
+    void anUpdateAnsweredForAnotherKeyedSession_isRefusedWithTheKeyMasked() {
+        String canary = "CANARY-key-81b4f0";
+        lab.merchant.addRule(FaultRule.nth(MerchantCall.COMPLETE, 1, new Fault.PriceChange("item_123", 2600)));
+        RewritingGateway wrong = new RewritingGateway(lab.merchant).rewrite(MerchantCall.UPDATE, outcome -> {
+            CallOutcome.Ok<CheckoutView> ok = (CallOutcome.Ok<CheckoutView>) outcome;
+            CheckoutView v = ok.value();
+            CheckoutView other = new CheckoutView(new dev.ucplab.core.merchant.SessionId("cs_other?key=" + canary),
+                    v.status(), v.currency(), v.lines(), v.subtotalMinor(), v.taxMinor(), v.totalMinor(), v.order(),
+                    v.buyer(), v.messages());
+            return new CallOutcome.Ok<>(ok.httpStatus(), other, v.messages());
+        });
+        w = lab.worker("worker-a", wrong);
+        IntentId id = lab.propose(w, TWO_SHIRTS).intentId();
+        lab.decide(w, id, true);
+        w.orchestrator().advance(id);
+
+        assertThatThrownBy(() -> w.orchestrator().advance(id)).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("cs_other?[redacted]").message().doesNotContain(canary);
+    }
+
     // Covers: 7.2, 8.1. Kills DefaultOrchestrator.onQuoteOutcome:609 and :613 RemoveConditional_EQUAL_ELSE and finish:744
     // transitionEvent: a create answered with an out_of_stock or item_unavailable error ends FAILED_NOT_CHARGED with that
     // reason and its own transition event
@@ -678,10 +702,10 @@ class OrchestratorQuoteMutationTest {
     }
 
     // Covers: 8.1, 7.2. Kills DefaultOrchestrator.onQuoteOutcome:638 and :643 and rejectedReason:1353 / :1354 (NO_COVERAGE): a
-    // Rejected create ends the intent with the code the merchant gave (or create_rejected); a Rejected answer to an update
-    // cannot settle anything, so it ends as exhausted
+    // Rejected create ends the intent with the code the merchant gave (or create_rejected); a Rejected update ends
+    // update_rejected, whatever its code (7.2 update_rejected, H5 Stage 3)
     @Test
-    void aRejectedAnswer_endsACreateWithItsCode_andAnUpdateAsExhausted() {
+    void aRejectedAnswer_endsACreateWithItsCode_andAnUpdateAsUpdateRejected() {
         for (String code : List.of("out_of_stock", "item_unavailable", "something_else")) {
             lab = new Lab();
             w = lab.worker("worker-a", new RewritingGateway(lab.merchant).rewrite(MerchantCall.CREATE,
@@ -704,7 +728,26 @@ class OrchestratorQuoteMutationTest {
         w.orchestrator().advance(id);
         w.orchestrator().advance(id);
         assertThat(lab.intent(id).state()).isEqualTo(IntentState.FAILED_NOT_CHARGED);
-        assertThat(lab.intent(id).failureReason()).contains("quote_retries_exhausted");
+        assertThat(lab.intent(id).failureReason()).contains("update_rejected");
+    }
+
+    // Covers: 7.2 create_rejected, update_rejected, I8 (the quote_refused event names a refusal's codes only: lower-cased,
+    // bare codes of at most 64 characters, at most 10; anything else a merchant put there is dropped). Kills
+    // DefaultOrchestrator.refusalCodes (the filter)
+    @Test
+    void theRefusalsCodes_areBareCodesOnly_atMostTen() {
+        List<MerchantMessage> messages = new java.util.ArrayList<>(List.of(error("Buyer_Email_Is_Invalid"),
+                error("has a space"), error("x".repeat(65)), error("ok_" + "y".repeat(61)), error("")));
+        for (int i = 0; i < 12; i++) {
+            messages.add(error("code_" + i));
+        }
+
+        List<String> codes = DefaultOrchestrator.refusalCodes(messages);
+
+        assertThat(codes).hasSize(10);
+        assertThat(codes.subList(0, 2)).containsExactly("buyer_email_is_invalid", "ok_" + "y".repeat(61));
+        assertThat(codes.subList(2, 10)).containsExactly("code_0", "code_1", "code_2", "code_3", "code_4", "code_5",
+                "code_6", "code_7");
     }
 
     // Covers: 8.1, 8.2, 7.2. Kills DefaultOrchestrator.onQuoteOutcome:645, :650, :656 (NO_COVERAGE) and isRetryable:1358: a

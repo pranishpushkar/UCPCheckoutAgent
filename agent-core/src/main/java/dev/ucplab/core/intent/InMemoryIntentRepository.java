@@ -84,6 +84,7 @@ public final class InMemoryIntentRepository implements IntentRepository {
             if (intents.containsKey(intent.id())) {
                 throw new DuplicateIntentException("intent id already exists: " + intent.id());
             }
+            requireHandoffUrlOnlyWhenHandedOff(intent);
             boolean activeConflict = !intent.state().isTerminal() && intents.values().stream()
                     .anyMatch(i -> i.dedupeKey().equals(intent.dedupeKey()) && !i.state().isTerminal());
             if (activeConflict) {
@@ -391,6 +392,17 @@ public final class InMemoryIntentRepository implements IntentRepository {
         }
     }
 
+    /**
+     * 7.2, 10: a handoff_url is stored only with the state HANDED_OFF, as V9's CHECK holds it in SQL. Checked before
+     * any write, so a refusal leaves nothing.
+     */
+    private static void requireHandoffUrlOnlyWhenHandedOff(PurchaseIntent intent) {
+        if (intent.handoffUrl().isPresent() && intent.state() != IntentState.HANDED_OFF) {
+            throw new IllegalArgumentException("7.2: intent " + intent.id() + " has a handoff_url in state "
+                    + intent.state());
+        }
+    }
+
     /** Caller holds the lock. Refuses a session change once a complete attempt exists (I4). */
     private PurchaseIntent merge(PurchaseIntent stored, PurchaseIntent update, long newVersion) {
         return merge(stored, update, newVersion, Optional.empty());
@@ -399,6 +411,7 @@ public final class InMemoryIntentRepository implements IntentRepository {
     /** As above, and {@code recording}, an attempt written in the same call, counts as one that exists (I4). */
     private PurchaseIntent merge(PurchaseIntent stored, PurchaseIntent update, long newVersion,
                                  Optional<MerchantAttempt> recording) {
+        requireHandoffUrlOnlyWhenHandedOff(update);
         if (stored.sessionId().isPresent() && !stored.sessionId().equals(update.sessionId())
                 && (recording.filter(a -> a.op() == AttemptOp.COMPLETE).isPresent()
                 || attempts.values().stream()
@@ -407,9 +420,9 @@ public final class InMemoryIntentRepository implements IntentRepository {
                     + " cannot change after a complete attempt");
         }
         return new PurchaseIntent(
-                stored.id(), stored.owner(), stored.merchantId(), stored.dedupeKey(), stored.lines(),
+                stored.id(), stored.owner(), stored.merchantId(), stored.merchantFingerprint(), stored.dedupeKey(), stored.lines(),
                 stored.buyerEmail(), update.state(), newVersion, update.sessionId(), update.approvedSnapshotHash(),
-                update.requoteCount(), update.orderId(), update.failureReason(), update.uncertainSince(),
+                update.requoteCount(), update.orderId(), update.handoffUrl(), update.failureReason(), update.uncertainSince(),
                 update.cancelPending(), stored.leaseOwner(), stored.leaseUntil(), stored.createdAt(), update.updatedAt());
     }
 }

@@ -28,7 +28,7 @@ final class GetProductTool implements Tool {
             "Returns one item with its description, price in minor units and stock.",
             CanonicalJson.write(Map.of(
                     "type", "object",
-                    "properties", Map.of("item_id", Map.of("type", "string", "pattern", "^[A-Za-z0-9_-]{1,100}$",
+                    "properties", Map.of("item_id", Map.of("type", "string", "pattern", Args.ITEM_ID_SCHEMA,
                             "description", "The item_id from search_catalog.")),
                     "required", List.of("item_id"),
                     "additionalProperties", false)));
@@ -49,7 +49,7 @@ final class GetProductTool implements Tool {
         String itemId;
         try {
             Args.only(arguments, Set.of("item_id"));
-            itemId = Args.id(arguments, "item_id");
+            itemId = Args.itemId(arguments, "item_id");
         } catch (Args.Invalid e) {
             return ToolOutcome.invalid(e.getMessage());
         }
@@ -77,7 +77,7 @@ final class GetProductTool implements Tool {
             return exact;
         }
         CatalogVariant featured = product.variants().getFirst();
-        return product.id().equals(itemId) && Args.ID.matcher(featured.itemId()).matches()
+        return product.id().equals(itemId) && Args.ITEM_ID.matcher(featured.itemId()).matches()
                 ? Optional.of(featured) : Optional.empty();
     }
 

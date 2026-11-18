@@ -19,6 +19,7 @@ dev.ucplab.core.merchant.FulfillmentPolicy
 dev.ucplab.core.merchant.IdempotencyKey
 dev.ucplab.core.merchant.FrozenBody
 dev.ucplab.core.merchant.MerchantInstruments
+dev.ucplab.core.merchant.MerchantEntry
 dev.ucplab.core.json.CanonicalJson
 dev.ucplab.core.json.LenientJson
 dev.ucplab.core.intent.TransitionTable
@@ -30,6 +31,7 @@ dev.ucplab.core.recovery.RecoveryLoop
 dev.ucplab.core.recovery.RecoveryConfig
 dev.ucplab.core.orchestrator.DefaultOrchestrator
 dev.ucplab.core.orchestrator.OrchestratorConfig
+dev.ucplab.core.orchestrator.OwnStoreGuard
 # agent-ucp
 dev.ucplab.ucp.FailureClassifier
 dev.ucplab.ucp.UcpHttpGateway
@@ -39,6 +41,11 @@ dev.ucplab.ucp.CheckoutParser
 dev.ucplab.ucp.ProfileParser
 dev.ucplab.ucp.CircuitBreaker
 dev.ucplab.ucp.RateLimiter
+# H5 C6: the MCP gateway's send path (8.4, 8.5, 26.4, I8, I12)
+dev.ucplab.ucp.McpMerchantGateway
+dev.ucplab.ucp.mcp.McpTransport
+dev.ucplab.ucp.mcp.McpEnvelope
+dev.ucplab.ucp.mcp.StoreHeaders
 # agent-persistence
 dev.ucplab.persistence.SqlIntentRepository
 dev.ucplab.persistence.SqlApprovalRepository

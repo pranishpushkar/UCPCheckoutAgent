@@ -55,10 +55,45 @@ public final class TransitionTable {
             row(QUOTING, TransitionEvent.OBSERVED_COMPLETE_IN_PROGRESS, TransitionGuard.NONE, RECONCILING, SideEffect.NONE),
             // A create with every item unavailable has no session: nothing to cancel.
             row(QUOTING, TransitionEvent.CREATE_REJECTED, TransitionGuard.NONE, FAILED_NOT_CHARGED, SideEffect.NONE),
+            // A readable answer the agent cannot use (quote_unsupported at a handoff merchant, fulfillment_unsupported):
+            // the merchant answered, so nothing is retried; its session is cancelled.
+            row(QUOTING, TransitionEvent.QUOTE_UNSUPPORTED, TransitionGuard.NONE, FAILED_NOT_CHARGED, SideEffect.CANCEL_SESSION_BEST_EFFORT),
+            // A refused update: the session exists, so its cancel is owed (8.1, error envelope).
+            row(QUOTING, TransitionEvent.UPDATE_REJECTED, TransitionGuard.NONE, FAILED_NOT_CHARGED, SideEffect.CANCEL_SESSION_BEST_EFFORT),
             // A ProtocolError on complete does not settle the outcome: reconcile, never FAILED_NOT_CHARGED.
             row(COMPLETING, TransitionEvent.PROTOCOL_ERROR, TransitionGuard.NONE, RECONCILING, SideEffect.NONE),
             // The approval behind an APPROVED intent is not usable (I3): nothing is sent, a human must look.
-            row(APPROVED, TransitionEvent.APPROVAL_INVALID, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT));
+            row(APPROVED, TransitionEvent.APPROVAL_INVALID, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
+            // I12: the entry fails I12 at a step that would send, or changed under the intent. Any non-terminal state;
+            // nothing is sent and no attempt written.
+            row(PROPOSED, TransitionEvent.MERCHANT_NOT_OWNED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
+            row(QUOTING, TransitionEvent.MERCHANT_NOT_OWNED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
+            row(AWAITING_APPROVAL, TransitionEvent.MERCHANT_NOT_OWNED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
+            row(APPROVED, TransitionEvent.MERCHANT_NOT_OWNED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
+            row(COMPLETING, TransitionEvent.MERCHANT_NOT_OWNED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
+            row(RECONCILING, TransitionEvent.MERCHANT_NOT_OWNED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
+            row(PROPOSED, TransitionEvent.MERCHANT_CHANGED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
+            row(QUOTING, TransitionEvent.MERCHANT_CHANGED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
+            row(AWAITING_APPROVAL, TransitionEvent.MERCHANT_CHANGED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
+            row(APPROVED, TransitionEvent.MERCHANT_CHANGED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
+            row(COMPLETING, TransitionEvent.MERCHANT_CHANGED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
+            row(RECONCILING, TransitionEvent.MERCHANT_CHANGED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
+            // The merchant's transport offers no complete (8.4, N1): nothing was sent, so not charged; checked before
+            // the write-ahead, so no complete attempt is written and nothing reconciles.
+            row(APPROVED, TransitionEvent.COMPLETE_UNAVAILABLE, TransitionGuard.NONE, FAILED_NOT_CHARGED, SideEffect.CANCEL_SESSION),
+            // Handoff merchants (7.2, 19): QUOTE_READY serves quote_ready (handoff) under its own condition; APPROVED
+            // leads only to these rows, never to SEND_COMPLETE.
+            row(QUOTING, TransitionEvent.REQUIRES_ESCALATION, TransitionGuard.QUOTE_POLICY_ALLOWS, AWAITING_APPROVAL, SideEffect.CREATE_APPROVAL),
+            row(APPROVED, TransitionEvent.HAND_OFF, TransitionGuard.NONE, IntentState.HANDED_OFF, SideEffect.STORE_HANDOFF_URL),
+            row(APPROVED, TransitionEvent.HAND_OFF_CHANGED, TransitionGuard.REQUOTE_BELOW_CAP, QUOTING, SideEffect.REQUOTE_ON_SAME_SESSION),
+            row(APPROVED, TransitionEvent.HAND_OFF_CHANGED, TransitionGuard.REQUOTE_CAP_REACHED, IntentState.REJECTED, SideEffect.REJECT_PRICE_UNSTABLE),
+            row(APPROVED, TransitionEvent.HAND_OFF_GONE, TransitionGuard.NONE, FAILED_NOT_CHARGED, SideEffect.NONE),
+            // The hand_off read was not sent or is uncertain: try again on the next pass (7.6 deadline applies).
+            row(APPROVED, TransitionEvent.NOT_SENT, TransitionGuard.NONE, APPROVED, SideEffect.NONE),
+            row(APPROVED, TransitionEvent.UNCERTAIN, TransitionGuard.NONE, APPROVED, SideEffect.NONE),
+            row(APPROVED, TransitionEvent.HAND_OFF_REFUSED, TransitionGuard.NONE, FAILED_NOT_CHARGED, SideEffect.CANCEL_SESSION),
+            row(APPROVED, TransitionEvent.HAND_OFF_UNEXPECTED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
+            row(APPROVED, TransitionEvent.HANDOFF_TIMEOUT, TransitionGuard.NONE, IntentState.REJECTED, SideEffect.CANCEL_SESSION));
 
     private TransitionTable() {
     }

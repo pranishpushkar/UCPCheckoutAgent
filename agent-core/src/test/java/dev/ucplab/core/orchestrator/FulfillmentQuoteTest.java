@@ -156,7 +156,7 @@ class FulfillmentQuoteTest {
     }
 
     // Covers: 7.2, 9.2 (a merchant that answers with more than one group is not approved on a snapshot naming part of it:
-    // the quote ends exhausted with the event fulfillment_unsupported, and nothing is approved)
+    // the quote ends fulfillment_unsupported, with that event, and nothing is approved)
     @Test
     void anAnswerWithTwoGroups_endsQuotingAsUnsupported() {
         lab.merchant.enableFulfillment();
@@ -167,9 +167,28 @@ class FulfillmentQuoteTest {
         settleQuote(w, id);
 
         assertThat(lab.intent(id).state()).isEqualTo(IntentState.FAILED_NOT_CHARGED);
-        assertThat(lab.intent(id).failureReason()).contains("quote_retries_exhausted");
+        assertThat(lab.intent(id).failureReason()).contains("fulfillment_unsupported");
         assertThat(lab.events(id)).anySatisfy(e -> assertThat(e.toString()).contains("fulfillment_unsupported"));
         assertThat(lab.approvals.findLatestForSystem(id)).isEmpty();
+    }
+
+    // Covers: 7.2 (shipping selection: an answer with more than one method or group ends FAILED_NOT_CHARGED with its own
+    // reason, fulfillment_unsupported, not as exhausted), 9.2, 7.6 (the session is cancelled)
+    @Test
+    void twoGroups_endFulfillmentUnsupported_andCancel() {
+        lab.merchant.enableFulfillment();
+        lab.merchant.setGroupCount(2);
+        Lab.Worker w = lab.worker("worker-a");
+        IntentId id = lab.propose(w, TWO_SHIRTS).intentId();
+
+        settleQuote(w, id);
+
+        assertThat(lab.intent(id).state()).isEqualTo(IntentState.FAILED_NOT_CHARGED);
+        assertThat(lab.intent(id).failureReason()).contains("fulfillment_unsupported");
+        assertThat(lab.intent(id).cancelPending()).isTrue();
+        assertThat(lab.drive(w, id)).isEqualTo(IntentState.FAILED_NOT_CHARGED);
+        assertThat(lab.merchant.session(lab.intent(id).sessionId().orElseThrow()).orElseThrow().status())
+                .isEqualTo(dev.ucplab.core.merchant.CheckoutStatus.CANCELED);
     }
 
     private java.util.List<dev.ucplab.core.intent.MerchantAttempt> ops(IntentId id, AttemptOp op) {
@@ -367,7 +386,7 @@ class FulfillmentQuoteTest {
         settleQuote(w, id);
 
         assertThat(lab.intent(id).state()).isEqualTo(IntentState.FAILED_NOT_CHARGED);
-        assertThat(lab.intent(id).failureReason()).contains("quote_retries_exhausted");
+        assertThat(lab.intent(id).failureReason()).contains("fulfillment_unsupported");
         assertThat(lab.events(id)).anySatisfy(e -> assertThat(e.toString()).contains("fulfillment_unsupported"));
         assertThat(lab.approvals.findLatestForSystem(id)).isEmpty();
     }

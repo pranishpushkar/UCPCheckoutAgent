@@ -85,6 +85,9 @@ final class IntentController {
         body.put("state", intent.state().name());
         intent.failureReason().ifPresent(r -> body.put("failure_reason", r));
         intent.orderId().ifPresent(o -> body.put("order_id", o));
+        // 23.2, I9: only here, the owner's own read (owned() is owner-scoped). Present only in HANDED_OFF: both
+        // repositories refuse it in any other state (V9's CHECK in SQL).
+        intent.handoffUrl().ifPresent(u -> body.put("handoff_url", u.value().toString()));
         latest.ifPresent(a -> {
             body.put("quote", QuoteCard.of(a.snapshot()));
             Map<String, Object> approval = new LinkedHashMap<>();

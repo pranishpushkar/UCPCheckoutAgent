@@ -158,11 +158,12 @@ Format, one block per mutant. **An entry without an `approved:` line is only a p
 - the test that shows it: `OrchestratorQuoteMutationTest.aProposal_isRecorded_withItsLinesItsRationaleAndItsDecision` (a rationale of 300 and one of 301) passes with and without the mutation
 - approved: owner 2026-11-15
 
-### 26. dev.ucplab.core.orchestrator.DefaultOrchestrator.propose RemoveConditionalMutator_EQUAL_ELSE (the `!decision.allowed()` early return)
+### 26. dev.ucplab.core.orchestrator.DefaultOrchestrator.propose RemoveConditionalMutator_EQUAL_ELSE (the `!allowed` early return: a policy or I12 denial)
 - description: removed conditional - replaced equality check with false (a denied proposal goes on to a step)
-- why it is equivalent: the intent is already REJECTED with no owed cancel; the step that follows only claims it again (this worker holds the lease) and reports idle, and the result is the same REJECTED proposal with no quote. No merchant call is made either way
-- the test that shows it: `OrchestratorQuoteMutationTest.aDeniedProposal_isRejectedWithNoQuoteAndNoCall_andAnAllowedOneCarriesItsQuote` passes with and without the mutation
+- why it is equivalent: the intent is already REJECTED with no owed cancel; the step that follows only claims it again (this worker holds the lease) and reports idle, and the result is the same REJECTED proposal with no quote. No merchant call is made either way. An I12 denial at propose is the same: no cancel is owed, so `cancelIfOwed` returns idle before its I12 check
+- the test that shows it: `OrchestratorQuoteMutationTest.aDeniedProposal_isRejectedWithNoQuoteAndNoCall_andAnAllowedOneCarriesItsQuote` passes with and without the mutation; `OrchestratorOwnStoreTest.propose_atAnUnownedEntry_isDeniedWithI12_beforeThePolicyEngine` likewise
 - approved: owner 2026-11-15
+- wording extended for the I12 denial: owner 2026-11-16
 
 ### 27. dev.ucplab.core.orchestrator.DefaultOrchestrator.propose RemoveConditionalMutator_EQUAL_IF (the `last.after() == AWAITING_APPROVAL` choice of quote)
 - description: removed conditional - replaced equality check with true (the step's quote is always returned)
@@ -493,3 +494,23 @@ Format, one block per mutant. **An entry without an `approved:` line is only a p
 - why it is equivalent: justified: driver behaviour (sqlite-jdbc answers null before `next()`). For an intent with no row the mutant reads `getString(1)` before any `next()`, so the result is the same empty Optional. Checked by hand (the test below is green with the mutation)
 - the test that shows it: `IntentRepositoryContract.resolveAttemptWithIntent_forAnUnknownIntent_isNotFound` passes with and without the mutation
 - approved: owner 2026-11-15
+
+## From H5 C6 (agent-ucp: the MCP gateway)
+
+### 87. dev.ucplab.ucp.McpMerchantGateway.send RemoveConditionalMutator_ORDER_IF (the `e.httpStatus() >= 400` operand of the cache clear after a create's refusal)
+- description: removed conditional - replaced comparison check with true
+- why it is equivalent: as 53 over REST: a ProtocolError of a create with a status below 400 does not exist. `FailureClassifier` gives a create a ProtocolError only for 400, 401, 403, 404, 409, 422, a 402 envelope, 429 and 503; an unlisted status (`McpTransport.UNLISTED`, 202, included) is Uncertain for a create, and only a get makes an unexpected status a ProtocolError
+- the test that shows it: `McpMerchantGatewayMutationTest.onlyA4xxOtherThan429OfACreate_makesTheNextCreateReadTheProfileAgain` passes with and without the mutation
+- approved: owner 2026-11-16
+
+### 88. dev.ucplab.ucp.McpMerchantGateway.send ConditionalsBoundaryMutator (`e.httpStatus() < 500` becomes `<= 500`)
+- description: changed conditional boundary
+- why it is equivalent: as 52 over REST: a ProtocolError with status 500 does not exist for a create; the classifier answers a 500 (and the -32603 McpTransport maps to 500) as Uncertain
+- the test that shows it: the same test (its 503 case kills the `< 500` operand itself)
+- approved: owner 2026-11-16
+
+### 89. dev.ucplab.core.orchestrator.DefaultOrchestrator.handedOff RemoveConditionalMutator_EQUAL_IF (`approval.status() != CONSUMED`)
+- description: removed conditional - replaced equality check with true (the approval is moved to CONSUMED even when it already is)
+- why it is equivalent: as 43 for send_complete, whose order 7.2 hand_off mirrors: `approvals.transition(APPROVED, CONSUMED)` is a compare-and-set on the expected status, so for an approval that is already CONSUMED it changes nothing and returns false
+- the test that shows it: `HandoffTest.handOff_storesTheUrl_consumesTheApproval_andNeverCompletes` and `aPendingApprovalUnderAnApprovedIntent_isRecovered_thenConsumed_atHandOff` pass with and without the mutation
+- approved: owner 2026-11-16

@@ -99,7 +99,7 @@ public final class I5Liveness implements InvariantCheck {
         return switch (s) {
             case PROPOSED, QUOTING, APPROVED, AWAITING_APPROVAL -> Optional.of(s.name());
             case COMPLETING, RECONCILING -> Optional.of("COMPLETING/RECONCILING");
-            case COMPLETED, REJECTED, FAILED_NOT_CHARGED, ESCALATED -> Optional.empty();
+            case COMPLETED, HANDED_OFF, REJECTED, FAILED_NOT_CHARGED, ESCALATED -> Optional.empty();
         };
     }
 

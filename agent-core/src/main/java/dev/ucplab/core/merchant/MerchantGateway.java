@@ -21,4 +21,12 @@ public interface MerchantGateway {
     CallOutcome<CheckoutView> cancel(SessionId id, IdempotencyKey key);
 
     CallOutcome<CheckoutView> get(SessionId id);
+
+    /**
+     * False while this merchant's circuit breaker is open or its rate limiter is blocked by a Retry-After (8.3). A hint
+     * read without sending, taking a token or using the half-open slot; a call it allowed can still come back NotSent.
+     */
+    default boolean admitsCalls() {
+        return true;
+    }
 }

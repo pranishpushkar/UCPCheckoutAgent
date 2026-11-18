@@ -16,9 +16,9 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * Reads a {@code /.well-known/ucp} profile (2.1): {@code ucp.version}, the REST endpoint at
- * {@code ucp.services["dev.ucp.shopping"][transport=rest].endpoint}, the keys of {@code ucp.capabilities} and the ids
- * in {@code ucp.payment_handlers}. Unknown fields are ignored (8.4).
+ * Reads a {@code /.well-known/ucp} profile (2.1): {@code ucp.version}, the endpoint of a transport at
+ * {@code ucp.services["dev.ucp.shopping"][transport=rest|mcp].endpoint} (8.5), the keys of {@code ucp.capabilities}, the ids
+ * in {@code ucp.payment_handlers} and the keys of {@code ucp.supported_versions} (26.2). Unknown fields are ignored (8.4).
  */
 final class ProfileParser {
 
@@ -32,7 +32,13 @@ final class ProfileParser {
      *     missing or has the wrong type
      */
     static MerchantProfile parse(MerchantId merchant, byte[] body) {
+        return parse(merchant, body, "rest");
+    }
+
+    /** As {@link #parse(MerchantId, byte[])}, with the endpoint of the given {@code transport} ({@code rest} or {@code mcp}). */
+    static MerchantProfile parse(MerchantId merchant, byte[] body, String transport) {
         Objects.requireNonNull(merchant, "merchant");
+        Objects.requireNonNull(transport, "transport");
         Map<String, Object> root;
         try {
             String text = StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
@@ -47,13 +53,14 @@ final class ProfileParser {
         if (!(ucp.get("version") instanceof String version) || version.isBlank()) {
             throw new IllegalArgumentException("ucp.version missing");
         }
-        return new MerchantProfile(merchant, version, endpoint(ucp), capabilities(ucp), handlers(ucp));
+        return new MerchantProfile(merchant, version, endpoint(ucp, transport), capabilities(ucp), handlers(ucp),
+                supportedVersions(ucp));
     }
 
-    private static URI endpoint(Map<?, ?> ucp) {
+    private static URI endpoint(Map<?, ?> ucp, String transport) {
         if (ucp.get("services") instanceof Map<?, ?> services && services.get(SHOPPING_SERVICE) instanceof List<?> list) {
             for (Object o : list) {
-                if (o instanceof Map<?, ?> svc && "rest".equals(svc.get("transport"))
+                if (o instanceof Map<?, ?> svc && transport.equals(svc.get("transport"))
                         && svc.get("endpoint") instanceof String endpoint && !endpoint.isBlank()) {
                     try {
                         URI uri = new URI(endpoint.endsWith("/") ? endpoint.substring(0, endpoint.length() - 1) : endpoint);
@@ -67,13 +74,27 @@ final class ProfileParser {
                 }
             }
         }
-        throw new IllegalArgumentException("rest endpoint missing");
+        throw new IllegalArgumentException(transport + " endpoint missing");
     }
 
     private static Set<String> capabilities(Map<?, ?> ucp) {
         Set<String> out = new LinkedHashSet<>();
         if (ucp.get("capabilities") instanceof Map<?, ?> caps) {
             caps.keySet().forEach(k -> out.add(String.valueOf(k)));
+        }
+        return out;
+    }
+
+    /** The keys of {@code ucp.supported_versions} (26.2): each a version the merchant also speaks, at its own URL. */
+    private static Set<String> supportedVersions(Map<?, ?> ucp) {
+        Set<String> out = new LinkedHashSet<>();
+        if (ucp.get("supported_versions") instanceof Map<?, ?> versions) {
+            for (Object k : versions.keySet()) {
+                String v = String.valueOf(k);
+                if (!v.isBlank()) {
+                    out.add(v);
+                }
+            }
         }
         return out;
     }

@@ -85,10 +85,11 @@ class ToolArgumentsTest {
                 .as("a whole number written with a fraction part").isEqualTo("ok");
     }
 
-    // Covers: 6.2 (get_product: item_id is 1 to 100 of letters, digits, '_' and '-')
+    // Covers: 6.2, H5 C1 (get_product: item_id is 1 to 100 of letters, digits, '_' and '-', or a Shopify GID)
     @Test
     void getProduct_invalidArguments_areRefusedWithFixedWording() {
-        String detail = "item_id must be 1 to 100 of letters, digits, '_' and '-'";
+        String detail = "item_id must be 1 to 100 of letters, digits, '_' and '-', "
+                + "or gid://shopify/<Type>/<digits>";
         for (Object bad : new Object[] {null, "", "x".repeat(101), "item 456", "item/456", "</untrusted>", 456,
                 CANARY + "!"}) {
             assertInvalid(run("get_product", args("item_id", bad)), detail);
@@ -104,7 +105,8 @@ class ToolArgumentsTest {
         List<Object> one = List.of(line("item_456", 1));
         String items = "items must be a list of 1 to 5 entries";
         String quantity = "quantity must be a whole number from 1 to 5";
-        String itemId = "item_id must be 1 to 100 of letters, digits, '_' and '-'";
+        String itemId = "item_id must be 1 to 100 of letters, digits, '_' and '-', "
+                + "or gid://shopify/<Type>/<digits>";
         Map<Map<String, Object>, String> table = new LinkedHashMap<>();
         table.put(args("items", one, "rationale", "r"), "merchant_id must be 1 to 100 of letters, digits, '_' and '-'");
         table.put(args("merchant_id", "shop 1", "items", one, "rationale", "r"),

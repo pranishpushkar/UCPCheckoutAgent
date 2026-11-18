@@ -1,0 +1,253 @@
+package dev.ucplab.service.config;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import dev.ucplab.ucp.registry.BuyerIp;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+/**
+ * What the environment must hold for the registry's real-merchant settings (19 "Real merchants (H5)", 26.4, 8.4, I8,
+ * I12; H5 C9): the MERCHANT_URL fallback stays on loopback, BUYER_IP comes from the environment only and is a public
+ * literal, and every credential_ref names a set variable.
+ */
+class ServicePropertiesH5Test {
+
+    private static final String IP = "81.2.69.160";
+    private static final String CANARY = "canary-client-secret-4b1e";
+
+    @TempDir
+    Path dir;
+
+    private Map<String, String> env(String profile) {
+        Map<String, String> env = new HashMap<>();
+        env.put("AGENT_PROFILE", profile);
+        env.put("APPROVAL_SECRET", "s3cr3t-value-0123456789abcdefghijklmnop");
+        env.put("DATABASE_URL", "jdbc:sqlite:" + dir.resolve("x.db"));
+        return env;
+    }
+
+    /** An agent profile the operator hosts (19, 26.2). */
+    static final String OUR_PROFILE = "https://agent.example/.well-known/ucp/agent.json";
+
+    private Map<String, String> withStore(String profile, boolean buyerIp) throws IOException {
+        Path file = Files.writeString(dir.resolve("merchants.yaml"), """
+                merchants:
+                  - id: dev-store
+                    name: Dev store
+                    url: https://example-dev.myshopify.com
+                    transport: mcp
+                    completion: handoff
+                    owned: true
+                    shop_domain: example-dev.myshopify.com
+                    credential_ref: env:SHOPIFY_CLIENT
+                """ + (buyerIp ? "    requires_buyer_ip: true\n" : ""));
+        Map<String, String> env = env(profile);
+        env.put("MERCHANTS_FILE", file.toString());
+        env.put("SHOPIFY_CLIENT", "client-1:" + CANARY);   // 26.4: client_id:client_secret
+        env.put("UCP_AGENT_PROFILE", OUR_PROFILE);   // 19: the default never reaches a real store
+        return env;
+    }
+
+    // Covers: I12, 19 (without MERCHANTS_FILE the MERCHANT_URL merchant cannot say owned, so it must be on loopback;
+    // with a file, MERCHANT_URL is not read for the registry)
+    @Test
+    void merchantUrlFallback_offLoopback_refusesStartup() throws IOException {
+        for (String url : java.util.List.of("https://shop.example", "http://127.0.0.1.evil.example:9101",
+                "http://localhost.evil.example", "http://2130706433:9101")) {
+            Map<String, String> env = env("local");
+            env.put("MERCHANT_URL", url);
+            assertThatThrownBy(() -> ServiceProperties.from(Environment.of(env))).as(url)
+                    .hasMessage(ServiceProperties.MERCHANT_NOT_LOOPBACK);
+        }
+        Map<String, String> env = withStore("local", false);
+        env.put("MERCHANT_URL", "https://shop.example");
+        assertThat(ServiceProperties.from(Environment.of(env)).merchants()).hasSize(1);
+    }
+
+    // Covers: 8.4, 19, I8 (requires_buyer_ip needs BUYER_IP; BUYER_IP is a public literal, accepted in local only; every
+    // refusal is fixed and never holds the value)
+    @Test
+    void buyerIp_rules() throws IOException {
+        Map<String, String[]> table = new LinkedHashMap<>();
+        table.put("required but unset", new String[] {"local", "true", null, ServiceProperties.BUYER_IP_REQUIRED});
+        table.put("a name", new String[] {"local", "true", "shop.example", BuyerIp.INVALID});
+        table.put("private", new String[] {"local", "true", "192.168.1.7", BuyerIp.NOT_PUBLIC});
+        table.put("TEST-NET", new String[] {"local", "true", "203.0.113.5", BuyerIp.NOT_PUBLIC});
+        table.put("loopback", new String[] {"local", "true", "127.0.0.1", BuyerIp.NOT_PUBLIC});
+        // demo is refused earlier (AGENT_PROFILE=demo is not available in M6); MerchantsFileH5Test covers it for the file.
+        // demo is refused earlier (AGENT_PROFILE=demo is not available in M6); MerchantsFileH5Test covers it for the file.
+        table.put("set in prod", new String[] {"prod", "false", IP, ServiceProperties.BUYER_IP_NOT_LOCAL});
+        for (Map.Entry<String, String[]> row : table.entrySet()) {
+            String[] r = row.getValue();
+            Map<String, String> env = withStore(r[0], Boolean.parseBoolean(r[1]));
+            if (r[2] != null) {
+                env.put("BUYER_IP", r[2]);
+            }
+            assertThatThrownBy(() -> ServiceProperties.from(Environment.of(env))).as(row.getKey())
+                    .isInstanceOf(IllegalStateException.class).hasMessage(r[3]).message().doesNotContain(IP)
+                    .doesNotContain("192.168.1.7").doesNotContain(CANARY);
+        }
+
+        Map<String, String> env = withStore("local", true);
+        env.put("BUYER_IP", IP);
+        ServiceProperties p = ServiceProperties.from(Environment.of(env));
+        assertThat(p.buyerIp()).hasValueSatisfying(ip -> assertThat(ip.value()).isEqualTo(IP));
+        assertThat(p.toString()).doesNotContain(IP).doesNotContain(CANARY);
+        assertThat(String.valueOf(p.buyerIp())).doesNotContain(IP);
+    }
+
+    // Covers: 8.4, 19 (BUYER_IP is optional when no merchant requires it, and is still checked when set)
+    @Test
+    void buyerIp_withoutAMerchantThatNeedsIt() throws IOException {
+        assertThat(ServiceProperties.from(Environment.of(withStore("local", false))).buyerIp()).isEmpty();
+        Map<String, String> env = withStore("local", false);
+        env.put("BUYER_IP", "10.0.0.1");
+        assertThatThrownBy(() -> ServiceProperties.from(Environment.of(env))).hasMessage(BuyerIp.NOT_PUBLIC);
+    }
+
+    // Covers: 26.4, 19, I8 (a credential_ref naming an unset variable refuses startup; the message names neither the
+    // variable's value nor the file)
+    @Test
+    void credentialRef_namingAnUnsetVariable_refusesStartup() throws IOException {
+        Map<String, String> env = withStore("local", false);
+        env.remove("SHOPIFY_CLIENT");
+        assertThatThrownBy(() -> ServiceProperties.from(Environment.of(env)))
+                .hasMessage(ServiceProperties.CREDENTIAL_UNSET);
+
+        Map<String, String> blank = withStore("local", false);
+        blank.put("SHOPIFY_CLIENT", " ");
+        assertThatThrownBy(() -> ServiceProperties.from(Environment.of(blank)))
+                .hasMessage(ServiceProperties.CREDENTIAL_UNSET);
+    }
+
+    // Covers: 26.4, 19, I8 (a credential_ref value that does not split into client_id:client_secret refuses startup
+    // with a fixed reason that holds no part of it)
+    @Test
+    void credentialRef_valueThatDoesNotSplit_refusesStartup() throws IOException {
+        for (String value : java.util.List.of(CANARY, ":" + CANARY, CANARY + ":", "  :" + CANARY)) {
+            Map<String, String> env = withStore("local", false);
+            env.put("SHOPIFY_CLIENT", value);
+            assertThatThrownBy(() -> ServiceProperties.from(Environment.of(env))).as(value)
+                    .hasMessage(ServiceProperties.CREDENTIAL_MALFORMED).message().doesNotContain(CANARY);
+        }
+    }
+
+    // Covers: 26.4, 19 (SHOPIFY_TOKEN_ENDPOINT: the spike's endpoint by default; another https URL is taken)
+    @Test
+    void tokenEndpoint_defaultsToTheSpikes_andTakesAnHttpsUrl() throws IOException {
+        assertThat(ServiceProperties.from(Environment.of(withStore("local", false))).shopifyTokenEndpoint())
+                .isEqualTo(java.net.URI.create("https://api.shopify.com/auth/access_token"));
+        Map<String, String> env = withStore("local", false);
+        env.put("SHOPIFY_TOKEN_ENDPOINT", "https://auth.example/token");
+        assertThat(ServiceProperties.from(Environment.of(env)).shopifyTokenEndpoint())
+                .isEqualTo(java.net.URI.create("https://auth.example/token"));
+    }
+
+    // Covers: 26.4, 19, I8 (a token endpoint that is not https, has no host, or carries user info or a query refuses
+    // startup with a fixed reason that never echoes the value)
+    @Test
+    void tokenEndpoint_refusals() throws IOException {
+        for (String value : java.util.List.of("http://auth.example/token-" + CANARY,
+                "https://user:" + CANARY + "@auth.example/token", "https://auth.example/token?key=" + CANARY,
+                "https:///token-" + CANARY, "https://auth example/" + CANARY, "file:/tmp/" + CANARY)) {
+            Map<String, String> env = withStore("local", false);
+            env.put("SHOPIFY_TOKEN_ENDPOINT", value);
+            assertThatThrownBy(() -> ServiceProperties.from(Environment.of(env))).as(value)
+                    .hasMessage(ServiceProperties.TOKEN_ENDPOINT_INVALID).message().doesNotContain(CANARY);
+        }
+    }
+
+    // Covers: 26.2, 8.4, H5 C10 (the agent profile and its version are settings: by default, for the loopback lab, the
+    // default profile at 2026-08-25; set, Shopify's 2026-04-08 sample at 2026-04-08)
+    @Test
+    void agentProfileAndVersion_defaultForTheLab_andCanBeSet() throws IOException {
+        ServiceProperties defaults = ServiceProperties.from(Environment.of(env("local")));
+        assertThat(defaults.ucpAgent()).isEqualTo("profile=\"https://ucplab.dev/agent\"");
+        assertThat(defaults.ucpAgentVersion()).isEqualTo("2026-08-25");
+
+        Map<String, String> env = withStore("local", false);
+        env.put("UCP_AGENT_PROFILE", "https://shopify.dev/ucp/agent-profiles/2026-04-08/valid-with-capabilities.json");
+        env.put("UCP_AGENT_VERSION", "2026-04-08");
+        ServiceProperties set = ServiceProperties.from(Environment.of(env));
+        assertThat(set.ucpAgent())
+                .isEqualTo("profile=\"https://shopify.dev/ucp/agent-profiles/2026-04-08/valid-with-capabilities.json\"");
+        assertThat(set.ucpAgentVersion()).isEqualTo("2026-04-08");
+    }
+
+    // Covers: 26.2, 19, I8 (startup refuses an agent version outside the agent's set, and an agent profile that is not
+    // https with a host or has user info; neither reason holds the value)
+    @Test
+    void agentProfileAndVersion_refusals() throws IOException {
+        for (String version : java.util.List.of("2026-01-23", "2026-04-08x", CANARY)) {
+            Map<String, String> env = withStore("local", false);
+            env.put("UCP_AGENT_VERSION", version);
+            assertThatThrownBy(() -> ServiceProperties.from(Environment.of(env))).as(version)
+                    .hasMessage(ServiceProperties.AGENT_VERSION_UNSUPPORTED).message().doesNotContain(CANARY);
+        }
+        for (String value : java.util.List.of("http://agent.example/" + CANARY, "https://user:" + CANARY + "@agent.example/p",
+                "https:///p-" + CANARY, "https://agent example/" + CANARY, "file:/tmp/" + CANARY)) {
+            Map<String, String> env = withStore("local", false);
+            env.put("UCP_AGENT_PROFILE", value);
+            assertThatThrownBy(() -> ServiceProperties.from(Environment.of(env))).as(value)
+                    .hasMessage(ServiceProperties.AGENT_PROFILE_INVALID).message().doesNotContain(CANARY);
+        }
+        Map<String, String> query = withStore("local", false);
+        query.put("UCP_AGENT_PROFILE", "https://agent.example/profile.json?v=2026-04-08");
+        assertThat(ServiceProperties.from(Environment.of(query)).ucpAgent()).contains("?v=2026-04-08");
+    }
+
+    // Covers: 19, 26.2, I12 (the default agent profile is not ours: startup refuses an MCP merchant, or a merchant off
+    // loopback, while UCP_AGENT_PROFILE is unset or set to the default; the reason is fixed)
+    @Test
+    void theDefaultAgentProfile_neverReachesARealStore() throws IOException {
+        Map<String, String> unset = withStore("local", false);
+        unset.remove("UCP_AGENT_PROFILE");
+        assertThatThrownBy(() -> ServiceProperties.from(Environment.of(unset)))
+                .hasMessage(ServiceProperties.AGENT_PROFILE_DEFAULT);
+
+        Map<String, String> asDefault = withStore("local", false);
+        asDefault.put("UCP_AGENT_PROFILE", "https://ucplab.dev/agent");
+        assertThatThrownBy(() -> ServiceProperties.from(Environment.of(asDefault)))
+                .hasMessage(ServiceProperties.AGENT_PROFILE_DEFAULT);
+
+        Map<String, String> restOffLoopback = env("local");
+        restOffLoopback.put("MERCHANTS_FILE", Files.writeString(dir.resolve("rest.yaml"), """
+                merchants:
+                  - id: shop
+                    name: Shop
+                    url: https://shop.example
+                    owned: true
+                """).toString());
+        assertThatThrownBy(() -> ServiceProperties.from(Environment.of(restOffLoopback)))
+                .hasMessage(ServiceProperties.AGENT_PROFILE_DEFAULT);
+        Map<String, String> mcpOnLoopback = env("local");
+        mcpOnLoopback.put("MERCHANTS_FILE", Files.writeString(dir.resolve("mcp-loopback.yaml"), """
+                merchants:
+                  - id: store
+                    name: Store
+                    url: http://127.0.0.1:8182
+                    transport: mcp
+                    completion: handoff
+                    shop_domain: example-dev.myshopify.com
+                    credential_ref: env:SHOPIFY_CLIENT
+                """).toString());
+        mcpOnLoopback.put("SHOPIFY_CLIENT", "client-1:secret-1");
+        assertThatThrownBy(() -> ServiceProperties.from(Environment.of(mcpOnLoopback)))
+                .hasMessage(ServiceProperties.AGENT_PROFILE_DEFAULT);
+    }
+
+    // Covers: 19, 26.2 (the default agent profile stays for the loopback lab merchants)
+    @Test
+    void theDefaultAgentProfile_servesTheLoopbackLab() {
+        ServiceProperties lab = ServiceProperties.from(Environment.of(env("local")));
+        assertThat(lab.ucpAgent()).isEqualTo("profile=\"https://ucplab.dev/agent\"");
+    }
+}

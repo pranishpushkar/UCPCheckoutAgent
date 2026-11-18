@@ -32,7 +32,9 @@ import java.util.function.Consumer;
 public final class Cli {
 
     static final String DEFAULT_BASE_URL = "http://localhost:8080";
-    private static final Set<String> TERMINAL = Set.of("COMPLETED", "REJECTED", "FAILED_NOT_CHARGED", "ESCALATED");
+    /** The terminal states of 7.1. */
+    private static final Set<String> TERMINAL =
+            Set.of("COMPLETED", "HANDED_OFF", "REJECTED", "FAILED_NOT_CHARGED", "ESCALATED");
     private static final Duration DEFAULT_WAIT = Duration.ofSeconds(60);
     private static final Duration POLL = Duration.ofMillis(300);
     private static final String USAGE = String.join("\n",

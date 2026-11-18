@@ -697,7 +697,7 @@ public final class FaultyMerchantModel implements MerchantGateway {
     }
 
     private static CallOutcome<CheckoutView> notFound(SessionId id) {
-        return new CallOutcome.ProtocolError<>(404, "not_found", "no checkout " + id.value(), Optional.empty());
+        return new CallOutcome.ProtocolError<>(404, "not_found", "no checkout " + id, Optional.empty());
     }
 
     private CheckoutView view(Session s, List<MerchantMessage> messages) {

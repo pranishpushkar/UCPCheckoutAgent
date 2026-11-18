@@ -6,7 +6,11 @@ import dev.ucplab.core.crypto.HmacSha256;
 import dev.ucplab.core.id.IdGenerator;
 import dev.ucplab.core.id.UuidV7IdGenerator;
 import dev.ucplab.core.intent.IntentCursorCodec;
+import dev.ucplab.core.merchant.FulfillmentPolicy;
+import dev.ucplab.core.merchant.MerchantEntry;
+import dev.ucplab.core.merchant.MerchantGateway;
 import dev.ucplab.core.merchant.MerchantGateways;
+import dev.ucplab.core.merchant.Completion;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantInstruments;
 import dev.ucplab.core.merchant.PaymentInstrument;
@@ -33,7 +37,6 @@ import dev.ucplab.ucp.CircuitBreakers;
 import dev.ucplab.ucp.JdkHttpTransport;
 import dev.ucplab.ucp.Sleeper;
 import dev.ucplab.ucp.UcpConfig;
-import dev.ucplab.ucp.UcpHttpGateway;
 import dev.ucplab.ucp.registry.ConfiguredMerchantRegistry;
 import dev.ucplab.ucp.registry.MerchantSettings;
 import java.io.IOException;
@@ -44,9 +47,11 @@ import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.time.Clock;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -70,8 +75,6 @@ import org.springframework.context.annotation.Configuration;
 @Configuration(proxyBeanMethods = false)
 public class StackConfiguration {
 
-    /** Sent as {@code UCP-Agent} on every merchant call (8.4). */
-    static final String UCP_AGENT = "profile=\"https://ucplab.dev/agent\"";
     /** The label of the cursor key, derived from the approval secret (m6-plan Stage 2 review, point 1). */
     static final byte[] CURSOR_KEY_LABEL = "intent-cursor/v1".getBytes(StandardCharsets.US_ASCII);
     private static final int POOL_SIZE = 4;
@@ -170,9 +173,10 @@ public class StackConfiguration {
         return codec;
     }
 
+    /** {@code UCP-Agent} on every merchant call is UCP_AGENT_PROFILE's (8.4, 26.2). */
     @Bean
-    UcpConfig ucpConfig() {
-        return UcpConfig.defaults(UCP_AGENT);
+    UcpConfig ucpConfig(ServiceProperties properties) {
+        return UcpConfig.defaults(properties.ucpAgent());
     }
 
     /**
@@ -203,18 +207,41 @@ public class StackConfiguration {
 
     /**
      * One gateway per configured merchant, SUSPENDED ones included (19: an in-flight intent at a merchant that is failing
-     * discovery still reconciles), each with its own endpoint hosts, handler and versions from the file, over the one
-     * {@link CircuitBreakers}.
+     * discovery still reconciles), picked by its transport, each with its own endpoint hosts, handler and versions from
+     * the file, over the one {@link CircuitBreakers}.
      */
     @Bean
-    ConfiguredGateways merchantGateways(ServiceProperties properties, UcpConfig ucp, CircuitBreakers breakers,
-                                        Clock clock, RandomGenerator random, IdGenerator ids) {
-        Map<MerchantId, UcpHttpGateway> byId = new LinkedHashMap<>();
+    ConfiguredGateways merchantGateways(ServiceProperties properties, MerchantWiring.GatewayParts parts) {
+        Map<MerchantId, MerchantGateway> byId = new LinkedHashMap<>();
         for (MerchantSettings s : properties.merchants()) {
-            byId.put(s.id(), new UcpHttpGateway(s.entry(s.fileStatus()), ucp, new JdkHttpTransport(ucp), breakers, clock,
-                    Sleeper.THREAD, random, ids, s.endpointHosts(), MerchantWiring.requiredHandler(s), s.ucpVersions()));
+            byId.put(s.id(), MerchantWiring.gateway(s, parts));
         }
         return new ConfiguredGateways(Map.copyOf(byId));
+    }
+
+    /** Each merchant's completion from the file, read as the orchestrator reads its entries (19, 7.2, 23.2). */
+    @Bean
+    MerchantCompletions merchantCompletions(ServiceProperties properties) {
+        Map<MerchantId, Completion> byId = new HashMap<>();
+        properties.merchants().forEach(m -> byId.put(m.id(), m.completion()));
+        return id -> byId.getOrDefault(id, Completion.AGENT);
+    }
+
+    /** One real transport per client: the JDK's. A test replaces this bean (nothing else) to keep calls in the JVM. */
+    @Bean
+    @ConditionalOnMissingBean
+    MerchantTransports merchantTransports(UcpConfig ucp) {
+        return () -> new JdkHttpTransport(ucp);
+    }
+
+    /** What the gateways and the catalogs are built from (8.5, 26.4). */
+    @Bean
+    MerchantWiring.GatewayParts gatewayParts(ServiceProperties properties, UcpConfig ucp, CircuitBreakers breakers,
+                                             Clock clock, RandomGenerator random, IdGenerator ids,
+                                             Environment environment, MerchantTransports transports) {
+        return new MerchantWiring.GatewayParts(ucp, breakers, clock, Sleeper.THREAD, random, ids,
+                transports, properties.shopifyTokenEndpoint(), properties.ucpAgentVersion(), properties.buyerIp(),
+                environment);
     }
 
     /** Status from discovery (19): the startup check asks every merchant at once, and a failing one starts SUSPENDED. */
@@ -247,13 +274,17 @@ public class StackConfiguration {
                                      IdGenerator ids, WorkerId workerId, RandomGenerator random,
                                      MerchantInstrumentMap merchantInstruments) {
         // DESIGN 19: a merchant dropped from the file while an intent at it is in flight could never reconcile.
-        MerchantWiring.requireInFlightMerchantsConfigured(new SqlRecoveryScan(db).merchantsInFlight(),
+        MerchantWiring.requireInFlightMerchantsConfigured(new SqlRecoveryScan(db).fingerprintsInFlight(),
                 properties.merchants());
         RuleBasedPolicyEngine policy = new RuleBasedPolicyEngine(properties.policy(), merchantRegistry::find,
                 new SqlPolicyUsage(db), clock);
-        return new DefaultOrchestrator(intents, approvals, approvalService, MerchantGateways.of(merchantGateways.byId()), policy,
-                new RequotePolicy(properties.policy()), MerchantInstruments.of(merchantInstruments.byId()),
-                orchestratorConfig, clock, ids, workerId.value(), random);
+        // I12: the entries as configured, read with no I/O (registry.find may start a discovery re-check).
+        Map<MerchantId, MerchantEntry> entries = new HashMap<>();
+        properties.merchants().forEach(m -> entries.put(m.id(), m.entry(m.fileStatus())));
+        return new DefaultOrchestrator(intents, approvals, approvalService, MerchantGateways.of(merchantGateways.byId()),
+                id -> Optional.ofNullable(entries.get(id)), policy, new RequotePolicy(properties.policy()),
+                MerchantInstruments.of(merchantInstruments.byId()), FulfillmentPolicy.cheapest(), orchestratorConfig,
+                clock, ids, workerId.value(), random);
     }
 
     /** The instrument of each configured merchant (19, 8.5). */
@@ -264,7 +295,7 @@ public class StackConfiguration {
     }
 
     /** The gateway of each configured merchant, SUSPENDED ones included (19). */
-    public record ConfiguredGateways(Map<MerchantId, UcpHttpGateway> byId) {
+    public record ConfiguredGateways(Map<MerchantId, MerchantGateway> byId) {
         public ConfiguredGateways {
             byId = Map.copyOf(Objects.requireNonNull(byId, "byId"));
         }

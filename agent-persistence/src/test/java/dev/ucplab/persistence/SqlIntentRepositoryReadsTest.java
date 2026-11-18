@@ -67,20 +67,33 @@ class SqlIntentRepositoryReadsTest {
     }
 
     // Covers: 7.3, 7.5, 7.6, 10 (every column survives a write and a read: lines in their order, optional fields,
-    // nanosecond times, the cancel flag and the lease)
+    // nanosecond times, the cancel flag, the lease, and a HANDED_OFF row's handoff_url, H5 C7a)
     @Test
     void insertThenFind_roundTripsEveryField() {
         PurchaseIntent full = new PurchaseIntent(
-                new IntentId("i1"), ALICE, SHOP, "k1",
+                new IntentId("i1"), ALICE, SHOP,
+                "{\"completion\":\"handoff\",\"owned\":true,\"shop_domain\":\"s.myshopify.com\",\"transport\":\"mcp\"}", "k1",
                 List.of(new ProposedLine("item_456", 3), new ProposedLine("item_123", 1)), "a@example.com",
                 IntentState.RECONCILING, 7, Optional.of(new SessionId("s1")), Optional.of("hash"), 2,
-                Optional.of("order-9"), Optional.of("why"), Optional.of(T0.plusNanos(5)), true,
+                Optional.of("order-9"), Optional.empty(), Optional.of("why"), Optional.of(T0.plusNanos(5)), true,
                 Optional.of("worker-1"), Optional.of(T0.plusSeconds(30)), T0, T0.plusMillis(250));
 
         repo.insert(full);
 
         assertThat(repo.find(ALICE, full.id())).contains(full);
         assertThat(repo.findForSystem(full.id())).contains(full);
+
+        // H5 C7a, 7.2: a HANDED_OFF row round-trips its handoff_url, query included.
+        PurchaseIntent handedOff = new PurchaseIntent(
+                new IntentId("i2"), ALICE, SHOP, full.merchantFingerprint(), "k2", full.lines(), "a@example.com",
+                IntentState.HANDED_OFF, 3, Optional.of(new SessionId("s2")), Optional.of("hash"), 0, Optional.empty(),
+                Optional.of(new dev.ucplab.core.merchant.ContinueUrl(
+                        java.net.URI.create("https://s.myshopify.com/cart/c/abc?key=k-1"))),
+                Optional.empty(), Optional.empty(), false, Optional.empty(), Optional.empty(), T0, T0.plusMillis(9));
+
+        repo.insert(handedOff);
+
+        assertThat(repo.findForSystem(handedOff.id())).contains(handedOff);
     }
 
     // Covers: T2, T6 (the owner filter is in the SQL: another user's read of an existing id is empty)

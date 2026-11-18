@@ -137,15 +137,19 @@ class FailureClassifierMutationTest {
                 new CallOutcome.ProtocolError<CheckoutView>(418, "unexpected_status", "HTTP 418", java.util.Optional.empty()));
     }
 
-    // Covers: 8.1 (the "create rejected" envelope, an `ucp.status: error` body with a 200, is Rejected for a create only; anything
-    // else with that body is not a usable answer). Kills FailureClassifier.fromBody:138 RemoveConditional_EQUAL_ELSE
+    // Covers: 8.1 (the error envelope, an `ucp.status: error` body with a 200, is Rejected for a create or an update;
+    // anything else with that body is not a usable answer). Kills FailureClassifier.fromBody:138 RemoveConditional_EQUAL_ELSE
     @Test
-    void aCreateRejectedEnvelope_isRejected_onlyForACreateAnswered200() {
+    void aCreateRejectedEnvelope_isRejected_onlyForACreateOrUpdateAnswered200() {
         assertThat(classifier.classify(AttemptOp.CREATE, reply(200, "create_all_unavailable"))).isInstanceOf(CallOutcome.Rejected.class);
         String why = "invalid response: unexpected create-rejected envelope";
         assertThat(classifier.classify(AttemptOp.CREATE, reply(201, "create_all_unavailable")))
                 .isEqualTo(new CallOutcome.Uncertain<CheckoutView>(why));
         assertThat(classifier.classify(AttemptOp.UPDATE, reply(200, "create_all_unavailable")))
+                .isInstanceOf(CallOutcome.Rejected.class);
+        assertThat(classifier.classify(AttemptOp.UPDATE, reply(201, "create_all_unavailable")))
+                .isEqualTo(new CallOutcome.Uncertain<CheckoutView>(why));
+        assertThat(classifier.classify(AttemptOp.CANCEL, reply(200, "create_all_unavailable")))
                 .isEqualTo(new CallOutcome.Uncertain<CheckoutView>(why));
         assertThat(classifier.classify(AttemptOp.COMPLETE, reply(200, "create_all_unavailable")))
                 .isEqualTo(new CallOutcome.Uncertain<CheckoutView>(why));

@@ -245,6 +245,22 @@ class IntentsApiTest {
         assertThat(theirs.headers().map().keySet()).as(what).isEqualTo(missing.headers().map().keySet());
     }
 
+    // Covers: 23.2, 6.2, H5 C7c (at an agent merchant the approval answer has no completion and no note, and the
+    // intent answer has no handoff_url, before and after the purchase completes)
+    @Test
+    void anAgentMerchant_hasNoHandoffFields() throws IOException {
+        start();
+        Session alice = api.signIn("alice");
+        IntentId id = propose("alice");
+
+        Map<String, Object> pending = json(api.get(alice, "/api/intents/" + id.value() + "/approval"));
+        assertThat(pending).containsKeys("snapshot", "token").doesNotContainKey("completion").doesNotContainKey("note");
+        assertThat(json(api.get(alice, "/api/intents/" + id.value()))).doesNotContainKey("handoff_url");
+        assertThat(decide(alice, id, (String) pending.get("token"), "approve").statusCode()).isEqualTo(200);
+        assertThat(awaitState(alice, id, s -> s.equals("COMPLETED"))).isEqualTo("COMPLETED");
+        assertThat(json(api.get(alice, "/api/intents/" + id.value()))).doesNotContainKey("handoff_url");
+    }
+
     // Covers: 23.2, 9.2 (the quote card on the intent is the newest approval's snapshot, field for field; the approval
     // GET shows the same snapshot with its expiry)
     @Test

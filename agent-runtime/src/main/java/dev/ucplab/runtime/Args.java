@@ -15,6 +15,15 @@ final class Args {
     /** An item, intent or merchant id as a tool accepts it: 1 to 100 of {@code [A-Za-z0-9_-]}. */
     static final Pattern ID = Pattern.compile("[A-Za-z0-9_\\-]{1,100}");
 
+    /**
+     * An item id: an {@link #ID}, or a Shopify GID in its exact form {@code gid://shopify/<Type>/<digits>} (H5 C1). No
+     * query, fragment or other path part: a checkout id with {@code ?key=} is never an item id (I6, I8).
+     */
+    static final Pattern ITEM_ID = Pattern.compile("[A-Za-z0-9_\\-]{1,100}|gid://shopify/[A-Z][A-Za-z]{0,40}/[0-9]{1,20}");
+
+    /** {@link #ITEM_ID} as the JSON Schema pattern the tool specs give the model. */
+    static final String ITEM_ID_SCHEMA = "^(" + ITEM_ID.pattern() + ")$";
+
     private Args() {
     }
 
@@ -71,6 +80,17 @@ final class Args {
             return s;
         }
         throw new Invalid(name + " must be 1 to 100 of letters, digits, '_' and '-'");
+    }
+
+    static String itemId(Map<String, Object> args, String name) {
+        return itemId(args.get(name), name);
+    }
+
+    static String itemId(Object value, String name) {
+        if (value instanceof String s && ITEM_ID.matcher(s).matches()) {
+            return s;
+        }
+        throw new Invalid(name + " must be 1 to 100 of letters, digits, '_' and '-', or gid://shopify/<Type>/<digits>");
     }
 
     /** A whole number from {@code min} to {@code max}; a JSON number with a fraction is refused. */

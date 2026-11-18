@@ -3,7 +3,7 @@
 // session is the cookie; the CSRF token and the approval token live in variables of this page only.
 "use strict";
 
-const TERMINAL = ["COMPLETED", "REJECTED", "FAILED_NOT_CHARGED", "ESCALATED"];
+const TERMINAL = ["COMPLETED", "HANDED_OFF", "REJECTED", "FAILED_NOT_CHARGED", "ESCALATED"];
 const RUN_WAITING = ["waiting_for_user", "done", "waiting_for_approval"];
 
 let csrf = "";
@@ -248,6 +248,9 @@ function showApprovalCard(id, approvalResponse) {
   table.appendChild(foot);
   card.appendChild(table);
   card.appendChild(el("p", "Price and stock are not held.", "fixed"));
+  if (approval.completion === "handoff") {
+    card.appendChild(el("p", approval.note, "fixed"));
+  }
   const expiry = el("p");
   card.appendChild(expiry);
   const actions = el("div", null, "actions");
@@ -299,6 +302,7 @@ async function decide(id, token, decision) {
 // ---- the timeline ------------------------------------------------------------------------------------------------------
 
 function watchIntent(id) {
+  clear($("handoff"));
   currentIntent = {id: id, state: ""};
   window.clearTimeout(intentTimer);
   pollIntent();
@@ -330,6 +334,11 @@ async function pollIntent() {
     $("timeline-state").textContent = "Intent " + id + ": " + state.replace(/_/g, " ").toLowerCase();
     setStatus("Intent " + state.replace(/_/g, " ").toLowerCase() + ".");
     await loadEvents(id);
+    if (state === "HANDED_OFF") {
+      showHandoffLink(result.data.handoff_url);
+    } else {
+      clear($("handoff"));
+    }
     if (state === "AWAITING_APPROVAL") {
       loadApproval(id);
     }
@@ -341,6 +350,25 @@ async function pollIntent() {
     intentTimer = window.setTimeout(pollIntent, 1000);
   }
 }
+
+// <handoff-link>
+// 24.3: in HANDED_OFF only, the owner's way to finish at the store. The address is set as the link's target alone:
+// never as text, in the page's address, the browser console, storage or the live region; a new tab with no opener
+// and no referrer.
+function showHandoffLink(url) {
+  const holder = $("handoff");
+  clear(holder);
+  if (typeof url !== "string" || !url.startsWith("https://")) {
+    return;
+  }
+  const anchor = el("a", "Continue at the store");
+  anchor.href = url;
+  anchor.target = "_blank";
+  anchor.rel = "noopener noreferrer";
+  anchor.referrerPolicy = "no-referrer";
+  holder.appendChild(anchor);
+}
+// </handoff-link>
 
 // The run's other intents, one line each, beside the one the timeline follows (S22): merchant and state.
 async function showOtherIntents(ids) {

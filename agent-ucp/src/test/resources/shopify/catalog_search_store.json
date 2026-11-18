@@ -1,0 +1,481 @@
+{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"messages\": [], \"pagination\": {\"has_next_page\": false}, \"products\": [{\"collections\": [{\"description\": {\"html\": \"\"}, \"handle\": \"automated-collection\", \"id\": \"gid://shopify/Collection/494045855830\", \"title\": \"Automated Collection\"}], \"description\": {\"html\": \"A test snowboard sold in five colours.\"}, \"gift_card\": false, \"handle\": \"the-complete-snowboard\", \"id\": \"gid://shopify/Product/10432348913750\", \"list_price_range\": {\"max\": {\"amount\": 0, \"currency\": \"USD\"}, \"min\": {\"amount\": 0, \"currency\": \"USD\"}}, \"options\": [{\"name\": \"Color\", \"values\": [{\"label\": \"Dawn\"}, {\"label\": \"Powder\"}, {\"label\": \"Electric\"}, {\"label\": \"Sunset\"}, {\"label\": \"Ice\"}]}], \"price_range\": {\"max\": {\"amount\": 69995, \"currency\": \"USD\"}, \"min\": {\"amount\": 69995, \"currency\": \"USD\"}}, \"tags\": [\"Premium\", \"Snow\", \"Snowboard\", \"Sport\", \"Winter\"], \"title\": \"The Complete Snowboard\", \"variants\": [{\"availability\": {\"available\": true}, \"checkout_url\": \"https://example-dev.myshopify.com/...\", \"description\": {\"html\": \"A test snowboard sold in five colours.\"}, \"id\": \"gid://shopify/ProductVariant/51192065753174\", \"options\": [{\"label\": \"Ice\", \"name\": \"Color\"}], \"price\": {\"amount\": 69995, \"currency\": \"USD\"}, \"requires\": {\"shipping\": true}, \"title\": \"Ice\"}, {\"availability\": {\"available\": true}, \"checkout_url\": \"https://example-dev.myshopify.com/...\", \"description\": {\"html\": \"A test snowboard sold in five colours.\"}, \"id\": \"gid://shopify/ProductVariant/51192065785942\", \"options\": [{\"label\": \"Dawn\", \"name\": \"Color\"}], \"price\": {\"amount\": 69995, \"currency\": \"USD\"}, \"requires\": {\"shipping\": true}, \"title\": \"Dawn\"}, {\"availability\": {\"available\": true}, \"checkout_url\": \"https://example-dev.myshopify.com/...\", \"description\": {\"html\": \"A test snowboard sold in five colours.\"}, \"id\": \"gid://shopify/ProductVariant/51192065818710\", \"options\": [{\"label\": \"Powder\", \"name\": \"Color\"}], \"price\": {\"amount\": 69995, \"currency\": \"USD\"}, \"requires\": {\"shipping\": true}, \"title\": \"Powder\"}, {\"availability\": {\"available\": true}, \"checkout_url\": \"https://example-dev.myshopify.com/...\", \"description\": {\"html\": \"A test snowboard sold in five colours.\"}, \"id\": \"gid://shopify/ProductVariant/51192065851478\", \"options\": [{\"label\": \"Electric\", \"name\": \"Color\"}], \"price\": {\"amount\": 69995, \"currency\": \"USD\"}, \"requires\": {\"shipping\": true}, \"title\": \"Electric\"}, {\"availability\": {\"available\": true}, \"checkout_url\": \"https://example-dev.myshopify.com/...\", \"description\": {\"html\": \"A test snowboard sold in five colours.\"}, \"id\": \"gid://shopify/ProductVariant/51192065884246\", \"options\": [{\"label\": \"Sunset\", \"name\": \"Color\"}], \"price\": {\"amount\": 69995, \"currency\": \"USD\"}, \"requires\": {\"shipping\": true}, \"title\": \"Sunset\"}]}, {\"collections\": [{\"description\": {\"html\": \"\"}, \"handle\": \"automated-collection\", \"id\": \"gid://shopify/Collection/494045855830\", \"title\": \"Automated Collection\"}], \"description\": {\"html\": \"A test snowboard with a SKU.\"}, \"gift_card\": false, \"handle\": \"the-multi-managed-snowboard\", \"id\": \"gid://shopify/Product/10432349175894\", \"list_price_range\": {\"max\": {\"amount\": 0, \"currency\": \"USD\"}, \"min\": {\"amount\": 0, \"currency\": \"USD\"}}, \"options\": [{\"name\": \"Title\", \"values\": [{\"label\": \"Default Title\"}]}], \"price_range\": {\"max\": {\"amount\": 62995, \"currency\": \"USD\"}, \"min\": {\"amount\": 62995, \"currency\": \"USD\"}}, \"tags\": [\"Premium\", \"Snow\", \"Snowboard\", \"Sport\", \"Winter\"], \"title\": \"The Multi-managed Snowboard\", \"variants\": [{\"availability\": {\"available\": true}, \"checkout_url\": \"https://example-dev.myshopify.com/...\", \"description\": {\"html\": \"A test snowboard with a SKU.\"}, \"id\": \"gid://shopify/ProductVariant/51192066736214\", \"options\": [{\"label\": \"Default Title\", \"name\": \"Title\"}], \"price\": {\"amount\": 62995, \"currency\": \"USD\"}, \"requires\": {\"shipping\": true}, \"sku\": \"sku-managed-1\", \"title\": \"Default Title\"}]}, {\"collections\": [{\"description\": {\"html\": \"\"}, \"handle\": \"automated-collection\", \"id\": \"gid://shopify/Collection/494045855830\", \"title\": \"Automated Collection\"}], \"description\": {\"html\": \"A test snowboard with a compare-at price.\"}, \"gift_card\": false, \"handle\": \"the-compare-at-price-snowboard\", \"id\": \"gid://shopify/Product/10432348848214\", \"list_price_range\": {\"max\": {\"amount\": 88595, \"currency\": \"USD\"}, \"min\": {\"amount\": 88595, \"currency\": \"USD\"}}, \"options\": [{\"name\": \"Title\", \"values\": [{\"label\": \"Default Title\"}]}], \"price_range\": {\"max\": {\"amount\": 78595, \"currency\": \"USD\"}, \"min\": {\"amount\": 78595, \"currency\": \"USD\"}}, \"tags\": [\"Accessory\", \"Sport\", \"Winter\"], \"title\": \"The Compare at Price Snowboard\", \"variants\": [{\"availability\": {\"available\": true}, \"checkout_url\": \"https://example-dev.myshopify.com/...\", \"description\": {\"html\": \"A test snowboard with a compare-at price.\"}, \"id\": \"gid://shopify/ProductVariant/51192065687638\", \"list_price\": {\"amount\": 88595, \"currency\": \"USD\"}, \"options\": [{\"label\": \"Default Title\", \"name\": \"Title\"}], \"price\": {\"amount\": 78595, \"currency\": \"USD\"}, \"requires\": {\"shipping\": true}, \"title\": \"Default Title\"}]}], \"ucp\": {\"capabilities\": {\"dev.shopify.catalog\": [{\"extends\": [\"dev.ucp.shopping.catalog.search\", \"dev.ucp.shopping.catalog.lookup\"], \"requires\": {\"protocol\": {\"min\": \"2026-04-08\"}}, \"schema\": \"https://shopify.dev/ucp/schemas/2026-04-08/shopify_catalog.json\", \"spec\": \"https://shopify.dev/docs/agents/catalog/storefront-catalog\", \"version\": \"2026-04-08\"}], \"dev.ucp.shopping.cart\": [{\"schema\": \"https://ucp.dev/2026-04-08/schemas/shopping/cart.json\", \"spec\": \"https://ucp.dev/2026-04-08/specification/cart\", \"version\": \"2026-04-08\"}], \"dev.ucp.shopping.catalog.lookup\": [{\"schema\": \"https://ucp.dev/2026-04-08/schemas/shopping/catalog_lookup.json\", \"spec\": \"https://ucp.dev/2026-04-08/specification/catalog\", \"version\": \"2026-04-08\"}], \"dev.ucp.shopping.catalog.search\": [{\"schema\": \"https://ucp.dev/2026-04-08/schemas/shopping/catalog_search.json\", \"spec\": \"https://ucp.dev/2026-04-08/specification/catalog\", \"version\": \"2026-04-08\"}], \"dev.ucp.shopping.checkout\": [{\"schema\": \"https://ucp.dev/2026-04-08/schemas/shopping/checkout.json\", \"spec\": \"https://ucp.dev/2026-04-08/specification/checkout\", \"version\": \"2026-04-08\"}], \"dev.ucp.shopping.discount\": [{\"extends\": [\"dev.ucp.shopping.checkout\", \"dev.ucp.shopping.cart\"], \"requires\": {\"protocol\": {\"min\": \"2026-04-08\"}}, \"schema\": \"https://ucp.dev/2026-04-08/schemas/shopping/discount.json\", \"spec\": \"https://ucp.dev/2026-04-08/specification/discount\", \"version\": \"2026-04-08\"}], \"dev.ucp.shopping.fulfillment\": [{\"config\": {\"allows_method_combinations\": [[\"shipping\"]], \"allows_multi_destination\": {\"shipping\": false}}, \"extends\": [\"dev.ucp.shopping.checkout\", \"dev.ucp.shopping.cart\"], \"requires\": {\"protocol\": {\"min\": \"2026-04-08\"}}, \"schema\": \"https://ucp.dev/2026-04-08/schemas/shopping/fulfillment.json\", \"spec\": \"https://ucp.dev/2026-04-08/specification/fulfillment\", \"version\": \"2026-04-08\"}], \"dev.ucp.shopping.order\": [{\"schema\": \"https://ucp.dev/2026-04-08/schemas/shopping/order.json\", \"spec\": \"https://ucp.dev/2026-04-08/specification/order/\", \"version\": \"2026-04-08\"}]}, \"payment_handlers\": {}, \"services\": {\"dev.ucp.shopping\": []}, \"status\": \"success\", \"version\": \"2026-04-08\"}}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "messages": [],
+      "pagination": {
+        "has_next_page": false
+      },
+      "products": [
+        {
+          "collections": [
+            {
+              "description": {
+                "html": ""
+              },
+              "handle": "automated-collection",
+              "id": "gid://shopify/Collection/494045855830",
+              "title": "Automated Collection"
+            }
+          ],
+          "description": {
+            "html": "A test snowboard sold in five colours."
+          },
+          "gift_card": false,
+          "handle": "the-complete-snowboard",
+          "id": "gid://shopify/Product/10432348913750",
+          "list_price_range": {
+            "max": {
+              "amount": 0,
+              "currency": "USD"
+            },
+            "min": {
+              "amount": 0,
+              "currency": "USD"
+            }
+          },
+          "options": [
+            {
+              "name": "Color",
+              "values": [
+                {
+                  "label": "Dawn"
+                },
+                {
+                  "label": "Powder"
+                },
+                {
+                  "label": "Electric"
+                },
+                {
+                  "label": "Sunset"
+                },
+                {
+                  "label": "Ice"
+                }
+              ]
+            }
+          ],
+          "price_range": {
+            "max": {
+              "amount": 69995,
+              "currency": "USD"
+            },
+            "min": {
+              "amount": 69995,
+              "currency": "USD"
+            }
+          },
+          "tags": [
+            "Premium",
+            "Snow",
+            "Snowboard",
+            "Sport",
+            "Winter"
+          ],
+          "title": "The Complete Snowboard",
+          "variants": [
+            {
+              "availability": {
+                "available": true
+              },
+              "checkout_url": "https://example-dev.myshopify.com/...",
+              "description": {
+                "html": "A test snowboard sold in five colours."
+              },
+              "id": "gid://shopify/ProductVariant/51192065753174",
+              "options": [
+                {
+                  "label": "Ice",
+                  "name": "Color"
+                }
+              ],
+              "price": {
+                "amount": 69995,
+                "currency": "USD"
+              },
+              "requires": {
+                "shipping": true
+              },
+              "title": "Ice"
+            },
+            {
+              "availability": {
+                "available": true
+              },
+              "checkout_url": "https://example-dev.myshopify.com/...",
+              "description": {
+                "html": "A test snowboard sold in five colours."
+              },
+              "id": "gid://shopify/ProductVariant/51192065785942",
+              "options": [
+                {
+                  "label": "Dawn",
+                  "name": "Color"
+                }
+              ],
+              "price": {
+                "amount": 69995,
+                "currency": "USD"
+              },
+              "requires": {
+                "shipping": true
+              },
+              "title": "Dawn"
+            },
+            {
+              "availability": {
+                "available": true
+              },
+              "checkout_url": "https://example-dev.myshopify.com/...",
+              "description": {
+                "html": "A test snowboard sold in five colours."
+              },
+              "id": "gid://shopify/ProductVariant/51192065818710",
+              "options": [
+                {
+                  "label": "Powder",
+                  "name": "Color"
+                }
+              ],
+              "price": {
+                "amount": 69995,
+                "currency": "USD"
+              },
+              "requires": {
+                "shipping": true
+              },
+              "title": "Powder"
+            },
+            {
+              "availability": {
+                "available": true
+              },
+              "checkout_url": "https://example-dev.myshopify.com/...",
+              "description": {
+                "html": "A test snowboard sold in five colours."
+              },
+              "id": "gid://shopify/ProductVariant/51192065851478",
+              "options": [
+                {
+                  "label": "Electric",
+                  "name": "Color"
+                }
+              ],
+              "price": {
+                "amount": 69995,
+                "currency": "USD"
+              },
+              "requires": {
+                "shipping": true
+              },
+              "title": "Electric"
+            },
+            {
+              "availability": {
+                "available": true
+              },
+              "checkout_url": "https://example-dev.myshopify.com/...",
+              "description": {
+                "html": "A test snowboard sold in five colours."
+              },
+              "id": "gid://shopify/ProductVariant/51192065884246",
+              "options": [
+                {
+                  "label": "Sunset",
+                  "name": "Color"
+                }
+              ],
+              "price": {
+                "amount": 69995,
+                "currency": "USD"
+              },
+              "requires": {
+                "shipping": true
+              },
+              "title": "Sunset"
+            }
+          ]
+        },
+        {
+          "collections": [
+            {
+              "description": {
+                "html": ""
+              },
+              "handle": "automated-collection",
+              "id": "gid://shopify/Collection/494045855830",
+              "title": "Automated Collection"
+            }
+          ],
+          "description": {
+            "html": "A test snowboard with a SKU."
+          },
+          "gift_card": false,
+          "handle": "the-multi-managed-snowboard",
+          "id": "gid://shopify/Product/10432349175894",
+          "list_price_range": {
+            "max": {
+              "amount": 0,
+              "currency": "USD"
+            },
+            "min": {
+              "amount": 0,
+              "currency": "USD"
+            }
+          },
+          "options": [
+            {
+              "name": "Title",
+              "values": [
+                {
+                  "label": "Default Title"
+                }
+              ]
+            }
+          ],
+          "price_range": {
+            "max": {
+              "amount": 62995,
+              "currency": "USD"
+            },
+            "min": {
+              "amount": 62995,
+              "currency": "USD"
+            }
+          },
+          "tags": [
+            "Premium",
+            "Snow",
+            "Snowboard",
+            "Sport",
+            "Winter"
+          ],
+          "title": "The Multi-managed Snowboard",
+          "variants": [
+            {
+              "availability": {
+                "available": true
+              },
+              "checkout_url": "https://example-dev.myshopify.com/...",
+              "description": {
+                "html": "A test snowboard with a SKU."
+              },
+              "id": "gid://shopify/ProductVariant/51192066736214",
+              "options": [
+                {
+                  "label": "Default Title",
+                  "name": "Title"
+                }
+              ],
+              "price": {
+                "amount": 62995,
+                "currency": "USD"
+              },
+              "requires": {
+                "shipping": true
+              },
+              "sku": "sku-managed-1",
+              "title": "Default Title"
+            }
+          ]
+        },
+        {
+          "collections": [
+            {
+              "description": {
+                "html": ""
+              },
+              "handle": "automated-collection",
+              "id": "gid://shopify/Collection/494045855830",
+              "title": "Automated Collection"
+            }
+          ],
+          "description": {
+            "html": "A test snowboard with a compare-at price."
+          },
+          "gift_card": false,
+          "handle": "the-compare-at-price-snowboard",
+          "id": "gid://shopify/Product/10432348848214",
+          "list_price_range": {
+            "max": {
+              "amount": 88595,
+              "currency": "USD"
+            },
+            "min": {
+              "amount": 88595,
+              "currency": "USD"
+            }
+          },
+          "options": [
+            {
+              "name": "Title",
+              "values": [
+                {
+                  "label": "Default Title"
+                }
+              ]
+            }
+          ],
+          "price_range": {
+            "max": {
+              "amount": 78595,
+              "currency": "USD"
+            },
+            "min": {
+              "amount": 78595,
+              "currency": "USD"
+            }
+          },
+          "tags": [
+            "Accessory",
+            "Sport",
+            "Winter"
+          ],
+          "title": "The Compare at Price Snowboard",
+          "variants": [
+            {
+              "availability": {
+                "available": true
+              },
+              "checkout_url": "https://example-dev.myshopify.com/...",
+              "description": {
+                "html": "A test snowboard with a compare-at price."
+              },
+              "id": "gid://shopify/ProductVariant/51192065687638",
+              "list_price": {
+                "amount": 88595,
+                "currency": "USD"
+              },
+              "options": [
+                {
+                  "label": "Default Title",
+                  "name": "Title"
+                }
+              ],
+              "price": {
+                "amount": 78595,
+                "currency": "USD"
+              },
+              "requires": {
+                "shipping": true
+              },
+              "title": "Default Title"
+            }
+          ]
+        }
+      ],
+      "ucp": {
+        "capabilities": {
+          "dev.shopify.catalog": [
+            {
+              "extends": [
+                "dev.ucp.shopping.catalog.search",
+                "dev.ucp.shopping.catalog.lookup"
+              ],
+              "requires": {
+                "protocol": {
+                  "min": "2026-04-08"
+                }
+              },
+              "schema": "https://shopify.dev/ucp/schemas/2026-04-08/shopify_catalog.json",
+              "spec": "https://shopify.dev/docs/agents/catalog/storefront-catalog",
+              "version": "2026-04-08"
+            }
+          ],
+          "dev.ucp.shopping.cart": [
+            {
+              "schema": "https://ucp.dev/2026-04-08/schemas/shopping/cart.json",
+              "spec": "https://ucp.dev/2026-04-08/specification/cart",
+              "version": "2026-04-08"
+            }
+          ],
+          "dev.ucp.shopping.catalog.lookup": [
+            {
+              "schema": "https://ucp.dev/2026-04-08/schemas/shopping/catalog_lookup.json",
+              "spec": "https://ucp.dev/2026-04-08/specification/catalog",
+              "version": "2026-04-08"
+            }
+          ],
+          "dev.ucp.shopping.catalog.search": [
+            {
+              "schema": "https://ucp.dev/2026-04-08/schemas/shopping/catalog_search.json",
+              "spec": "https://ucp.dev/2026-04-08/specification/catalog",
+              "version": "2026-04-08"
+            }
+          ],
+          "dev.ucp.shopping.checkout": [
+            {
+              "schema": "https://ucp.dev/2026-04-08/schemas/shopping/checkout.json",
+              "spec": "https://ucp.dev/2026-04-08/specification/checkout",
+              "version": "2026-04-08"
+            }
+          ],
+          "dev.ucp.shopping.discount": [
+            {
+              "extends": [
+                "dev.ucp.shopping.checkout",
+                "dev.ucp.shopping.cart"
+              ],
+              "requires": {
+                "protocol": {
+                  "min": "2026-04-08"
+                }
+              },
+              "schema": "https://ucp.dev/2026-04-08/schemas/shopping/discount.json",
+              "spec": "https://ucp.dev/2026-04-08/specification/discount",
+              "version": "2026-04-08"
+            }
+          ],
+          "dev.ucp.shopping.fulfillment": [
+            {
+              "config": {
+                "allows_method_combinations": [
+                  [
+                    "shipping"
+                  ]
+                ],
+                "allows_multi_destination": {
+                  "shipping": false
+                }
+              },
+              "extends": [
+                "dev.ucp.shopping.checkout",
+                "dev.ucp.shopping.cart"
+              ],
+              "requires": {
+                "protocol": {
+                  "min": "2026-04-08"
+                }
+              },
+              "schema": "https://ucp.dev/2026-04-08/schemas/shopping/fulfillment.json",
+              "spec": "https://ucp.dev/2026-04-08/specification/fulfillment",
+              "version": "2026-04-08"
+            }
+          ],
+          "dev.ucp.shopping.order": [
+            {
+              "schema": "https://ucp.dev/2026-04-08/schemas/shopping/order.json",
+              "spec": "https://ucp.dev/2026-04-08/specification/order/",
+              "version": "2026-04-08"
+            }
+          ]
+        },
+        "payment_handlers": {},
+        "services": {
+          "dev.ucp.shopping": []
+        },
+        "status": "success",
+        "version": "2026-04-08"
+      }
+    }
+  }
+}

@@ -253,11 +253,11 @@ class FailureClassifierTest {
                 });
     }
 
-    // Covers: 8.1, decision N, B (the same envelope on any other operation is not a checkout: Uncertain for a mutating
-    // call, ProtocolError for get)
+    // Covers: 8.1, decision N, B (the same envelope on any operation but create and update is not a checkout:
+    // Uncertain for a mutating call, ProtocolError for get; an update's is Rejected, anErrorEnvelopeOnUpdate_isRejected)
     @Test
     void classifyReply_rejectedEnvelope_onOtherOps_isInvalid() {
-        for (AttemptOp op : List.of(AttemptOp.UPDATE, AttemptOp.COMPLETE, AttemptOp.CANCEL, AttemptOp.GET)) {
+        for (AttemptOp op : List.of(AttemptOp.COMPLETE, AttemptOp.CANCEL, AttemptOp.GET)) {
             CallOutcome<CheckoutView> outcome = classify(op, reply(200, fixture("create_all_unavailable")));
 
             if (mutating(op)) {
@@ -455,5 +455,17 @@ class FailureClassifierTest {
                 u -> assertThat(u.cause()).doesNotContain("canary"));
         assertThat(classify(AttemptOp.GET, bad)).isInstanceOfSatisfying(CallOutcome.ProtocolError.class,
                 e -> assertThat(e.content()).doesNotContain("canary"));
+    }
+
+    // Covers: 8.1 (the error-envelope row: a refused update is Rejected, with its codes, as a refused create is; H5
+    // Stage 3)
+    @Test
+    void anErrorEnvelopeOnUpdate_isRejected() {
+        CallOutcome<CheckoutView> out = classify(AttemptOp.UPDATE, reply(200, fixture("create_all_unavailable")));
+
+        assertThat(out).isInstanceOfSatisfying(CallOutcome.Rejected.class, r -> {
+            assertThat(r.httpStatus()).isEqualTo(200);
+            assertThat(r.messages()).isNotEmpty();
+        });
     }
 }

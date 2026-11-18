@@ -1,32 +1,41 @@
 # The Shopify spike (H1 C11)
 
 `scripts/shopify-spike.sh` and `scripts/shopify_spike.py` (Python 3 standard library, always run with `python3 -I`) make one
-real round trip against a Shopify **development store you own**: a token, one read-only catalog search, the store's profile,
-one checkout, and a cancel. **You run it. No CI job and no agent runs it, and it has not been run against Shopify.** It was
-built and tested only against a local fake (`python3 -I scripts/shopify_spike_test.py`, six tests; not part of `./mvnw verify`,
-which needs no Python).
+real round trip against a Shopify **development store you own**: a token, one read-only search of the global catalog, the
+store's profile, one read-only search at the store itself, one checkout with an item from that search, and a cancel. **You
+run it. No CI job and no agent runs it.** It is tested only against a local fake (`python3 -I scripts/shopify_spike_test.py`,
+20 tests; not part of `./mvnw verify`, which needs no Python). H5 Stage 0 fixed it before its first real run: the Keychain
+items, answers wrapped in `result.structuredContent`, the item taken from the store's own search, the buyer IP made optional,
+the query, `--record`, and the MCP endpoint read from the profile's `ucp.services` (the first real run showed the shape).
 
 ## What you must do first
-1. In the Shopify Dev Dashboard create a **Catalogs API key** (Catalogs, Get an API key). Copy the client id and secret.
-2. Put both in the macOS Keychain, typing the value at the prompt so it is never on a command line or in shell history:
-   `security add-generic-password -a "$USER" -s shopify-spike-client-id -w` and the same with `-s shopify-spike-client-secret`.
-3. Have a **development store you own** with UCP checkout enabled (VERIFY: the research found no documented way to make a dev
-   store the target of an agent checkout).
-4. Host an agent profile JSON at a public HTTPS URL (GitHub Pages, a public repository through `raw.githubusercontent.com`, or
-   Cloudflare Pages). It holds no secret:
-   `{"ucp": {"version": "2026-08-25", "capabilities": {"dev.ucp.shopping.cart": [{"version": "2026-08-25"}], "dev.ucp.shopping.checkout": [{"version": "2026-08-25"}]}}}`
-5. Export `SHOPIFY_STORE_DOMAIN` (your store, for example `my-store.myshopify.com`), `AGENT_PROFILE_URL`, `BUYER_IP` (your own
-   public IP) and, for the checkout, `SPIKE_ITEM_ID` (an item id from the catalog search). The client id and secret are read from
-   the Keychain by the wrapper, never from your shell.
+1. In the Shopify Dev Dashboard, under Agents, verify the organization (Stripe) and create an agent identity. Copy its API key
+   (the client id) and client secret.
+2. Put both in the macOS Keychain, typing or pasting the value at the prompt so it is never on a command line or in shell
+   history: `security add-generic-password -a "$USER" -s ucplab-shopify-catalog-id -w` and the same with
+   `-s ucplab-shopify-catalog-secret`.
+3. Have a **development store you own** (H5: `ucplab-dev.myshopify.com`). VERIFY: whether its own UCP endpoint answers while
+   the store is private (password-protected); the global catalog does not list a private dev store.
+4. An agent profile URL. For the spike, Shopify's documented sample
+   (`https://shopify.dev/ucp/agent-profiles/2026-04-08/valid-with-capabilities.json`, H5 decision 5); H5 later hosts our
+   own (no secret in it).
+5. Export `SHOPIFY_STORE_DOMAIN` (your store) and `AGENT_PROFILE_URL`; optionally `SPIKE_QUERY` (default `snowboard`, which
+   matches a dev store's generated test data). `BUYER_IP` (your own public IP) only if you pass `--with-buyer-ip`. The client
+   id and secret are read from the Keychain by the wrapper, never from your shell.
 
 ## The commands
 ```
-scripts/shopify-spike.sh --dry-run --i-own-this-store     # prints every call, with each secret, the token and the IP replaced
-scripts/shopify-spike.sh --i-own-this-store               # the real run
+scripts/shopify-spike.sh --dry-run --i-own-this-store                          # prints every call, secrets replaced
+scripts/shopify-spike.sh --i-own-this-store --record notes/h5/spike            # the real run, answers kept (redacted)
 ```
 `--dry-run` makes no network call and needs no Keychain entry. `--i-own-this-store` is required: without it the script refuses
-(DESIGN 26.5). It also refuses if the MCP endpoint in the store's profile is not on `SHOPIFY_STORE_DOMAIN`, so a checkout is
-never created at a store a search returned.
+(DESIGN 26.5). It also refuses if the MCP endpoint in the store's profile is not on `SHOPIFY_STORE_DOMAIN`, and it takes the
+checkout's item only from the store's own search (skipping any variant whose seller is another store), so a checkout is never
+created at, or for, a store a global search returned. If the store's search finds nothing, it stops before any create.
+`--with-buyer-ip` sends `Shopify-Buyer-IP` on every call to the store (its search refuses without it), never to the global catalog; without it no buyer data is sent (H5 decision 6). If Shopify refuses a create
+without it, that is a finding for the owner, not a default. `--record DIR` writes each answer as JSON, redacted, with
+`continue_url` and `checkout_url` cut to their host; the token answer is never written. Keep it under `notes/` (never
+committed).
 
 ## Secrets
 They come from the environment only. They are never an argument, never in a file, never printed: every line goes through
@@ -38,9 +47,10 @@ hosted agent profile holds none. The `continue_url` is printed to the terminal o
 | Step | Proves |
 | --- | --- |
 | token | the Catalogs key works with `client_credentials` |
-| catalog search | the global catalog MCP answers a read-only search with the shape we assume |
-| store profile | a real store's `/.well-known/ucp` names an MCP endpoint and capabilities |
-| `create_checkout` | the call is accepted with `Authorization`, `Shopify-Buyer-IP` and the agent profile; `continue_url` appears (the handoff is real) |
+| catalog search (global) | the API key path answers a read-only search with the shape the Dev Dashboard preview showed |
+| store profile | a real store's `/.well-known/ucp` names an MCP endpoint, versions and capabilities (the script prints its keys) |
+| catalog search (the store) | the store's own endpoint searches its products; the checkout's item comes from here |
+| `create_checkout` | the call is accepted with `Authorization` and the agent profile (and `Shopify-Buyer-IP` only if asked); `continue_url` appears (the handoff is real). An answer with no checkout id prints a WARNING that a checkout may be open |
 | `cancel_checkout` | what we created can be cancelled; it runs in a `finally`, so after any failure after the create |
 
 It never calls `complete_checkout`: that is granted case by case, so the run **ends at the `continue_url` handoff** unless

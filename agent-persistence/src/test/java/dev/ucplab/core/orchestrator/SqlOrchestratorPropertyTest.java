@@ -112,6 +112,15 @@ class SqlOrchestratorPropertyTest {
         check("I7", mode, Invariants::i7);
     }
 
+    // Covers: I12, 7.2, 7.6, 19, 26.5, 14.1 Merchant strictness (on SQLite) (a catch-all at the merchant: with the
+    // registry entry flipped at random points of the schedule, no mutating call reaches a merchant failing I12 or
+    // changed under its intent, whichever send it is)
+    @ParameterizedTest(name = "{0} merchant")
+    @EnumSource(FaultyMerchantModel.Mode.class)
+    void property_noMutatingCallReachesAMerchantFailingI12_forEveryGeneratedSchedule(FaultyMerchantModel.Mode mode) {
+        check("I12", mode, Invariants::i12);
+    }
+
     // Covers: 14.1, NFR4 (differential: the SQL adapter and the in-memory one behave alike on the same schedules: the
     // same orders, the same end states, the same merchant traffic, so a property that passes on one says something about
     // the other)

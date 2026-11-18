@@ -1,0 +1,4 @@
+{
+  "body": "{\"error\": {\"code\": -32000, \"data\": \"Missing required buyer IP header.\", \"message\": \"AuthenticationFailed\"}, \"id\": 1, \"jsonrpc\": \"2.0\"}",
+  "http_status": 422
+}

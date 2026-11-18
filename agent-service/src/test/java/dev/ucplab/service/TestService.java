@@ -142,7 +142,18 @@ final class TestService implements AutoCloseable {
         byte[] hmac = new byte[32];
         new SecureRandom().nextBytes(hmac);
         return startOn(dir, extra, clock, bStatus, withB, a, b, FaultProxy.start(a.baseUrl(), 0, hmac),
-                FaultProxy.start(b.baseUrl(), 0, hmac), singletons, port);
+                FaultProxy.start(b.baseUrl(), 0, hmac), singletons, port, "");
+    }
+
+    /** merchant-a and merchant-b, with {@code aSettings} (YAML lines, each indented four spaces) added to merchant-a's entry. */
+    static TestService startMerchantsWithA(Path dir, Map<String, String> extra, Optional<Clock> clock, String aSettings)
+            throws IOException {
+        LabMerchant a = LabMerchant.start();
+        LabMerchant b = LabMerchant.start(Path.of("..", "dev", "catalogs", "b.json"));
+        byte[] hmac = new byte[32];
+        new SecureRandom().nextBytes(hmac);
+        return startOn(dir, extra, clock, "active", true, a, b, FaultProxy.start(a.baseUrl(), 0, hmac),
+                FaultProxy.start(b.baseUrl(), 0, hmac), Map.of(), 0, aSettings);
     }
 
     /**
@@ -153,16 +164,24 @@ final class TestService implements AutoCloseable {
                                         String bStatus, boolean withB) throws IOException {
         previous.context.close();
         return startOn(dir, extra, clock, bStatus, withB, previous.merchant, previous.merchantB, previous.proxy,
-                previous.proxyB, Map.of(), 0);
+                previous.proxyB, Map.of(), 0, "");
+    }
+
+    /** {@link #restartMerchants} with {@code aSettings} added to merchant-a's entry, and merchant-b active. */
+    static TestService restartMerchantsWithA(TestService previous, Path dir, Map<String, String> extra,
+                                             Optional<Clock> clock, String aSettings) throws IOException {
+        previous.context.close();
+        return startOn(dir, extra, clock, "active", true, previous.merchant, previous.merchantB, previous.proxy,
+                previous.proxyB, Map.of(), 0, aSettings);
     }
 
     private static TestService startOn(Path dir, Map<String, String> extra, Optional<Clock> clock, String bStatus,
                                        boolean withB, LabMerchant a, LabMerchant b, FaultProxy proxyA, FaultProxy proxyB,
-                                       Map<String, Object> singletons, int port) throws IOException {
+                                       Map<String, Object> singletons, int port, String aSettings) throws IOException {
         try {
             StringBuilder yaml = new StringBuilder("merchants:\n")
                     .append("  - id: merchant-a\n    name: Merchant A\n    url: ").append(proxyA.baseUrl())
-                    .append("\n    lab_url: ").append(a.baseUrl()).append("\n");
+                    .append("\n    lab_url: ").append(a.baseUrl()).append("\n").append(aSettings);
             if (withB) {
                 yaml.append("  - id: merchant-b\n    name: Merchant B\n    status: ").append(bStatus)
                         .append("\n    url: ").append(proxyB.baseUrl()).append("\n    lab_url: ").append(b.baseUrl())

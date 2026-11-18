@@ -16,18 +16,13 @@ import dev.ucplab.service.config.StackConfiguration.ConfiguredGateways;
 import dev.ucplab.service.run.DemoModel;
 import dev.ucplab.service.run.RunSupervisor;
 import dev.ucplab.service.run.RunSupervisorConfig;
-import dev.ucplab.ucp.CatalogClient;
 import dev.ucplab.ucp.CircuitBreakers;
-import dev.ucplab.ucp.JdkHttpTransport;
-import dev.ucplab.ucp.Sleeper;
-import dev.ucplab.ucp.UcpConfig;
 import dev.ucplab.ucp.registry.ConfiguredMerchantRegistry;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
-import java.util.random.RandomGenerator;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -65,17 +60,15 @@ public class RunConfiguration {
 
     /** One catalog client per configured merchant, over the same gateway and the one {@link CircuitBreakers} (8.3, 19). */
     @Bean
-    CatalogClients catalogClients(ConfiguredGateways gateways, UcpConfig ucp, CircuitBreakers breakers, Clock clock,
-                                  RandomGenerator random, IdGenerator ids) {
-        Map<MerchantId, CatalogClient> byId = new LinkedHashMap<>();
-        gateways.byId().forEach((id, gateway) -> byId.put(id, new CatalogClient(gateway, ucp, new JdkHttpTransport(ucp),
-                breakers, clock, Sleeper.THREAD, random, ids)));
+    CatalogClients catalogClients(ConfiguredGateways gateways, MerchantWiring.GatewayParts parts) {
+        Map<MerchantId, CatalogGateway> byId = new LinkedHashMap<>();
+        gateways.byId().forEach((id, gateway) -> byId.put(id, MerchantWiring.catalog(gateway, parts)));
         return new CatalogClients(Map.copyOf(byId));
     }
 
     /** The first merchant's catalog client: M6's one client, which a test or a single-merchant caller can still ask for. */
     @Bean
-    CatalogClient catalogClient(ServiceProperties properties, CatalogClients clients) {
+    CatalogGateway catalogClient(ServiceProperties properties, CatalogClients clients) {
         return clients.byId().get(properties.merchant().id());
     }
 
@@ -92,7 +85,7 @@ public class RunConfiguration {
     }
 
     /** The catalog client of each configured merchant, SUSPENDED ones included (19). */
-    public record CatalogClients(Map<MerchantId, CatalogClient> byId) {
+    public record CatalogClients(Map<MerchantId, CatalogGateway> byId) {
         public CatalogClients {
             byId = Map.copyOf(Objects.requireNonNull(byId, "byId"));
         }

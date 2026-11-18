@@ -62,6 +62,17 @@ public final class CircuitBreaker implements Gate {
         }
     }
 
+    /** Closed, or open (or half-open) for a full period, so a probe is due; reads the state without changing it. */
+    @Override
+    public boolean admitting() {
+        lock.lock();
+        try {
+            return state == State.CLOSED || !clock.instant().isBefore(since.plus(openFor));
+        } finally {
+            lock.unlock();
+        }
+    }
+
     @Override
     public void record(CallOutcome<?> outcome) {
         Objects.requireNonNull(outcome, "outcome");

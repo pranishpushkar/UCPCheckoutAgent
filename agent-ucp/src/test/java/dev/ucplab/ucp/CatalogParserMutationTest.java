@@ -122,7 +122,7 @@ class CatalogParserMutationTest {
             assertThat(((CatalogParser.Parsed.Found<CatalogPage>) CatalogParser.parseSearch(bytes("{\"products\":[]" + pagination + "}"))).value()
                     .hasNextPage()).as(pagination).isFalse();
         }
-        for (String description : new String[] {"", ",\"description\":\"x\"", ",\"description\":{\"html\":\"x\"}", ",\"description\":{\"plain\":\" \"}",
+        for (String description : new String[] {"", ",\"description\":\"x\"", ",\"description\":{\"markdown\":\"x\"}", ",\"description\":{\"plain\":\" \"}",
                 ",\"description\":{\"plain\":5}"}) {
             CatalogProduct one = ((CatalogParser.Parsed.Found<CatalogProduct>) CatalogParser.parseProduct(
                     bytes("{\"product\":{\"id\":\"p\",\"title\":\"t\"" + description + ",\"variants\":[" + VARIANT + "]}}"))).value();

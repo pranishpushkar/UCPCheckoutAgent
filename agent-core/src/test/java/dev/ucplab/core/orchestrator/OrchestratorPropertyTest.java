@@ -75,6 +75,15 @@ class OrchestratorPropertyTest {
         check("I7", mode, Invariants::i7);
     }
 
+    // Covers: I12, 7.2, 7.6, 19, 26.5, 14.1 Merchant strictness (a catch-all at the merchant: with the registry entry
+    // flipped at random points of the schedule, no mutating call reaches a merchant failing I12 or changed under its
+    // intent, whichever send it is)
+    @ParameterizedTest(name = "{0} merchant")
+    @EnumSource(FaultyMerchantModel.Mode.class)
+    void property_noMutatingCallReachesAMerchantFailingI12_forEveryGeneratedSchedule(FaultyMerchantModel.Mode mode) {
+        check("I12", mode, Invariants::i12);
+    }
+
     /** The first {@code n} schedules a run from {@code base} checks (14.1 seed chain). */
     private static List<Schedule> schedules(long base, int n) {
         List<Schedule> out = new ArrayList<>(n);
@@ -121,7 +130,14 @@ class OrchestratorPropertyTest {
         }
         assertThat(kinds).contains("Propose", "Approve", "ApproveStale", "Reject", "Wait", "SetPrice", "SetStock",
                 "Crash", "fault:NotSent", "fault:CommitThenDrop", "fault:DelayResponse", "fault:DelayForward",
-                "fault:Duplicate", "fault:PriceChange", "fault:StockChange");
+                "fault:Duplicate", "fault:PriceChange", "fault:StockChange", "FlipEntry");
+        // I12: every registry flip kind, so each of the four fingerprint fields is changed somewhere (14.1).
+        Set<ScheduleEntry.Registry> flips = EnumSet.noneOf(ScheduleEntry.Registry.class);
+        for (Schedule schedule : schedules(PropertySettings.DEFAULT_SEED, 2_000)) {
+            schedule.entries().stream().filter(ScheduleEntry.FlipEntry.class::isInstance)
+                    .forEach(e -> flips.add(((ScheduleEntry.FlipEntry) e).entry()));
+        }
+        assertThat(flips).containsExactlyInAnyOrder(ScheduleEntry.Registry.values());
     }
 
     // Covers: 14.1 Reach check, I5, P8, S9 (the schedules reach every terminal state, fired crashes, same-key
@@ -132,8 +148,14 @@ class OrchestratorPropertyTest {
         int crashes = 0;
         int resendRuns = 0;
         int capRuns = 0;
+        Set<String> reasons = new HashSet<>();
+        int flipThenSent = 0;
+        int flipThenRefused = 0;
         for (Schedule schedule : schedules(PropertySettings.DEFAULT_SEED, 2_000)) {
             Observations o = executor.run(schedule);
+            reasons.addAll(o.ownStore().endReasons());
+            flipThenSent += o.ownStore().flipped() && o.ownStore().callsAfterFlip() > 0 ? 1 : 0;
+            flipThenRefused += o.ownStore().flipped() && o.ownStore().refusedSends() > 0 ? 1 : 0;
             o.samples().stream().filter(s -> s.phase() == Observations.Phase.END).forEach(s -> ends.add(s.state()));
             crashes += o.crashes().size();
             List<IdempotencyKey> keys = o.calls().stream().filter(c -> c.call() == MerchantCall.COMPLETE)
@@ -146,6 +168,10 @@ class OrchestratorPropertyTest {
         assertThat(crashes).isPositive();
         assertThat(resendRuns).isPositive();
         assertThat(capRuns).isPositive();
+        // I12 (H5 C2): the flips reach each I12 outcome, so the I12 property is not passing on unflipped runs only.
+        assertThat(reasons).contains("merchant_changed", "policy_I12");
+        assertThat(flipThenSent).as("runs with a flip and then a send that reached the merchant").isPositive();
+        assertThat(flipThenRefused).as("runs with a flip and then a send that I12 stopped").isPositive();
     }
 
     // Covers: 14.1 On failure (shrinking keeps only the entries the failure needs)

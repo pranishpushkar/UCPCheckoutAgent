@@ -6,6 +6,7 @@ import dev.ucplab.core.merchant.Buyer;
 import dev.ucplab.core.merchant.CallOutcome;
 import dev.ucplab.core.merchant.CheckoutStatus;
 import dev.ucplab.core.merchant.CheckoutView;
+import dev.ucplab.core.merchant.ContinueUrl;
 import dev.ucplab.core.merchant.FulfillmentView;
 import dev.ucplab.core.merchant.LineView;
 import dev.ucplab.core.merchant.MerchantMessage;
@@ -30,7 +31,7 @@ class RedactorFieldsTest {
                         List.of(new FulfillmentView.Destination("addr_1", Optional.of("US"))), Optional.of("addr_1"),
                         List.of(new FulfillmentView.Group("g", List.of("li_1"),
                                 List.of(new FulfillmentView.Option("std", "Standard", 1500)), Optional.of("std"))))))),
-                1500, true);
+                1500, true, Optional.of(new ContinueUrl(java.net.URI.create("https://shop.example/c?key=k"))));
         for (RecordComponent c : CheckoutView.class.getRecordComponents()) {
             Object v = c.getAccessor().invoke(full);
             assertThat(v).as("the test sets %s to a non-default value", c.getName()).isNotNull();

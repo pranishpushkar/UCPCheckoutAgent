@@ -21,6 +21,8 @@ final class ResultFields {
     static final Set<String> WRAPPED_UNLESS_ID = Set.of("item_id", "order_id", "failure_reason");
     /** Our own fields: ids, codes, states and the currency. */
     static final Set<String> OWN = Set.of("merchant_id", "intent_id", "state", "currency", "error");
+    /** Fixed texts of ours, each with the only values it may hold (6.2 note: never merchant text). */
+    static final Map<String, Set<String>> FIXED = Map.of("note", Set.of(GetPurchaseStatusTool.HANDED_OFF_NOTE));
     /** Containers and numbers. */
     static final Set<String> STRUCTURE = Set.of("items", "quote", "lines", "price_minor", "total_minor", "quantity",
             "unit_price_minor", "in_stock");
@@ -38,7 +40,7 @@ final class ResultFields {
         switch (value) {
             case Map<?, ?> map -> map.forEach((k, v) -> {
                 assertThat(WRAPPED.contains(k) || WRAPPED_UNLESS_ID.contains(k) || OWN.contains(k)
-                        || STRUCTURE.contains(k)).as("a field this test knows: " + k).isTrue();
+                        || FIXED.containsKey(k) || STRUCTURE.contains(k)).as("a field this test knows: " + k).isTrue();
                 walk((String) k, v);
             });
             case List<?> list -> list.forEach(v -> walk(key, v));
@@ -48,7 +50,9 @@ final class ResultFields {
     }
 
     private static void checkString(String key, String s) {
-        if (WRAPPED.contains(key)) {
+        if (FIXED.containsKey(key)) {
+            assertThat(FIXED.get(key)).as(key + " is one of our fixed texts").contains(s);
+        } else if (WRAPPED.contains(key)) {
             assertWrapped(key, s);
         } else if (WRAPPED_UNLESS_ID.contains(key)) {
             if (!ID.matcher(s).matches()) {

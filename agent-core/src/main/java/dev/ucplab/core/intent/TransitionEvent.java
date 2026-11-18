@@ -29,5 +29,26 @@ public enum TransitionEvent {
     OBSERVED_CANCELED,
     OBSERVED_INCOMPLETE,
     DEADLINE_REACHED,
-    APPROVAL_INVALID
+    APPROVAL_INVALID,
+    MERCHANT_NOT_OWNED,
+    MERCHANT_CHANGED,
+    COMPLETE_UNAVAILABLE,
+    /** 7.2 requires_escalation (handoff). */
+    REQUIRES_ESCALATION,
+    /** 7.2 hand_off. */
+    HAND_OFF,
+    /** 7.2 hand_off_changed. */
+    HAND_OFF_CHANGED,
+    /** 7.2 hand_off_gone. */
+    HAND_OFF_GONE,
+    /** 7.2 hand_off_refused. */
+    HAND_OFF_REFUSED,
+    /** 7.2 hand_off_unexpected. */
+    HAND_OFF_UNEXPECTED,
+    /** 7.2 handoff_timeout: 5 minutes since the approval's persisted decision time (7.6). */
+    HANDOFF_TIMEOUT,
+    /** 7.2 update_rejected: the merchant refused an update with an error envelope (8.1). */
+    UPDATE_REJECTED,
+    /** 7.2 quote_unsupported (handoff), and fulfillment_unsupported: a readable answer the agent cannot use. */
+    QUOTE_UNSUPPORTED
 }

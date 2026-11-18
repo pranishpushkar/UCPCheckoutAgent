@@ -9,6 +9,8 @@ import dev.ucplab.core.intent.IntentRepository;
 import dev.ucplab.core.intent.LeaseLostException;
 import dev.ucplab.core.intent.PurchaseIntent;
 import dev.ucplab.core.intent.StaleVersionException;
+import dev.ucplab.core.merchant.Completion;
+import dev.ucplab.service.config.MerchantCompletions;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -32,17 +34,23 @@ import org.springframework.web.bind.annotation.RestController;
 final class ApprovalController {
 
     static final String BAD_BODY = "token and decision (approve or reject) are required";
+    /** 23.2: the note of a handoff merchant's approval, a fixed text of ours (never merchant text). */
+    static final String HANDOFF_NOTE =
+            "Shipping and tax are added by the store; you see the final total before you pay there.";
     private static final int MAX_TOKEN_LENGTH = 1024;
     private static final System.Logger LOG = System.getLogger(ApprovalController.class.getName());
 
     private final DefaultApprovalService approvals;
     private final IntentRepository intents;
     private final IntentDriver driver;
+    private final MerchantCompletions completions;
 
-    ApprovalController(DefaultApprovalService approvals, IntentRepository intents, IntentDriver driver) {
+    ApprovalController(DefaultApprovalService approvals, IntentRepository intents, IntentDriver driver,
+                       MerchantCompletions completions) {
         this.approvals = Objects.requireNonNull(approvals, "approvals");
         this.intents = Objects.requireNonNull(intents, "intents");
         this.driver = Objects.requireNonNull(driver, "driver");
+        this.completions = Objects.requireNonNull(completions, "completions");
     }
 
     @GetMapping("/api/intents/{id}/approval")
@@ -53,6 +61,11 @@ final class ApprovalController {
         body.put("snapshot", QuoteCard.of(pending.snapshot()));
         body.put("expires_at", pending.snapshot().expiresAt().toString());
         body.put("token", pending.token());
+        // 23.2: outside the snapshot, so its hash (9.2) is unchanged; only at a handoff merchant.
+        if (completions.of(pending.snapshot().merchantId()) == Completion.HANDOFF) {
+            body.put("completion", "handoff");
+            body.put("note", HANDOFF_NOTE);
+        }
         return body;
     }
 
