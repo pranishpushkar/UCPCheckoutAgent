@@ -258,14 +258,14 @@ class SpikeTest(unittest.TestCase):
                     "first_name": "Canaryfirst", "last_name": "Canarylast", "street_address": "1 Canary St",
                     "extended_address": "Apt canary", "address_locality": "Canaryville", "address_region": "CN",
                     "postal_code": "99999", "address_country": "United States", "id": "destination_0"}]}]},
-                "order": {"id": "gid://shopify/Order/42", "label": "5J6C8", "permalink_url":
+                "order": {"id": "gid://shopify/Order/42", "label": "LBLFAKE01", "permalink_url":
                           "https://" + STORE + "/checkouts/cn/canary-path/thank_you?session_token=canary-session-666"}}
         answer = {"result": {"structuredContent": paid, "content": [{"type": "text", "text": json.dumps(paid)}]}}
         text = json.dumps(s.sanitize(answer))
         for canary in ("canary-session-666", "session_token", "canary-path", "thank_you", "canary-buyer", "+1555",
                        "Canaryfirst", "Canarylast", "1 Canary St", "Apt canary", "Canaryville", "99999", "canary-key-444"):
             self.assertNotIn(canary, text)
-        for kept in ("gid://shopify/Order/42", "5J6C8", "completed", "United States", "destination_0"):
+        for kept in ("gid://shopify/Order/42", "LBLFAKE01", "completed", "United States", "destination_0"):
             self.assertIn(kept, text)
         self.assertEqual(s.sanitize(answer)["result"]["structuredContent"]["order"]["permalink_url"],
                          s.host_only(paid["order"]["permalink_url"]))
