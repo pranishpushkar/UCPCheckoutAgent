@@ -1,18 +1,22 @@
 package dev.ucplab.core.recovery;
 
 import dev.ucplab.core.id.IdGenerator;
+import dev.ucplab.core.intent.HandoffWatch;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentRepository;
+import dev.ucplab.core.intent.IntentState;
 import dev.ucplab.core.intent.LeaseLostException;
 import dev.ucplab.core.intent.Orchestrator;
 import dev.ucplab.core.intent.PurchaseIntent;
 import dev.ucplab.core.intent.RecoveryScan;
 import dev.ucplab.core.intent.StaleVersionException;
 import dev.ucplab.core.intent.StepResult;
+import dev.ucplab.core.merchant.MerchantId;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -25,8 +29,9 @@ import java.util.concurrent.Executor;
  * Recovery of intents a crash or a lapsed lease left behind (7.6). One {@link #runOnce pass} claims the intents that
  * need a worker, oldest first, up to a limit, and drives each as a series of short {@code advance} calls.
  *
- * <p><b>What a pass picks up.</b> {@link IntentRepository#claimRecoverable} (QUOTING, APPROVED, COMPLETING, RECONCILING
- * and any intent with {@code cancel_pending}, whose lease is free or expired) and {@link RecoveryScan#approvalsDue}
+ * <p><b>What a pass picks up.</b> {@link IntentRepository#claimRecoverable} (QUOTING, APPROVED, COMPLETING, RECONCILING,
+ * any intent with {@code cancel_pending}, and a HANDED_OFF intent whose follow-up read is due, whose lease is free or
+ * expired; at most {@link HandoffWatch#READS_PER_MERCHANT_PER_PASS} follow-ups per merchant per pass) and {@link RecoveryScan#approvalsDue}
  * (AWAITING_APPROVAL with an expired approval). Intents found by the scan are not claimed here: {@code advance} takes
  * the lease itself.
  *
@@ -104,7 +109,15 @@ public final class RecoveryWorker {
         Set<IntentId> parked = renewParked();
         List<PurchaseIntent> claimed = intents.claimRecoverable(workerId, config.lease(), config.limit(), parked);
         List<IntentId> picked = new ArrayList<>();
+        Map<MerchantId, Integer> followUps = new HashMap<>();
         for (PurchaseIntent intent : claimed) {
+            if (intent.state() == IntentState.HANDED_OFF
+                    && followUps.merge(intent.merchantId(), 1, Integer::sum) > HandoffWatch.READS_PER_MERCHANT_PER_PASS) {
+                // 7.6, 8.3: the follow-up's get bypasses the breaker and takes no token, so a pass reads at most this
+                // many follow-ups per merchant; the rest are released for the next pass.
+                intents.releaseLease(intent.id(), workerId);
+                continue;
+            }
             picked.add(intent.id());
         }
         int claimedCount = picked.size();

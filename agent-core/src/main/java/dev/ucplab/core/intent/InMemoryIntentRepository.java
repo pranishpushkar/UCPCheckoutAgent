@@ -265,10 +265,12 @@ public final class InMemoryIntentRepository implements IntentRepository {
             Instant until = now.plus(lease);
             List<PurchaseIntent> candidates = intents.values().stream()
                     .filter(i -> !exclude.contains(i.id()))
-                    .filter(i -> RECOVERABLE.contains(i.state()) || i.cancelPending())
+                    .filter(i -> RECOVERABLE.contains(i.state()) || i.cancelPending() || followUpDue(i, now))
                     .filter(i -> i.leaseOwner().equals(Optional.of(owner))
                             || i.leaseUntil().map(t -> t.isBefore(now)).orElse(true))
-                    .sorted(Comparator.comparing(PurchaseIntent::createdAt).thenComparing(i -> i.id().value()))
+                    // Follow-ups last (7.6), so they cannot crowd the other recoverable intents out of a pass.
+                    .sorted(Comparator.comparing((PurchaseIntent i) -> followUpDue(i, now))
+                            .thenComparing(PurchaseIntent::createdAt).thenComparing(i -> i.id().value()))
                     .limit(limit)
                     .toList();
             List<PurchaseIntent> claimed = new ArrayList<>(candidates.size());
@@ -401,6 +403,17 @@ public final class InMemoryIntentRepository implements IntentRepository {
             throw new IllegalArgumentException("7.2: intent " + intent.id() + " has a handoff_url in state "
                     + intent.state());
         }
+        // 7.6, 10: the follow-up too, as V10's CHECKs hold it in SQL.
+        if (!intent.handoffWatch().equals(HandoffWatch.NONE) && intent.state() != IntentState.HANDED_OFF) {
+            throw new IllegalArgumentException("7.6: intent " + intent.id() + " has a handoff follow-up in state "
+                    + intent.state());
+        }
+    }
+
+    /** 7.6: a HANDED_OFF intent whose follow-up is watching and whose next read is due at {@code now}. */
+    private static boolean followUpDue(PurchaseIntent i, Instant now) {
+        return i.state() == IntentState.HANDED_OFF && i.handoffWatch().watching()
+                && i.handoffWatch().nextReadAt().map(t -> !t.isAfter(now)).orElse(false);
     }
 
     /** Caller holds the lock. Refuses a session change once a complete attempt exists (I4). */

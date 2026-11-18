@@ -46,9 +46,14 @@ class HandoffFollowUpTest {
     static final String ORDER = "gid://shopify/Order/42";
     static final String LABEL = "CANARYLABEL7";
 
-    final Lab lab = new Lab();
+    protected final Lab lab = newLab();
     FollowUpGateway store;
     Lab.Worker worker;
+
+    /** A lab over the store under test: the in-memory adapters here, SQLite in {@code SqlHandoffFollowUpTest}. */
+    protected Lab newLab() {
+        return new Lab();
+    }
 
     HandoffFollowUpTest() {
         lab.entries = id -> id.equals(SHOP) ? Optional.of(HandoffTest.HANDOFF) : Optional.empty();
@@ -202,7 +207,7 @@ class HandoffFollowUpTest {
         assertThat(events(canceled, "handoff_follow_up_ended")).containsExactly("{\"reads\":1,\"reason\":\"canceled\"}");
         assertThat(store.reads).hasSize(1);
 
-        Lab other = new Lab();
+        Lab other = newLab();
         other.entries = lab.entries;
         FollowUpGateway gone = new FollowUpGateway(
                 new RewritingGateway(other.merchant).rewrite(MerchantCall.GET, HandoffTest.withUrl(URL)), other.clock);
@@ -278,8 +283,8 @@ class HandoffFollowUpTest {
         lab.intents.releaseLease(id, "w");
     }
 
-    // Covers: 7.6 (the cap of 60 counted reads is a backstop: at 60 the step ends the follow-up with reads_exhausted and
-    // reads nothing; at 59 it still reads)
+    // Covers: 7.6 (the cap of 60 counted reads is a backstop: at 59 the step still reads; after the 60th the next due step
+    // ends the follow-up with reads_exhausted, ahead of the window's end, and reads nothing)
     @Test
     void sixtyCountedReads_endIt_withReadsExhausted_andFiftyNineDoNot() {
         IntentId id = handedOff();
@@ -289,7 +294,7 @@ class HandoffFollowUpTest {
         assertThat(store.reads).hasSize(1);
         assertThat(events(id, "handoff_follow_up_ended")).isEmpty();
 
-        run(id, Duration.ofMinutes(5));
+        run(id, Duration.ofHours(25));
 
         assertThat(store.reads).as("the 60th read is the last").hasSize(1);
         assertThat(events(id, "handoff_follow_up_ended")).containsExactly("{\"reads\":60,\"reason\":\"reads_exhausted\"}");
