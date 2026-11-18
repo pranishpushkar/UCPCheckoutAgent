@@ -45,4 +45,12 @@ public interface Gate {
 
     /** An admitted attempt got a usable reply whose body is not a checkout (a discovery profile): the host is alive. */
     void recordReplied();
+
+    /**
+     * Whether {@link #tryAcquire} would be worth asking now (7.6 M3 note): read without changing anything, so no token or
+     * half-open slot is used. A gate that said yes can still refuse.
+     */
+    default boolean admitting() {
+        return true;
+    }
 }

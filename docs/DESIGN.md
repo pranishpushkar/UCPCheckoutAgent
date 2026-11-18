@@ -397,7 +397,7 @@ A `RecoveryWorker` runs every 5 s and once at startup. It selects intents in `QU
 
 Each crash adds at most one lease period plus one worker period (30 s + 5 s = 35 s) before another worker takes over.
 
-**M3 note, a crash in QUOTING.** The orchestrator does not resend a QUOTING call after a crash (7.2): an intent whose create attempt was left `SENT`, or `UNCERTAIN` after an answer that was not `NotSent`, ends FAILED\_NOT\_CHARGED, and the merchant may hold a session for it that no order will ever use. `RecoveryWorker` handles this: it re-sends the create under the same idempotency key and the same frozen body only to learn the session id (the merchant returns the stored result), and then cancels that session. It never completes it.
+**M3 note, a crash in QUOTING.** The orchestrator does not resend a QUOTING call after a crash (7.2): an intent whose create attempt was left `SENT`, or `UNCERTAIN` after an answer that was not `NotSent`, ends FAILED\_NOT\_CHARGED, and the merchant may hold a session for it that no order will ever use. `RecoveryWorker` handles this: it re-sends the create under the same idempotency key and the same frozen body only to learn the session id (the merchant returns the stored result), and then cancels that session. It never completes it. A probe the circuit breaker or rate limiter refused (`NotSent`) reached no merchant and does not count toward the three; it is sent again on a later pass. Probing ends, with `orphan_probe_gave_up` (reason `deadline`), at the first probe step 10 minutes or more after the original create was sent (its attempt's `sent_at`), so an outage cannot keep it going. A probe step that finds `admitsCalls()` false writes nothing and sends nothing; the deadline still applies.
 
 Lease rules \[CONTRACT\]:
 
@@ -1419,6 +1419,9 @@ public interface MerchantGateway {
   CallOutcome<CheckoutView> complete(SessionId id, FrozenBody body, IdempotencyKey key);
   CallOutcome<CheckoutView> cancel(SessionId id, IdempotencyKey key);
   CallOutcome<CheckoutView> get(SessionId id);
+  /** False while this merchant's circuit breaker is open or its rate limiter is blocked by a Retry-After (8.3).
+   *  A hint read without sending, taking a token or using the half-open slot; a call it allowed can still come back NotSent. */
+  default boolean admitsCalls() { return true; }
 }
 
 public sealed interface CallOutcome<T> {

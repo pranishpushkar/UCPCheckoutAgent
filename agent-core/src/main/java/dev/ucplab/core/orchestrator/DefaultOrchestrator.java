@@ -173,6 +173,8 @@ public final class DefaultOrchestrator implements Orchestrator {
 
     /** Probe creates for one orphaned session before the worker gives up (7.6 M3 note). */
     static final int MAX_PROBE_ATTEMPTS = 3;
+    /** 7.6 M3 note: probing ends at the first probe step this long after the original create was sent. */
+    static final Duration PROBE_DEADLINE = Duration.ofMinutes(10);
 
     private static final int MAX_RATIONALE = 300;
     private static final System.Logger LOG = System.getLogger(DefaultOrchestrator.class.getName());
@@ -1428,7 +1430,9 @@ public final class DefaultOrchestrator implements Orchestrator {
      * rebuilt from the intent is byte-identical to the frozen one (else nothing is sent), to learn the session id from the
      * merchant's stored result; the next step cancels it. It never completes: the intent is terminal. At most
      * {@link #MAX_PROBE_ATTEMPTS} probes; a Rejected answer ends the probe (no session exists), any other answer that is not Ok
-     * counts, and the last one gives up with an event.
+     * counts, and the last one gives up with an event. A probe the breaker or rate limiter refused (NotSent) reached no
+     * merchant and does not count; while the merchant's gateway does not admit calls, a step writes and sends nothing.
+     * Probing ends at the first step {@link #PROBE_DEADLINE} or more after the original create was sent.
      */
     private Step probeOrphanSession(PurchaseIntent intent, List<MerchantAttempt> attempts) {
         List<MerchantAttempt> creates = attempts.stream()
@@ -1436,11 +1440,14 @@ public final class DefaultOrchestrator implements Orchestrator {
         if (creates.isEmpty()) {
             return stopProbing(intent, "orphan_probe_no_create", Map.of());
         }
-        int probes = creates.size() - 1;
+        MerchantAttempt original = creates.get(0);
+        int probes = (int) creates.stream().skip(1).filter(a -> !refusedProbe(a)).count();
         if (probes >= MAX_PROBE_ATTEMPTS) {
             return stopProbing(intent, "orphan_probe_gave_up", Map.of("probes", probes));
         }
-        MerchantAttempt original = creates.get(0);
+        if (!clock.instant().isBefore(original.sentAt().plus(PROBE_DEADLINE))) {
+            return stopProbing(intent, "orphan_probe_gave_up", Map.of("probes", probes, "reason", "deadline"));
+        }
         CreateCheckout request = new CreateCheckout(intent.lines(), buyerEmailFor(intent));
         FrozenBody frozen = original.requestBody().orElse(null);
         IdempotencyKey key = original.idempotencyKey().orElse(null);
@@ -1449,6 +1456,10 @@ public final class DefaultOrchestrator implements Orchestrator {
         }
 
         MerchantGateway merchant = gateway(intent);
+        if (!merchant.admitsCalls()) {
+            // The breaker or rate limiter would refuse it (8.3): nothing is written or sent; a later pass tries again.
+            return idle(intent);
+        }
         // An attempt left SENT by a crash is settled as uncertain first, fenced like every write here; it counts as a probe.
         List<AttemptId> unresolved = creates.stream().filter(a -> a.status() == AttemptStatus.SENT)
                 .map(MerchantAttempt::id).toList();
@@ -1479,7 +1490,7 @@ public final class DefaultOrchestrator implements Orchestrator {
         Optional<Integer> http = outcome instanceof CallOutcome.ProtocolError<CheckoutView> e
                 ? Optional.of(e.httpStatus())
                 : Optional.empty();
-        boolean last = probes + 1 >= MAX_PROBE_ATTEMPTS;
+        boolean last = !(outcome instanceof CallOutcome.NotSent<CheckoutView>) && probes + 1 >= MAX_PROBE_ATTEMPTS;
         PurchaseIntent next = written.withCancelPending(!last).withState(written.state(), clock.instant());
         resolve(attempt, answered ? AttemptStatus.RESPONDED : AttemptStatus.UNCERTAIN, http,
                 Optional.of(describe(outcome)), next, written.version());
@@ -1488,6 +1499,11 @@ public final class DefaultOrchestrator implements Orchestrator {
             event(intent.id(), "orphan_probe_gave_up", Map.of("probes", probes + 1));
         }
         return new Step(intent.state(), intent.state(), false, Optional.empty());
+    }
+
+    /** A probe the breaker or rate limiter refused: only such an attempt is stored with the outcome {@code not_sent}. */
+    private static boolean refusedProbe(MerchantAttempt a) {
+        return a.responseJson().filter(r -> r.contains("\"outcome\":\"not_sent\"")).isPresent();
     }
 
     /** Clears the owed cancel without sending anything, and leaves an event for the operator. */

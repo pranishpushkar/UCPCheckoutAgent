@@ -95,6 +95,7 @@ public final class UcpHttpGateway implements MerchantGateway {
     private final Set<String> ucpVersions;
     private final Clock clock;
     private final RetryExecutor executor;
+    private final Gate gate;
     private final AtomicReference<Cached> cache = new AtomicReference<>();
 
     public UcpHttpGateway(
@@ -158,9 +159,15 @@ public final class UcpHttpGateway implements MerchantGateway {
             allowed.add(normalizeHostPort(h, base.getScheme()));
         }
         this.allowedHostPorts = Set.copyOf(allowed);
+        this.gate = Objects.requireNonNull(breakers, "breakers").gateFor(merchant.id());
         this.executor = new RetryExecutor(config, Objects.requireNonNull(transport, "transport"),
-                new FailureClassifier(clock), Objects.requireNonNull(breakers, "breakers").gateFor(merchant.id()),
-                sleeper, random, ids);
+                new FailureClassifier(clock), gate, sleeper, random, ids);
+    }
+
+    /** 8.3: false while this merchant's breaker is open or its limiter is blocked by a Retry-After. */
+    @Override
+    public boolean admitsCalls() {
+        return gate.admitting();
     }
 
     // ---------------------------------------------------------------- discovery

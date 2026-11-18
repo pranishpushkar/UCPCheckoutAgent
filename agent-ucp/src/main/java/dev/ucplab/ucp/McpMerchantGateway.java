@@ -113,6 +113,7 @@ public final class McpMerchantGateway implements MerchantGateway {
     private final Redactor redactor;
     private final RetryExecutor discovery;
     private final RetryExecutor tools;
+    private final Gate gate;
     private final AtomicReference<Cached> cache = new AtomicReference<>();
 
     /**
@@ -177,12 +178,18 @@ public final class McpMerchantGateway implements MerchantGateway {
         }
         this.allowedHostPorts = Set.copyOf(allowed);
         Objects.requireNonNull(transport, "transport");
-        Gate gate = Objects.requireNonNull(breakers, "breakers").gateFor(merchant.id());
+        this.gate = Objects.requireNonNull(breakers, "breakers").gateFor(merchant.id());
         this.discovery = new RetryExecutor(config, new StoreHeaders(transport, Optional.empty(), buyerIp),
                 new FailureClassifier(clock), gate, sleeper, random, ids);
         this.tools = new RetryExecutor(config,
                 new StoreHeaders(new McpTransport(transport, agentVersion), Optional.of(tokens), buyerIp),
                 new FailureClassifier(clock), gate, sleeper, random, ids);
+    }
+
+    /** 8.3: false while the store's breaker is open or its limiter is blocked by a Retry-After. */
+    @Override
+    public boolean admitsCalls() {
+        return gate.admitting();
     }
 
     // ---------------------------------------------------------------- discovery

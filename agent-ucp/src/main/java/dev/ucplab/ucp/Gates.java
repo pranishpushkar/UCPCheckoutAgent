@@ -47,6 +47,11 @@ public final class Gates {
             public void recordReplied() {
                 list.forEach(Gate::recordReplied);
             }
+
+            @Override
+            public boolean admitting() {
+                return list.stream().allMatch(Gate::admitting);
+            }
         };
     }
 }

@@ -276,4 +276,138 @@ class OrphanProbeTest {
                 .noneMatch(e -> e.type().equals("orphan_probe_gave_up"));
         assertThat(attempts(id, AttemptOp.CANCEL)).isEmpty();
     }
+
+    private static final java.time.Duration PASS = java.time.Duration.ofSeconds(5);
+
+    /** A create the merchant made but whose answer was lost, at a worker whose gates the test controls. */
+    private IntentId orphanBehind(GatedGateway gated) {
+        lab.merchant.addRule(FaultRule.nth(MerchantCall.CREATE, 1, new Fault.CommitThenDrop()));
+        IntentId id = lab.propose(lab.worker("worker-g", gated), TWO_SHIRTS).intentId();
+        assertThat(lab.intent(id).cancelPending()).isTrue();
+        assertThat(lab.intent(id).sessionId()).isEmpty();
+        return id;
+    }
+
+    private java.time.Instant deadline(IntentId id) {
+        return attempts(id, AttemptOp.CREATE).get(0).sentAt().plus(DefaultOrchestrator.PROBE_DEADLINE);
+    }
+
+    private List<String> gaveUp(IntentId id) {
+        return lab.events(id).stream().filter(e -> e.type().equals("orphan_probe_gave_up")).map(Object::toString).toList();
+    }
+
+    // Covers: 7.6 M3 note, 8.3 (a probe the breaker refused, NotSent, reached no merchant and does not count toward the
+    // three: after three refused probes the probe is still owed)
+    @Test
+    void aProbeTheBreakerRefused_doesNotCount() {
+        GatedGateway gated = new GatedGateway(lab.merchant);
+        IntentId id = orphanBehind(gated);
+        gated.refusing = true;
+        Lab.Worker worker = lab.worker("worker-g", gated);
+
+        for (int pass = 0; pass < 3; pass++) {
+            worker.orchestrator().advance(id);
+            lab.clock.advance(PASS);
+        }
+
+        assertThat(gated.refusedCreates).isEqualTo(3);
+        assertThat(lab.intent(id).cancelPending()).isTrue();
+        assertThat(gaveUp(id)).isEmpty();
+    }
+
+    // Covers: 7.6 M3 note, I5 (a breaker that refuses every probe cannot keep the probe going: at the first step 10 minutes
+    // or more after the original create was sent, it gives up with reason deadline, sends nothing more, and the rows it
+    // wrote are at most one per step)
+    @Test
+    void aProbeTheBreakerKeepsRefusing_givesUpAtItsDeadline() {
+        GatedGateway gated = new GatedGateway(lab.merchant);
+        IntentId id = orphanBehind(gated);
+        gated.refusing = true;
+        Lab.Worker worker = lab.worker("worker-g", gated);
+        int steps = 0;
+
+        while (lab.clock.instant().isBefore(deadline(id))) {
+            worker.orchestrator().advance(id);
+            steps++;
+            lab.clock.advance(PASS);
+        }
+        assertThat(gaveUp(id)).as("before the deadline").isEmpty();
+        int refusedBefore = gated.refusedCreates;
+        worker.orchestrator().advance(id);
+
+        assertThat(gated.refusedCreates).as("nothing sent at the deadline").isEqualTo(refusedBefore);
+        assertThat(gaveUp(id)).singleElement().satisfies(e -> assertThat(e).contains("\"reason\":\"deadline\""));
+        assertThat(lab.intent(id).cancelPending()).isFalse();
+        assertThat(attempts(id, AttemptOp.CREATE)).hasSizeLessThanOrEqualTo(1 + steps);
+        assertThat(calls(MerchantCall.CREATE)).isEqualTo(1);
+        assertNothingWasEverCompleted();
+    }
+
+    // Covers: 7.6 M3 note, 8.3 (an outage: while the merchant's breaker is already open, a probe step writes no create row
+    // and sends nothing; after N passes the probe gives up at its deadline with reason deadline)
+    @Test
+    void anOutageOfNPasses_writesNoProbeRows_andGivesUpAtItsDeadline() {
+        GatedGateway gated = new GatedGateway(lab.merchant);
+        IntentId id = orphanBehind(gated);
+        gated.admitting = false;
+        gated.refusing = true;
+        Lab.Worker worker = lab.worker("worker-g", gated);
+        int passes = 0;
+
+        while (lab.clock.instant().isBefore(deadline(id))) {
+            worker.orchestrator().advance(id);
+            passes++;
+            lab.clock.advance(PASS);
+        }
+        assertThat(passes).isGreaterThan(100);
+        assertThat(attempts(id, AttemptOp.CREATE)).as("only the original create").hasSize(1);
+        assertThat(gated.refusedCreates).isZero();
+        assertThat(lab.intent(id).cancelPending()).isTrue();
+        worker.orchestrator().advance(id);
+
+        assertThat(attempts(id, AttemptOp.CREATE)).hasSize(1);
+        assertThat(gaveUp(id)).singleElement().satisfies(e -> assertThat(e).contains("\"reason\":\"deadline\""));
+        assertThat(lab.intent(id).cancelPending()).isFalse();
+        assertThat(calls(MerchantCall.CREATE)).isEqualTo(1);
+    }
+
+    // Covers: 7.6 M3 note (once the breaker admits calls again before the deadline, the probe goes out, finds the
+    // session and cancels it)
+    @Test
+    void aProbeAfterTheOutage_findsTheSession_andCancels() {
+        GatedGateway gated = new GatedGateway(lab.merchant);
+        IntentId id = orphanBehind(gated);
+        gated.admitting = false;
+        Lab.Worker worker = lab.worker("worker-g", gated);
+        for (int pass = 0; pass < 10; pass++) {
+            worker.orchestrator().advance(id);
+            lab.clock.advance(PASS);
+        }
+        gated.admitting = true;
+
+        assertThat(lab.drive(worker, id)).isEqualTo(FAILED_NOT_CHARGED);
+
+        assertThat(attempts(id, AttemptOp.CREATE)).hasSize(2);
+        assertThat(lab.merchant.session(lab.intent(id).sessionId().orElseThrow()).orElseThrow().status())
+                .isEqualTo(CheckoutStatus.CANCELED);
+    }
+
+    // Covers: 7.6 M3 note (two probes whose answers were lost count; a third the breaker refused does not, so it is not
+    // the last and the probe stays owed). Kills DefaultOrchestrator.probeOrphanSession:1493 (RemoveConditional_EQUAL_IF)
+    @Test
+    void aRefusedProbe_afterTwoLostOnes_isNotTheLast() {
+        lab.merchant.addRule(FaultRule.every(MerchantCall.CREATE, new Fault.CommitThenDrop()));
+        GatedGateway gated = new GatedGateway(lab.merchant);
+        IntentId id = lab.propose(lab.worker("worker-g", gated), TWO_SHIRTS).intentId();
+        Lab.Worker worker = lab.worker("worker-g", gated);
+        worker.orchestrator().advance(id);
+        worker.orchestrator().advance(id);
+        gated.refusing = true;
+
+        worker.orchestrator().advance(id);
+
+        assertThat(gated.refusedCreates).isEqualTo(1);
+        assertThat(lab.intent(id).cancelPending()).isTrue();
+        assertThat(gaveUp(id)).isEmpty();
+    }
 }

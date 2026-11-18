@@ -231,4 +231,29 @@ class CircuitBreakerTest {
 
         assertThat(breaker.state()).isEqualTo(CircuitBreaker.State.OPEN);
     }
+
+    // Covers: 8.3, 7.6 M3 note (a breaker a probe has just closed admits calls at once, although its open period, counted
+    // from the probe, has not run out). Kills CircuitBreaker.admitting:70 (RemoveConditional_EQUAL_IF)
+    @Test
+    void admitting_isTrueAtOnce_afterAProbeClosesIt() {
+        fail(5);
+        clock.advance(Duration.ofSeconds(30));
+        breaker.tryAcquire();
+        breaker.record(new CallOutcome.Rejected<>(200, List.of()));
+
+        assertThat(breaker.state()).isEqualTo(CircuitBreaker.State.CLOSED);
+        assertThat(breaker.admitting()).isTrue();
+    }
+
+    // Covers: 8.3, 7.8 (admitting releases the lock: after another thread asked, this one is not kept waiting). Kills
+    // CircuitBreaker.admitting:72 (VoidMethodCall unlock)
+    @Test
+    void admitting_releasesItsLock() throws InterruptedException {
+        Thread other = new Thread(breaker::admitting);
+        other.start();
+        other.join();
+
+        org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(Duration.ofSeconds(5),
+                () -> assertThat(breaker.tryAcquire()).isTrue());
+    }
 }

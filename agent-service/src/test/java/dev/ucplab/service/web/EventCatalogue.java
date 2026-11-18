@@ -44,7 +44,7 @@ public final class EventCatalogue {
             Map.entry("orphan_session_found", Set.of("probe")),
             Map.entry("orphan_probe_no_session", Set.of("probe")),
             Map.entry("orphan_probe_sent", Set.of("outcome", "probe")),
-            Map.entry("orphan_probe_gave_up", Set.of("probes")),
+            Map.entry("orphan_probe_gave_up", Set.of("probes", "reason")),
             Map.entry("orphan_probe_no_create", Set.of()),
             Map.entry("orphan_probe_body_mismatch", Set.of("attempt_id")));
 

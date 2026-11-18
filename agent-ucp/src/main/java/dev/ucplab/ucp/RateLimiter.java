@@ -102,6 +102,12 @@ public final class RateLimiter implements Gate {
     }
 
     /** Whether a 429 is blocking the bucket now. */
+    /** Not blocked by a Retry-After; takes no token. An empty bucket refills within a fraction of a second. */
+    @Override
+    public boolean admitting() {
+        return !blocked();
+    }
+
     public boolean blocked() {
         lock.lock();
         try {

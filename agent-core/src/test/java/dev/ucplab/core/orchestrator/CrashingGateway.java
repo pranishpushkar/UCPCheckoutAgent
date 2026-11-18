@@ -19,7 +19,7 @@ import java.util.function.Supplier;
  */
 final class CrashingGateway implements MerchantGateway {
 
-    enum Op { DISCOVER, CREATE, UPDATE, COMPLETE, CANCEL, GET }
+    enum Op { DISCOVER, CREATE, UPDATE, COMPLETE, CANCEL, GET, ADMITS_CALLS }
 
     private final MerchantGateway delegate;
     private final CrashPlan<Op> plan;
@@ -64,5 +64,11 @@ final class CrashingGateway implements MerchantGateway {
     @Override
     public CallOutcome<CheckoutView> get(SessionId id) {
         return call(Op.GET, () -> delegate.get(id));
+    }
+
+    /** No I/O and nothing to crash around (see CrashMatrixContract.LOCAL_READS); passed through so the gates still show. */
+    @Override
+    public boolean admitsCalls() {
+        return delegate.admitsCalls();
     }
 }

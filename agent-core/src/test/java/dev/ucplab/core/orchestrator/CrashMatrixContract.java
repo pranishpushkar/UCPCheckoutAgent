@@ -174,7 +174,14 @@ abstract class CrashMatrixContract {
     private static final Set<String> NOT_CALLED_BY_CORE = Set.of(
             "GATEWAY.DISCOVER", "INTENT.RESOLVE_ATTEMPT_UNFENCED");
 
-    // Covers: NFR4 (every method of the intent and approval repositories and of the gateway appears in a row)
+    /**
+     * Port methods that do no I/O and write nothing, so a crash before or after one is a crash before the step's first
+     * write, which the rows already cover. admitsCalls reads the merchant's gates in memory (8.3, 7.6 M3 note).
+     */
+    private static final Set<String> LOCAL_READS = Set.of("GATEWAY.ADMITS_CALLS");
+
+    // Covers: NFR4 (every method of the intent and approval repositories and of the gateway appears in a row, except
+    // those core never calls and those that do no I/O)
     @Test
     void boundaries_crashEveryPortMethod_exceptThoseCoreNeverCalls() {
         Set<String> covered = Stream.of(Boundary.values()).flatMap(b -> b.points.stream())
@@ -184,6 +191,7 @@ abstract class CrashMatrixContract {
         port(ApprovalRepository.class, CrashingApprovalRepository.Op.class, "APPROVAL", expected);
         port(MerchantGateway.class, CrashingGateway.Op.class, "GATEWAY", expected);
         expected.removeAll(NOT_CALLED_BY_CORE);
+        expected.removeAll(LOCAL_READS);
 
         assertThat(covered).containsAll(expected);
         assertThat(covered).doesNotContainAnyElementsOf(NOT_CALLED_BY_CORE);

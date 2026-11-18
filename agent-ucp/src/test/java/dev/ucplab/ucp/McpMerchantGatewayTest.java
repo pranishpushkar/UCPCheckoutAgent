@@ -87,12 +87,13 @@ class McpMerchantGatewayTest {
     final McpStore store = new McpStore();
     final TokenEndpoint tokenEndpoint = new TokenEndpoint();
     final TestClock clock = new TestClock();
+    final CircuitBreakers breakers = new CircuitBreakers(CONFIG, clock);
 
     McpMerchantGateway gateway(MerchantEntry entry, Optional<BuyerIp> ip, ClientCredentials credentials,
                                Set<String> endpointHosts) {
         TokenProvider tokens = new TokenProvider(URI.create("https://api.shopify.com/auth/access_token"), credentials,
                 tokenEndpoint, clock, Duration.ofMinutes(10), Duration.ofMinutes(1), Duration.ofSeconds(5));
-        return new McpMerchantGateway(entry, CONFIG, store, new CircuitBreakers(CONFIG, clock), clock, d -> { },
+        return new McpMerchantGateway(entry, CONFIG, store, breakers, clock, d -> { },
                 new SplittableRandom(3), new SequentialIdGenerator("m"), endpointHosts, "mock_pay_1",
                 Set.of("2026-04-08"), "2026-04-08", tokens, credentials, ip);
     }
@@ -507,5 +508,19 @@ class McpMerchantGatewayTest {
 
         String all = String.join("\n", seen).toLowerCase(Locale.ROOT);
         assertThat(all).doesNotContain(secret.toLowerCase(Locale.ROOT)).doesNotContain("tok-1").doesNotContain(ip);
+    }
+
+    // Covers: 8.3, 7.6 M3 note (the MCP gateway's admitsCalls reads the store's breaker: false once it is open)
+    @Test
+    void admitsCalls_isFalseWhileTheStoresBreakerIsOpen() {
+        McpMerchantGateway gateway = gateway();
+        MerchantEntry entry = entry(Completion.HANDOFF);
+        assertThat(gateway.admitsCalls()).isTrue();
+
+        for (int i = 0; i < 5; i++) {
+            breakers.forMerchant(entry.id()).record(new CallOutcome.Uncertain<>("timed out"));
+        }
+
+        assertThat(gateway.admitsCalls()).isFalse();
     }
 }
