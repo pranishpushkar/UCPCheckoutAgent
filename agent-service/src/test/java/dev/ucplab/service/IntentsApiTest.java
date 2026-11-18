@@ -326,7 +326,9 @@ class IntentsApiTest {
 
         List<Map<String, Object>> lines = new ArrayList<>();
         for (SnapshotLine l : latest.snapshot().lines()) {
-            lines.add(Map.of("item_id", l.itemId(), "quantity", (long) l.quantity(),
+            // 9.2, 24.3: the merchant's title, from the stored snapshot; the lab merchant sends its catalog title.
+            assertThat(l.title()).as("the lab merchant's title").isNotBlank();
+            lines.add(Map.of("item_id", l.itemId(), "title", l.title(), "quantity", (long) l.quantity(),
                     "unit_price_minor", l.unitPriceMinor()));
         }
         // m6a C9: the card names the merchant of the stored snapshot (9.3 L4), here and in the intent's quote.

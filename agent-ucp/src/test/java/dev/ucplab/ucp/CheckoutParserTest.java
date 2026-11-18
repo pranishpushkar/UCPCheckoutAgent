@@ -105,7 +105,7 @@ class CheckoutParserTest {
     void parseCheckout_readsLinesAndTotalsByType() {
         CheckoutView v = view(fixture("create_ready"));
 
-        assertThat(v.lines()).containsExactly(new LineView("item_123", 2, 2500, Optional.of("li_1")));
+        assertThat(v.lines()).containsExactly(new LineView("item_123", 2, 2500, Optional.of("li_1"), "Red T-Shirt"));
         assertThat(v.buyer()).contains(Buyer.ofEmail("a@example.com"));
         assertThat(v.subtotalMinor()).isEqualTo(5000);
         assertThat(v.taxMinor()).isEqualTo(400);

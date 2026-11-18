@@ -40,7 +40,8 @@ public record ApprovalSnapshot(
     private static final Comparator<SnapshotLine> LINE_ORDER =
             Comparator.comparing(SnapshotLine::itemId)
                     .thenComparingInt(SnapshotLine::quantity)
-                    .thenComparingLong(SnapshotLine::unitPriceMinor);
+                    .thenComparingLong(SnapshotLine::unitPriceMinor)
+                    .thenComparing(SnapshotLine::title);
 
     public ApprovalSnapshot {
         Objects.requireNonNull(intentId, "intentId");
@@ -104,6 +105,10 @@ public record ApprovalSnapshot(
         m.put("itemId", line.itemId());
         m.put("quantity", line.quantity());
         m.put("unitPriceMinor", line.unitPriceMinor());
+        // Only when the merchant sent one, so a snapshot without titles hashes exactly as before (9.2).
+        if (!line.title().isEmpty()) {
+            m.put("title", line.title());
+        }
         return m;
     }
 }

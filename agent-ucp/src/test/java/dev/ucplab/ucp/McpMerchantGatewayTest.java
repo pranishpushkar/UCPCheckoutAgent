@@ -273,7 +273,8 @@ class McpMerchantGatewayTest {
         assertThat(v.status()).isEqualTo(CheckoutStatus.INCOMPLETE);
         assertThat(v.currency()).isEqualTo("USD");
         assertThat(v.lines()).containsExactly(new LineView("gid://shopify/ProductVariant/51192065753174", 1, 69995,
-                Optional.of("gid://shopify/CartLine/00000000-0000-4000-8000-000000000001?cart=fakeCheckoutToken0000001")));
+                Optional.of("gid://shopify/CartLine/00000000-0000-4000-8000-000000000001?cart=fakeCheckoutToken0000001"),
+                "The Complete Snowboard - Ice"));
         assertThat(v.subtotalMinor()).isEqualTo(69995);
         assertThat(v.totalMinor()).isEqualTo(69995);
         assertThat(v.taxMinor()).isZero();

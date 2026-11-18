@@ -174,6 +174,26 @@ class CheckoutParserMutationTest {
         assertThat(view(checkout("\"order\":{\"id\":\"o\",\"label\":\" \"}")).order()).contains(new OrderRef("o"));
     }
 
+    private static String titledLine(String title) {
+        return "[{\"id\":\"li_1\",\"item\":{\"id\":\"item_1\",\"price\":1250,\"title\":" + title + "},\"quantity\":2}]";
+    }
+
+    // Covers: 9.2, 8.1 (a line's title is the merchant's item.title, read leniently: control characters become spaces,
+    // it is trimmed and cut to 100 characters, and a missing or non-string title is empty, never a refusal)
+    @Test
+    void aLinesTitle_isTheItemsTitle_cleaned_andEmptyWhenAbsentOrNotAString() {
+        assertThat(view(checkout(titledLine("\"The Complete Snowboard - Ice\""), TOTALS, "")).lines().get(0).title())
+                .isEqualTo("The Complete Snowboard - Ice");
+        assertThat(view(checkout(titledLine("\"  Board\\u0007Ice\\n \""), TOTALS, "")).lines().get(0).title())
+                .isEqualTo("Board Ice");
+        String longTitle = "x".repeat(150);
+        assertThat(view(checkout(titledLine("\"" + longTitle + "\""), TOTALS, "")).lines().get(0).title())
+                .isEqualTo("x".repeat(100));
+        assertThat(view(checkout(titledLine("5"), TOTALS, "")).lines().get(0).title()).isEmpty();
+        assertThat(view(checkout(titledLine("null"), TOTALS, "")).lines().get(0).title()).isEmpty();
+        assertThat(view(checkout("")).lines().get(0).title()).as("no title").isEmpty();
+    }
+
     // Covers: 8.1. Kills CheckoutParser.lenientText:308 (the buyer: every field optional, a field of another type is left out)
     @Test
     void theBuyer_isLeniant_aboutEveryField() {

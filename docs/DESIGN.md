@@ -529,7 +529,7 @@ Configuration file `policy.yaml`. `PolicyEngine.evaluateProposal(...)` and `eval
 
 ### 9.2 Approval snapshot and token \[CONTRACT\]
 
-`ApprovalSnapshot` fields: `intentId`, `merchantId`, `sessionId`, `lines[{itemId, quantity, unitPriceMinor}]`, `fulfillment?{optionId, label, priceMinor, destinationCountry}`, `currency`, `totalMinor`, `maxTotalMinor`, `expiresAt`. The snapshot is built from the **merchant's response**, never from model output. The hash covers every field, so changing the option or its price is a new snapshot and needs a new approval (P7). The destination's street address is never in the snapshot, the approval card or any log. `totalMinor` includes the chosen option's price, and so do the totals that P2, P3 and `maxTotalMinor` compare: shipping counts against the caps.
+`ApprovalSnapshot` fields: `intentId`, `merchantId`, `sessionId`, `lines[{itemId, title, quantity, unitPriceMinor}]`, `fulfillment?{optionId, label, priceMinor, destinationCountry}`, `currency`, `totalMinor`, `maxTotalMinor`, `expiresAt`. The snapshot is built from the **merchant's response**, never from model output. The hash covers every field, so changing the option or its price is a new snapshot and needs a new approval (P7). The destination's street address is never in the snapshot, the approval card or any log. `totalMinor` includes the chosen option's price, and so do the totals that P2, P3 and `maxTotalMinor` compare: shipping counts against the caps.
 
 - `snapshotHash = sha256_hex(canonicalJson(snapshot))`.
 - `approvalToken = base64url(HMAC_SHA256(approvalSecret, approvalId + ':' + intentId + ':' + snapshotHash))`.
@@ -540,7 +540,8 @@ Configuration file `policy.yaml`. `PolicyEngine.evaluateProposal(...)` and `eval
 
 **Snapshot and token details \[CONTRACT\].**
 
-- Before hashing, `lines` are sorted by `itemId`, then `quantity`, then `unitPriceMinor`, so the order in which the merchant lists them does not change `snapshotHash`.
+- Before hashing, `lines` are sorted by `itemId`, then `quantity`, then `unitPriceMinor`, then `title`, so the order in which the merchant lists them does not change `snapshotHash`.
+- A line's `title` is the merchant's `line_items[].item.title` from the same answer as its price: merchant text, never the model's. It is read leniently and cleaned: control characters become spaces, it is trimmed and cut to 100 characters, and a missing or non-string title is empty. An empty title is left out of the hashed form, so a snapshot without titles hashes exactly as before. A non-empty title is hashed like every field, and `hand_off`'s GET (7.2) must show it unchanged, as it must the price.
 - `expiresAt` is written as ISO-8601 UTC.
 - `maxTotalMinor` defaults to the quoted `totalMinor`.
 - `approvalToken` is base64url without padding. The HMAC uses `javax.crypto.Mac` (`HmacSHA256`), and tokens are compared with `MessageDigest.isEqual`. This is why `agent-core` may also import `javax.crypto.*` (5.2).
@@ -1253,7 +1254,7 @@ With several merchants (M6a) the console shows one approval card per intent awai
 ### 24.3 Behaviour \[CONTRACT\]
 
 - On load, call `/api/me`. On 401, go to `/auth/login`. Show the signed-in email and a sign-out button.
-- Every line on the approval card comes from the approval `snapshot`, never from the model's chat text (I2). The snapshot has no titles, so a line shows the item id, quantity and unit price; "Other charges (tax)" is the total minus the lines' sum, computed from the snapshot. The card always says that price and stock are not held, and counts down to `expires_at`.
+- Every line on the approval card comes from the approval `snapshot`, never from the model's chat text (I2). A line shows the snapshot's `title` as text, with the item id under it (the id alone when the title is empty), then the quantity and unit price; "Other charges (tax)" is the total minus the lines' sum, computed from the snapshot. At a handoff merchant (`completion: "handoff"`) the store adds shipping and tax after the handoff, so the quote has none: the card shows no "Other charges (tax)" line when that difference is 0, shows it as "Other charges" when it is not, and labels the last line "Total before the store's shipping and tax" instead of "Total"; the note follows. The card always says that price and stock are not held, and counts down to `expires_at`.
 - On `reauth_required`, go to `/auth/login?reauth=true&return_to=/intents/{id}`. On return, show the intent and its approval card again and wait: the approval is sent only when the person presses Approve or Reject on the returned page, never by the page on its own.
 - The timeline polls `GET /api/intents/{id}` once a second while the intent is not terminal, and stops when it is, except in `HANDED_OFF` while `follow_up.watching` is true: then every 10 s.
 - In `HANDED_OFF`, once `store_order` is present, the timeline shows "Order placed at the store, confirmation #<label>", from `store_order.label` as text, and the "Continue at the store" link is removed. While the follow-up is watching it shows "Waiting for the store to report an order". After a follow-up that ended without an order, the text follows `follow_up.ended_reason` (7.6):

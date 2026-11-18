@@ -134,10 +134,12 @@ terminal.
 - [ ] Send `snowboard` (send the product's name, not `hi`: the scripted model answers `hi` by asking, then searches for
   a mug).
 - [ ] The run proposes one item, and an approval card opens.
-- [ ] The card shows the store's line: its variant id, quantity 1, the unit price and the total, in the store's
-  currency (699.95 USD in Stage 3).
+- [ ] The card shows the store's line: its title ("The Complete Snowboard - Ice") with the variant id under it,
+  quantity 1, the unit price and the total, in the store's currency (699.95 USD in Stage 3).
 - [ ] The card marks a handoff merchant with its note: "Shipping and tax are added by the store; you see the final
   total before you pay there." An agent merchant's card has no such note.
+- [ ] The handoff card has no **Other charges (tax)** line, and its last line reads **Total before the store's shipping
+  and tax** (699.95 USD in Stage 3).
 - [ ] **Approve.** The timeline goes from APPROVED to HANDED_OFF, with no re-quote when the store's checkout still
   matches the card.
 - [ ] A **Continue at the store** link appears, under the timeline only. The address is not shown as text anywhere on the

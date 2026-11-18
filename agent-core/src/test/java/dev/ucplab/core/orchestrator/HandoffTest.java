@@ -699,6 +699,36 @@ class HandoffTest {
         }
     }
 
+    private static CheckoutView titled(CheckoutView v, String title) {
+        return withLines(v, v.lines().stream()
+                .map(l -> new LineView(l.itemId(), l.quantity(), l.unitPriceMinor(), l.lineId(), title)).toList());
+    }
+
+    // Covers: 9.2, I2, 7.2 hand_off and hand_off_changed (the snapshot's lines carry the quote's titles; a GET that shows
+    // the same titles hands off; a GET that shows another title is a change, as another price is)
+    @Test
+    void theSnapshotCarriesTheQuotesTitles_andAChangedTitleIsAChange() {
+        for (String atHandoff : List.of("Shirt", "Shirt - Blue")) {
+            Lab one = newLab();
+            one.entries = lab.entries;
+            Lab.Worker worker = one.worker("w", new RewritingGateway(one.merchant)
+                    .rewrite(MerchantCall.CREATE, view(Optional.empty(), v -> titled(v, "Shirt")))
+                    .rewrite(MerchantCall.UPDATE, view(Optional.empty(), v -> titled(v, "Shirt")))
+                    .rewrite(MerchantCall.GET, view(Optional.of(URL), v -> titled(v, atHandoff))));
+            IntentId id = worker.orchestrator().propose(one.alice(), SHOP, TWO_SHIRTS, "buy").intentId();
+            one.drive(worker, id);
+
+            assertThat(one.approvals.findLatestForSystem(id).orElseThrow().snapshot().lines())
+                    .isNotEmpty().allSatisfy(l -> assertThat(l.title()).isEqualTo("Shirt"));
+
+            one.decide(worker, id, true);
+            worker.orchestrator().advance(id);
+
+            assertThat(one.intent(id).state()).as(atHandoff)
+                    .isEqualTo(atHandoff.equals("Shirt") ? IntentState.HANDED_OFF : IntentState.QUOTING);
+        }
+    }
+
     // Covers: 7.2 hand_off_changed, I2 (the lines are counted: a GET showing [A, B, B] against an approved [A, A, B] is a
     // change though the number of lines and their set are the same; the approved lines in another order are not)
     @Test

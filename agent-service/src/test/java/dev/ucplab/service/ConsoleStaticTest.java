@@ -89,14 +89,15 @@ class ConsoleStaticTest {
         assertThat(css).doesNotContainPattern("(?i)url\\(\\s*['\"]?https?:").doesNotContain("@import");
     }
 
-    // Covers: I2, 9.3 L4, 24.3 (the approval card is its own component and reads only the approval response's fields:
-    // the snapshot's lines, currency and total, the expiry and the token; never the chat, the run or the messages)
+    // Covers: I2, 9.3 L4, 24.3, 9.2 (the approval card is its own component and reads only the approval response's
+    // fields: the snapshot's lines with their merchant titles, currency and total, the expiry and the token; never the
+    // chat, the run, the messages or a description)
     @Test
     void approvalCard_readsOnlyTheApprovalResponsesFields() throws IOException {
         String js = read("console.js");
         String card = card(js);
 
-        Set<String> allowed = Set.of("snapshot", "lines", "item_id", "quantity", "unit_price_minor", "currency",
+        Set<String> allowed = Set.of("snapshot", "lines", "item_id", "title", "quantity", "unit_price_minor", "currency",
                 "total_minor", "expires_at", "token", "merchant_id", "completion", "note");
         Set<String> read = new LinkedHashSet<>();
         Matcher fields = Pattern.compile("\\b(?:approval|snapshot|line)\\.([A-Za-z_]+)").matcher(card);
@@ -105,9 +106,10 @@ class ConsoleStaticTest {
         }
         assertThat(read).as("fields the card reads").isNotEmpty().isSubsetOf(allowed);
         for (String other : List.of("messages", "chat", "tool_events", "run_id", "intent_ids", "/api/runs", "reason",
-                "rationale", "title", "description", "model")) {
+                "rationale", "description", "model")) {
             assertThat(card).as("the card's code names " + other).doesNotContain(other);
         }
+        assertThat(card.replace("line.title", "")).as("a title only as the snapshot line's").doesNotContain("title");
         assertThat(card).contains("/approval");
         // The one call site feeds it the approval endpoint's answer and nothing else.
         Matcher calls = Pattern.compile("showApprovalCard\\(([^)]*)\\)").matcher(js);
@@ -163,6 +165,38 @@ class ConsoleStaticTest {
         String card = card(read("console.js"));
 
         assertThat(card).contains("Price and stock are not held").contains("expires_at").contains("Other charges (tax)");
+    }
+
+    // Covers: 24.3, 9.2, I2 (a line shows the snapshot's merchant title as text, with the item id under it, and the id
+    // alone when the title is empty)
+    @Test
+    void approvalCard_showsTheLinesTitle_withTheItemIdUnderIt() throws IOException {
+        String card = card(read("console.js"));
+
+        assertThat(card).contains("    const name = el(\"td\");\n"
+                + "    if (line.title) {\n      name.appendChild(el(\"div\", line.title));\n    }\n"
+                + "    name.appendChild(el(\"div\", line.item_id, \"item-id\"));\n"
+                + "    row.appendChild(name);\n")
+                .doesNotContain("row.appendChild(el(\"td\", line.item_id));");
+        assertThat(read("console.css")).contains(".item-id {");
+    }
+
+    // Covers: 24.3, 19 (at a handoff merchant the store adds shipping and tax after the handoff: no "Other charges (tax)"
+    // line, an "Other charges" line only when the total differs from the lines' sum, and a total labelled as before the
+    // store's shipping and tax; an agent merchant's card keeps "Other charges (tax)" and "Total")
+    @Test
+    void approvalCard_atAHandoffMerchant_hasNoTaxLine_andItsTotalIsBeforeTheStoresShippingAndTax() throws IOException {
+        String card = card(read("console.js"));
+
+        assertThat(card).contains("function cardCharges(snapshot, handoff, linesTotal) {\n"
+                + "  const rows = [];\n"
+                + "  const other = snapshot.total_minor - linesTotal;\n"
+                + "  if (!handoff) {\n    rows.push([\"Other charges (tax)\", other]);\n"
+                + "  } else if (other !== 0) {\n    rows.push([\"Other charges\", other]);\n  }\n"
+                + "  rows.push([handoff ? \"Total before the store's shipping and tax\" : \"Total\", snapshot.total_minor]);\n"
+                + "  return rows;\n}\n");
+        assertThat(card).contains("const rows = cardCharges(snapshot, approval.completion === \"handoff\", linesTotal);");
+        assertThat(count(card, "Other charges (tax)")).as("only in cardCharges' agent branch").isEqualTo(1);
     }
 
     // Covers: 23.2, 24.3, H5 C7c (a handoff merchant's card shows the answer's note, our fixed text, as text; only when
