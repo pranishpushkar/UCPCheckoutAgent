@@ -210,6 +210,20 @@ function hideApprovalCard(id) {
   });
 }
 
+// 24.3, 19: the card's last lines, each [label, minor units], the total last. At a handoff merchant the store adds
+// shipping and tax after the handoff, so the quote has none and there is no tax line.
+function cardCharges(snapshot, handoff, linesTotal) {
+  const rows = [];
+  const other = snapshot.total_minor - linesTotal;
+  if (!handoff) {
+    rows.push(["Other charges (tax)", other]);
+  } else if (other !== 0) {
+    rows.push(["Other charges", other]);
+  }
+  rows.push([handoff ? "Total before the store's shipping and tax" : "Total", snapshot.total_minor]);
+  return rows;
+}
+
 function showApprovalCard(id, approvalResponse) {
   const approval = approvalResponse.data;
   const snapshot = approval.snapshot;
@@ -232,18 +246,15 @@ function showApprovalCard(id, approvalResponse) {
     body.appendChild(row);
     linesTotal += line.quantity * line.unit_price_minor;
   });
-  const charges = el("tr");
-  charges.appendChild(el("td", "Other charges (tax)"));
-  charges.appendChild(el("td", ""));
-  charges.appendChild(el("td", ""));
-  charges.appendChild(el("td", money(snapshot.total_minor - linesTotal, snapshot.currency), "num"));
-  foot.appendChild(charges);
-  const total = el("tr");
-  total.appendChild(el("th", "Total"));
-  total.appendChild(el("td", ""));
-  total.appendChild(el("td", ""));
-  total.appendChild(el("td", money(snapshot.total_minor, snapshot.currency), "num"));
-  foot.appendChild(total);
+  const rows = cardCharges(snapshot, approval.completion === "handoff", linesTotal);
+  rows.forEach(([label, minor], i) => {
+    const row = el("tr");
+    row.appendChild(el(i === rows.length - 1 ? "th" : "td", label));
+    row.appendChild(el("td", ""));
+    row.appendChild(el("td", ""));
+    row.appendChild(el("td", money(minor, snapshot.currency), "num"));
+    foot.appendChild(row);
+  });
   table.appendChild(body);
   table.appendChild(foot);
   card.appendChild(table);
