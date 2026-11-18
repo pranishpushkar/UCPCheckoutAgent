@@ -325,7 +325,9 @@ public final class CheckoutParser {
         if (!(value instanceof Map<?, ?> order)) {
             throw new Bad("order shape");
         }
-        return Optional.of(new OrderRef(text(order, "id")));
+        // VERIFY 11: label is the confirmation code the store shows the buyer; read leniently, as it is only shown. The
+        // order's permalink_url is never read (I8).
+        return Optional.of(new OrderRef(text(order, "id"), lenientText(order, "label")));
     }
 
     private static List<MerchantMessage> messages(Object value) {
