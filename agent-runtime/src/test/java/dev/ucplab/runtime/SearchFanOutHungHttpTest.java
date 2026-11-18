@@ -30,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.SplittableRandom;
 import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -38,6 +39,7 @@ import org.junit.jupiter.api.Test;
  * its catalog reply for a minute, and a limit of 50 ms. The interrupt must end the call once, count once against the
  * merchant's breaker, and leave no thread behind.
  */
+@Tag("sequential")
 class SearchFanOutHungHttpTest {
 
     private static final MerchantId HUNG = new MerchantId("shop-hung");

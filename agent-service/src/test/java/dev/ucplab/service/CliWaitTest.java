@@ -15,12 +15,14 @@ import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 /**
  * {@code ucplab wait} against a fake of the API's sign-in and intent routes, so each state can be answered without a
  * merchant: wait returns on every terminal state of 7.1 and only on those.
  */
+@Tag("sequential")
 class CliWaitTest {
 
     private static final String INTENT = "int_wait1";

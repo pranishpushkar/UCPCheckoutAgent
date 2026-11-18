@@ -27,6 +27,7 @@ import java.util.logging.Logger;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 import org.junit.jupiter.api.io.TempDir;
@@ -45,6 +46,7 @@ import org.junit.jupiter.api.io.TempDir;
  * output.
  */
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+@Tag("sequential")
 class RedactionTest {
 
     // Covers: I8 (m5-plan C14 positive control: the same search finds the canary wherever it is planted)

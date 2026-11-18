@@ -15,6 +15,7 @@ import java.security.SecureRandom;
 import java.util.List;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.io.TempDir;
@@ -25,6 +26,7 @@ import org.junit.jupiter.api.io.TempDir;
  * terminal state, and every check clean with the crash counted in the 7.6 bounds ({@code CheckContext.withCrashes}).
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
+@Tag("sequential")
 class KillScenariosTest {
 
     private static final PathPattern COMPLETE = new PathPattern(Scenarios.COMPLETE);

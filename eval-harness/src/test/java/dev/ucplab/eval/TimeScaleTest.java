@@ -7,10 +7,12 @@ import dev.ucplab.core.orchestrator.OrchestratorConfig;
 import dev.ucplab.core.recovery.RecoveryConfig;
 import dev.ucplab.ucp.UcpConfig;
 import java.time.Duration;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+@Tag("sequential")
 class TimeScaleTest {
 
     private static final String AGENT = "profile=\"https://agent.example/.well-known/ucp\"";

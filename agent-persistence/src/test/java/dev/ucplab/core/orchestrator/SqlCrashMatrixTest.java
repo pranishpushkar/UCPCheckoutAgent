@@ -20,6 +20,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -32,6 +33,7 @@ import org.junit.jupiter.api.io.TempDir;
  * the in-memory one (the contract compares them), and adds row 20: a failure inside the two-statement writes of
  * {@link SqlIntentRepository}.
  */
+@Tag("sequential")
 class SqlCrashMatrixTest extends CrashMatrixContract {
 
     static {
