@@ -25,7 +25,8 @@ permissions:
 jobs:
   interop:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The job also runs every upstream module's tests (-am); the last green run took 27:32, so 30 left no margin.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09        # v5
         with:
