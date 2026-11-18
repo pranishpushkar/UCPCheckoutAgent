@@ -18,6 +18,8 @@ public final class EventCatalogue {
             Map.entry("proposed", Set.of("merchant_id", "lines", "rationale")),
             Map.entry("policy_decision", Set.of("stage", "allowed", "rule", "reason")),
             Map.entry("transition", Set.of("from", "event", "guard", "to")),
+            Map.entry("handoff_order_seen", Set.of("order_id", "reads")),
+            Map.entry("handoff_follow_up_ended", Set.of("reason", "reads")),
             Map.entry("approval_opened", Set.of("approval_id", "snapshot_hash", "total_minor", "max_total_minor")),
             Map.entry("approval_decided", Set.of("approval_id", "decision", "decided_by")),
             Map.entry("approval_decision_recovered", Set.of("approval_id")),

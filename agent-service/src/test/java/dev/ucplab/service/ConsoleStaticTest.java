@@ -190,17 +190,20 @@ class ConsoleStaticTest {
         return n;
     }
 
-    // Covers: 24.3, 23.2, I9, H5 (the Continue at the store link: built only in HANDED_OFF, from the handoff_url of the
-    // owner's GET /api/intents/{id}, read once and nowhere else; removed when another intent is watched; a link in a new
-    // tab with rel="noopener noreferrer" and referrerpolicy="no-referrer")
+    // Covers: 24.3, 23.2, I9, H5, 7.6 (the Continue at the store link: built only in HANDED_OFF, from the handoff_url of
+    // the owner's GET /api/intents/{id}, read once and nowhere else, until the store's order is shown; removed when another
+    // intent is watched; a link in a new tab with rel="noopener noreferrer" and referrerpolicy="no-referrer")
     @Test
     void handoffLink_existsOnlyInHandedOff_fromTheIntentsHandoffUrl() throws IOException {
         String js = read("console.js");
         String link = handoffLink(js);
 
         assertThat(count(js, "handoff_url")).as("handoff_url is read once").isEqualTo(1);
-        assertThat(js).contains("    if (state === \"HANDED_OFF\") {\n      showHandoffLink(result.data.handoff_url);\n"
-                + "    } else {\n      clear($(\"handoff\"));\n    }\n");
+        // 24.3, 7.6: shown on every poll in HANDED_OFF until the store's order is shown; cleared in any other state.
+        assertThat(js).contains("    if (state !== \"HANDED_OFF\") {\n      clear($(\"handoff\"));\n"
+                + "      clear($(\"follow-up\"));\n    }\n");
+        assertThat(js).contains("    if (result.data.store_order) {\n      clear($(\"handoff\"));\n    } else {\n"
+                + "      showHandoffLink(result.data.handoff_url);\n    }\n");
         assertThat(count(js, "showHandoffLink(")).as("one definition, one call").isEqualTo(2);
         int watch = js.indexOf("function watchIntent(id) {");
         assertThat(js.indexOf("clear($(\"handoff\"));", watch)).as("watching another intent drops the link")
@@ -237,7 +240,7 @@ class ConsoleStaticTest {
             assertThat(block).as("the follow-up's code uses " + forbidden).doesNotContain(forbidden);
         }
         assertThat(js.toLowerCase(java.util.Locale.ROOT)).as("the console never says paid").doesNotContain("paid");
-        assertThat(read("index.html")).contains("<p id=\"follow-up\" aria-live=\"polite\"></p>");
+        assertThat(read("index.html")).as("outside the one live region, as the link is").contains("<p id=\"follow-up\"></p>");
     }
 
     // Covers: 24.3, 7.6 (in HANDED_OFF the follow-up and the link are shown on every poll, not only when the state

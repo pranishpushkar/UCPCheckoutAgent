@@ -147,10 +147,16 @@ terminal.
 - [ ] The store's page shows the approved item at the approved price.
 - [ ] Check out with Shopify's test gateway. The store's final total, with its shipping and tax, is shown there before you
   pay.
-- [ ] Back in the console, the intent stays HANDED_OFF: the agent does not learn that you paid (H5 reads no order).
+- [ ] Back in the console, the intent stays HANDED_OFF, and under the timeline it says "Waiting for the store to report
+  an order" while the follow-up reads the checkout (DESIGN 7.6: 1, 2, 4, 8, 16 and 30 minutes after the handoff, then
+  every 30, for 24 h).
+- [ ] Within a few minutes of paying, with no Ctrl-C, the console shows "Order placed at the store, confirmation
+  #<label>", the code the store's thank-you page and email show, and the Continue at the store link goes. It never says
+  "paid": a completed checkout means the store placed an order.
 - [ ] **Ctrl-C** in the terminal. Each intent's evidence is saved under `notes/h5/console/evidence/<intent>/`, with the
-  handoff URL cut to its host. Owed cancels are drained for up to 30 s, and any still owed is named. The handed-off
-  checkout is not cancelled: the script says it is left open at the store.
+  handoff URL cut to its host and the confirmation code redacted. Owed cancels are drained for up to 30 s, and any still
+  owed is named. The handed-off checkout is not cancelled: the script names the order the store reported, or says the
+  checkout is left open at the store.
 
 **After paying, with `--after-payment` (VERIFY 7).** Start the console with the flag, pay at the store, then press Ctrl-C.
 Without the flag nothing is sent to the store on exit.

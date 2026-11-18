@@ -335,6 +335,11 @@ def save_intent_evidence(api, db, intent, evidence):
                 # The buyer's way into the checkout (cart token and key): kept as its host only, as continue_url is.
                 remember(body["handoff_url"])
                 body = dict(body, handoff_url=spike.host_only(body["handoff_url"]))
+            order = body.get("store_order") if isinstance(body, dict) else None
+            if isinstance(order, dict) and order.get("label"):
+                # 7.6, VERIFY 11: the buyer's confirmation code stays out of the evidence; the order id is kept.
+                remember(order["label"])
+                body = dict(body, store_order=dict(order, label="<redacted>"))
             write(name, body)
         except Exception as e:
             say("WARNING: %s not saved: %s" % (name, e))
@@ -483,9 +488,14 @@ def console_exit(api, db, evidence, drain=drain_cancels, after_payment=None):
         folder = os.path.join(evidence, intent)
         os.makedirs(folder, exist_ok=True)
         save_intent_evidence(api, db, intent, folder)
-        state = (api.json("GET", "/api/intents/%s" % intent) or {}).get("state")
-        if state == "HANDED_OFF":
-            say("intent %s HANDED_OFF: its checkout is left open at the store" % intent)
+        shown = api.json("GET", "/api/intents/%s" % intent) or {}
+        if shown.get("state") == "HANDED_OFF":
+            order = shown.get("store_order")
+            if isinstance(order, dict) and order.get("id"):
+                # 7.6: named by its id only; the confirmation code is the buyer's.
+                say("intent %s HANDED_OFF: the store reported order %s" % (intent, order["id"]))
+            else:
+                say("intent %s HANDED_OFF: its checkout is left open at the store" % intent)
     if after_payment:
         try:
             after_payment()

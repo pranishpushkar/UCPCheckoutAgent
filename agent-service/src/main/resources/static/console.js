@@ -303,6 +303,7 @@ async function decide(id, token, decision) {
 
 function watchIntent(id) {
   clear($("handoff"));
+  clear($("follow-up"));
   currentIntent = {id: id, state: ""};
   window.clearTimeout(intentTimer);
   pollIntent();
@@ -334,13 +335,21 @@ async function pollIntent() {
     $("timeline-state").textContent = "Intent " + id + ": " + state.replace(/_/g, " ").toLowerCase();
     setStatus("Intent " + state.replace(/_/g, " ").toLowerCase() + ".");
     await loadEvents(id);
-    if (state === "HANDED_OFF") {
-      showHandoffLink(result.data.handoff_url);
-    } else {
+    if (state !== "HANDED_OFF") {
       clear($("handoff"));
+      clear($("follow-up"));
     }
     if (state === "AWAITING_APPROVAL") {
       loadApproval(id);
+    }
+  }
+  // 24.3, 7.6: what the store reported, on every poll, since it changes while the state stays HANDED_OFF.
+  if (state === "HANDED_OFF") {
+    showFollowUp(result.data.store_order, result.data.follow_up);
+    if (result.data.store_order) {
+      clear($("handoff"));
+    } else {
+      showHandoffLink(result.data.handoff_url);
     }
   }
   if (currentRun) {
@@ -348,6 +357,8 @@ async function pollIntent() {
   }
   if (!TERMINAL.includes(state)) {
     intentTimer = window.setTimeout(pollIntent, 1000);
+  } else if (state === "HANDED_OFF" && result.data.follow_up && result.data.follow_up.watching) {
+    intentTimer = window.setTimeout(pollIntent, 10000);
   }
 }
 
@@ -369,6 +380,28 @@ function showHandoffLink(url) {
   holder.appendChild(anchor);
 }
 // </handoff-link>
+
+// <follow-up>
+// 24.3, 7.6: what the store reported after the handoff. A completed checkout means the store placed an order; it says
+// nothing of payment, so neither does the text. The confirmation code (VERIFY 11) is set as text only.
+function showFollowUp(order, followUp) {
+  const holder = $("follow-up");
+  clear(holder);
+  let text = "";
+  if (order && typeof order.label === "string") {
+    text = "Order placed at the store, confirmation #" + order.label;
+  } else if (order) {
+    text = "Order placed at the store";
+  } else if (followUp && followUp.watching) {
+    text = "Waiting for the store to report an order";
+  } else if (followUp) {
+    text = "The store reported no order within 24 h";
+  }
+  if (text) {
+    holder.appendChild(el("p", text));
+  }
+}
+// </follow-up>
 
 // The run's other intents, one line each, beside the one the timeline follows (S22): merchant and state.
 async function showOtherIntents(ids) {

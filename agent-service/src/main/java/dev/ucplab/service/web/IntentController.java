@@ -3,6 +3,7 @@ package dev.ucplab.service.web;
 import dev.ucplab.core.approval.ApprovalRecord;
 import dev.ucplab.core.approval.ApprovalRepository;
 import dev.ucplab.core.identity.AuthContext;
+import dev.ucplab.core.intent.HandoffWatch;
 import dev.ucplab.core.intent.IntentCursor;
 import dev.ucplab.core.intent.IntentCursorCodec;
 import dev.ucplab.core.intent.IntentEvent;
@@ -88,6 +89,9 @@ final class IntentController {
         // 23.2, I9: only here, the owner's own read (owned() is owner-scoped). Present only in HANDED_OFF: both
         // repositories refuse it in any other state (V9's CHECK in SQL).
         intent.handoffUrl().ifPresent(u -> body.put("handoff_url", u.value().toString()));
+        if (intent.state() == IntentState.HANDED_OFF) {
+            putFollowUp(auth, intent, body);
+        }
         latest.ifPresent(a -> {
             body.put("quote", QuoteCard.of(a.snapshot()));
             Map<String, Object> approval = new LinkedHashMap<>();
@@ -97,6 +101,47 @@ final class IntentController {
         });
         body.put("created_at", intent.createdAt().toString());
         return body;
+    }
+
+    /**
+     * 23.2, 7.6, I9: the handoff follow-up, only in HANDED_OFF and only on the owner's read. {@code store_order} is the
+     * order the store reported, with its confirmation code; {@code follow_up} is whether it is still watching and, when
+     * it ended without an order, why (from its handoff_follow_up_ended event). An intent handed off before V10 has
+     * neither.
+     */
+    private void putFollowUp(AuthContext auth, PurchaseIntent intent, Map<String, Object> body) {
+        HandoffWatch watch = intent.handoffWatch();
+        watch.storeOrder().ifPresent(o -> {
+            Map<String, Object> order = new LinkedHashMap<>();
+            order.put("id", o.id());
+            o.label().ifPresent(l -> order.put("label", l));
+            body.put("store_order", order);
+        });
+        Map<String, Object> followUp = new LinkedHashMap<>();
+        if (watch.watching()) {
+            followUp.put("watching", true);
+        } else if (watch.storeOrder().isPresent()) {
+            followUp.put("watching", false);
+        } else {
+            Optional<String> reason = endedReason(auth, intent);
+            if (reason.isEmpty()) {
+                return;
+            }
+            followUp.put("watching", false);
+            followUp.put("ended_reason", reason.get());
+        }
+        body.put("follow_up", followUp);
+    }
+
+    private Optional<String> endedReason(AuthContext auth, PurchaseIntent intent) {
+        Optional<String> reason = Optional.empty();
+        for (IntentEvent e : queries.events(auth.user(), intent.id())) {
+            if (e.type().equals("handoff_follow_up_ended")
+                    && LenientJson.readObject(e.payloadJson()).get("reason") instanceof String r) {
+                reason = Optional.of(r);
+            }
+        }
+        return reason;
     }
 
     @GetMapping("/api/intents/{id}/events")
