@@ -582,9 +582,14 @@ def start_service(jar, tmp, domain, evidence, port):
     with open(os.path.join(tmp, "policy.yaml"), "w") as f:
         f.write(POLICY_YAML)
     log = open(os.path.join(evidence, "service.log"), "w")
-    proc = subprocess.Popen(["java", "-jar", jar], env=service_env(os.environ, tmp, port), stdout=log,
-                            stderr=subprocess.STDOUT, cwd=tmp)
-    return proc, log
+    return spawn(["java", "-jar", jar], service_env(os.environ, tmp, port), log, tmp), log
+
+
+def spawn(command, env, log, cwd):
+    """Starts the service in a session of its own, so Ctrl-C (and the SIGHUP of a closed terminal) reaches the script
+    alone: the script's cleanup still talks to the service (the evidence, the after-payment reads, the owed-cancel
+    drain), and then stop_service stops it."""
+    return subprocess.Popen(command, env=env, stdout=log, stderr=subprocess.STDOUT, cwd=cwd, start_new_session=True)
 
 
 def stop_service(proc, log, tmp):
@@ -594,6 +599,7 @@ def stop_service(proc, log, tmp):
             proc.wait(timeout=30)
         except subprocess.TimeoutExpired:
             proc.kill()
+            proc.wait(timeout=10)
     if log:
         log.close()
     shutil.rmtree(tmp, ignore_errors=True)

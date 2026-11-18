@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from contextlib import redirect_stdout
 
@@ -571,6 +572,74 @@ class AfterPayment(unittest.TestCase):
         self.assertIn('"Shopify-Buyer-IP": "<redacted>"', text)
         for never in ("cancel_checkout", "create_checkout", "update_checkout", "complete_checkout"):
             self.assertNotIn(never, text)
+
+
+
+# "The script" for CtrlC: spawns a sleeper as the service is spawned, says the sleeper's pid, and waits for Ctrl-C. On
+# it, it says whether the sleeper is still alive, then stops it with stop_service and says how it ended.
+HARNESS = textwrap.dedent("""
+    import os, subprocess, sys, tempfile, time
+    sys.path.insert(0, sys.argv[1])
+    import shopify_live as live
+    tmp = tempfile.mkdtemp()
+    child = live.spawn([sys.executable, "-I", "-c", "import time; time.sleep(60)"], {"PATH": os.environ.get("PATH", "")},
+                       subprocess.DEVNULL, tmp)
+    print("child", child.pid, flush=True)
+    try:
+        time.sleep(30)
+        print("no ctrl-c", flush=True)
+    except KeyboardInterrupt:
+        time.sleep(1)                       # a child that got the SIGINT too has died by now
+        print("after ctrl-c, child alive:", child.poll() is None, flush=True)
+        live.stop_service(child, None, tmp)
+        print("after stop_service, child exit:", child.poll(), flush=True)
+""")
+
+
+class CtrlC(unittest.TestCase):
+    """Ctrl-C in the terminal reaches the script alone: the service runs in its own session, so its cleanup (the
+    evidence, the after-payment reads, the owed-cancel drain) can still talk to it; the script stops it after."""
+
+    def test_ctrlC_toTheScriptsProcessGroup_leavesTheServiceRunning_untilStopService(self):
+        harness = subprocess.Popen([sys.executable, "-I", "-c", HARNESS, HERE], stdout=subprocess.PIPE, text=True,
+                                   start_new_session=True)      # its own group, so the SIGINT never reaches this runner
+        child = None
+        try:
+            first = harness.stdout.readline().split()
+            self.assertEqual(first[0], "child", first)
+            child = int(first[1])
+            time.sleep(0.5)
+            os.killpg(harness.pid, signal.SIGINT)              # what the terminal does on Ctrl-C
+            out, _ = harness.communicate(timeout=60)
+        finally:
+            if harness.poll() is None:
+                harness.kill()
+            if child:
+                try:
+                    os.kill(child, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        self.assertIn("after ctrl-c, child alive: True", out)
+        self.assertRegex(out, r"after stop_service, child exit: -?\d+")
+
+    def test_bothRuns_startTheServiceInItsOwnSession(self):
+        seen = []
+
+        class Popen:
+            def __init__(self, command, **kwargs):
+                seen.append(kwargs)
+
+        work = tempfile.mkdtemp()
+        real = live.subprocess.Popen
+        try:
+            live.subprocess.Popen = Popen
+            proc, log = live.start_service("agent-service.jar", work, "my-dev-store.myshopify.com", work, 8080)
+            log.close()
+        finally:
+            live.subprocess.Popen = real
+            shutil.rmtree(work)
+        self.assertEqual(len(seen), 1)
+        self.assertIs(seen[0].get("start_new_session"), True)
 
 
 if __name__ == "__main__":

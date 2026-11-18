@@ -38,6 +38,10 @@ scripts/shopify-live.sh --i-own-this-store --with-buyer-ip --cancel-after       
   `get_checkout` of each handed-off checkout, then another 60 s later. Each answer is recorded, redacted, as
   `notes/h5/console/evidence/<intent>/after_payment_get_checkout_{0s,60s}.json` (VERIFY 7: what the store says of a
   checkout the buyer paid for). Nothing is sent without the flag.
+- Ctrl-C reaches the script alone, in both modes. The service runs in a session of its own, so the script can still
+  save the evidence, run the after-payment reads and drain the owed cancels through it. The script then stops it:
+  SIGTERM, then SIGKILL after 30 s. If the script itself is killed hard (`kill -9`), the service keeps running on
+  `127.0.0.1:8080`. Stop it with `pkill -f agent-service-0.1.0-SNAPSHOT.jar`.
 - The service listens on `127.0.0.1` only, in both modes: the local dev sign-in must not be reachable from the network.
 
 ## What it does
