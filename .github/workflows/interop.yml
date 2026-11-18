@@ -25,8 +25,8 @@ permissions:
 jobs:
   interop:
     runs-on: ubuntu-latest
-    # The job also runs every upstream module's tests (-am); the last green run took 27:32, so 30 left no margin.
-    timeout-minutes: 45
+    # About twice the job's length: with -DskipTests it runs only the build and the interop rows, 3:02 on run 44373564686.
+    timeout-minutes: 6
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09        # v5
         with:
