@@ -167,24 +167,24 @@ final class GeminiMapping {
     static ModelTurn turn(GenerateContentResponse response, Supplier<String> newId, Remember remember) {
         response.promptFeedback().flatMap(f -> f.blockReason()).ifPresent(b -> {
             if (b.knownEnum() != BlockedReason.Known.BLOCKED_REASON_UNSPECIFIED) {
-                throw new GeminiException(Reason.BLOCKED);
+                throw new GeminiException(Reason.BLOCKED, "prompt_blocked_" + b.knownEnum().name());
             }
         });
         List<Candidate> candidates = response.candidates().orElse(List.of());
         if (candidates.isEmpty()) {
-            throw new GeminiException(Reason.EMPTY_RESPONSE);
+            throw new GeminiException(Reason.EMPTY_RESPONSE, "no_candidates");
         }
         Candidate candidate = candidates.getFirst();
         Optional<FinishReason.Known> finish = candidate.finishReason().map(FinishReason::knownEnum);
         if (finish.isPresent() && BLOCKED.contains(finish.get())) {
-            throw new GeminiException(Reason.BLOCKED);
+            throw new GeminiException(Reason.BLOCKED, finished(finish));
         }
         if (finish.isPresent() && MALFORMED.contains(finish.get())) {
-            throw new GeminiException(Reason.MALFORMED_RESPONSE);
+            throw new GeminiException(Reason.MALFORMED_RESPONSE, finished(finish));
         }
         List<Part> parts = candidate.content().flatMap(Content::parts).orElse(List.of());
         if (parts.isEmpty()) {
-            throw new GeminiException(Reason.EMPTY_RESPONSE);
+            throw new GeminiException(Reason.EMPTY_RESPONSE, finished(finish));
         }
         Usage usage = usage(response.usageMetadata());
         StringBuilder text = new StringBuilder();
@@ -194,7 +194,7 @@ final class GeminiMapping {
             if (part.functionCall().isPresent()) {
                 FunctionCall fc = part.functionCall().get();
                 String name = fc.name().filter(n -> !n.isBlank())
-                        .orElseThrow(() -> new GeminiException(Reason.MALFORMED_RESPONSE));
+                        .orElseThrow(() -> new GeminiException(Reason.MALFORMED_RESPONSE, "no_function_name"));
                 String id = fc.id().filter(i -> !i.isBlank() && !seen.containsKey(i)).orElseGet(newId);
                 calls.add(new ToolCall(id, name, arguments(fc.args().orElse(Map.of()))));
                 seen.put(id, part);
@@ -203,10 +203,18 @@ final class GeminiMapping {
             }
         }
         if (calls.isEmpty() && text.isEmpty()) {
-            throw new GeminiException(Reason.EMPTY_RESPONSE);
+            throw new GeminiException(Reason.EMPTY_RESPONSE, finished(finish));
         }
         seen.forEach(remember::part);
         return new ModelTurn(text.toString(), calls, usage);
+    }
+
+    /**
+     * 6.5: the cause of an answer with nothing usable in it, {@code finish_<reason>} by the finish reason's enum name
+     * (never the raw value, which the server could fill with text), or {@code no_content} when it simply stopped.
+     */
+    private static String finished(Optional<FinishReason.Known> finish) {
+        return finish.filter(f -> f != FinishReason.Known.STOP).map(f -> "finish_" + f.name()).orElse("no_content");
     }
 
     /** What {@link #answeringModel} reports for a {@code modelVersion} that is not an id. */
@@ -231,12 +239,13 @@ final class GeminiMapping {
     }
 
     private static Usage usage(Optional<GenerateContentResponseUsageMetadata> metadata) {
-        GenerateContentResponseUsageMetadata u = metadata.orElseThrow(() -> new GeminiException(Reason.MISSING_USAGE));
-        long prompt = u.promptTokenCount().orElseThrow(() -> new GeminiException(Reason.MISSING_USAGE));
+        GenerateContentResponseUsageMetadata u = metadata
+                .orElseThrow(() -> new GeminiException(Reason.MISSING_USAGE, "no_usage"));
+        long prompt = u.promptTokenCount().orElseThrow(() -> new GeminiException(Reason.MISSING_USAGE, "no_usage"));
         long input = prompt + u.toolUsePromptTokenCount().orElse(0);
         long output = (long) u.candidatesTokenCount().orElse(0) + u.thoughtsTokenCount().orElse(0);
         if (input < 0 || output < 0) {
-            throw new GeminiException(Reason.MALFORMED_RESPONSE);
+            throw new GeminiException(Reason.MALFORMED_RESPONSE, "negative_usage");
         }
         return new Usage(input, output);
     }
@@ -249,7 +258,7 @@ final class GeminiMapping {
         try {
             return LenientJson.readObject(JsonSerializable.toJsonString(args));
         } catch (RuntimeException e) {
-            throw new GeminiException(Reason.MALFORMED_RESPONSE);
+            throw new GeminiException(Reason.MALFORMED_RESPONSE, "bad_arguments");
         }
     }
 }

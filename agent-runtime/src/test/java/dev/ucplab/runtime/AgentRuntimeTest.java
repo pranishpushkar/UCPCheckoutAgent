@@ -199,7 +199,8 @@ class AgentRuntimeTest {
         assertThat(catalogCalls).hasSize(1);
     }
 
-    // Covers: 6.5, m5-plan section 4 (a model error ends the run as Failed, with no retry)
+    // Covers: 6.5, 6.3, m5-plan section 4 (a model error that may not be retried ends the run as Failed, with its cause
+    // and no retry; since 6.5's cause, the expected outcome carries it, #28's precedent)
     @Test
     void run_modelError_isFailedWithoutRetry() {
         AtomicInteger calls = new AtomicInteger();
@@ -210,7 +211,7 @@ class AgentRuntimeTest {
 
         RunOutcome outcome = runtime(failing).run(Stubs.ALICE, RUN, "m", SILENT);
 
-        assertThat(outcome).isEqualTo(new RunOutcome.Failed("model_error"));
+        assertThat(outcome).isEqualTo(new RunOutcome.Failed("model_error", Optional.of("exception_IllegalStateException")));
         assertThat(calls).hasValue(1);
         assertThat(record().outcome()).contains("failed");
     }
@@ -230,14 +231,14 @@ class AgentRuntimeTest {
         }
     }
 
-    private RunTrace failedRun(RuntimeException failure) {
+    private RunTrace failedRun(RuntimeException failure, String cause) {
         RunTrace trace = new RunTrace(RUN);
         ModelClient failing = (conversation, tools) -> {
             clock.advance(Duration.ofMillis(7_250));
             throw failure;
         };
         assertThat(runtime(failing).run(Stubs.ALICE, RUN, "m", SILENT, trace))
-                .isEqualTo(new RunOutcome.Failed("model_error"));
+                .isEqualTo(new RunOutcome.Failed("model_error", Optional.of(cause)));
         assertThat(record().reason()).contains("model_error");
         return trace;
     }
@@ -246,7 +247,7 @@ class AgentRuntimeTest {
     // and the failure's fixed code as the outcome, never its message; the record's reason stays model_error)
     @Test
     void run_modelFailureWithACode_llmCallLineWithTheCode() {
-        RunTrace trace = failedRun(new CodedFailure("SERVER_ERROR"));
+        RunTrace trace = failedRun(new CodedFailure("SERVER_ERROR"), "SERVER_ERROR");
 
         assertThat(trace.lines()).hasSize(2);
         assertThat(trace.lines().getFirst()).contains("\"span\":\"llm.call\"").contains("\"index\":1")
@@ -441,7 +442,8 @@ class AgentRuntimeTest {
     // Covers: 11 (D7), I8, m5-stage5b (a failure that carries no code is "unknown")
     @Test
     void run_modelFailureWithoutACode_llmCallLineUnknown() {
-        RunTrace trace = failedRun(new IllegalStateException("SECRET-503 from the model"));
+        RunTrace trace = failedRun(new IllegalStateException("SECRET-503 from the model"),
+                "exception_IllegalStateException");
 
         assertThat(trace.lines().getFirst()).contains("\"span\":\"llm.call\"").contains("\"index\":1")
                 .contains("\"duration_ms\":7250").contains("\"outcome\":\"unknown\"");
@@ -451,7 +453,7 @@ class AgentRuntimeTest {
     // Covers: 11 (D7), I8, m5-stage5b (a code that is not an identifier is "unknown", so no text reaches the trace)
     @Test
     void run_modelFailureCodeNotAnIdentifier_llmCallLineUnknown() {
-        RunTrace trace = failedRun(new CodedFailure("SECRET text, not a code"));
+        RunTrace trace = failedRun(new CodedFailure("SECRET text, not a code"), "unknown");
 
         assertThat(trace.lines().getFirst()).contains("\"outcome\":\"unknown\"");
         assertThat(trace.jsonl()).doesNotContain("SECRET");

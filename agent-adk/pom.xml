@@ -23,6 +23,12 @@
             <groupId>com.google.genai</groupId>
             <artifactId>google-genai</artifactId>
         </dependency>
+        <!-- The SDK's HTTP layer, which it lets us configure (ClientOptions.customHttpClient): GeminiModelClient reads
+             Retry-After through it (6.3). The version the SDK brings; agent-adk alone may import it. -->
+        <dependency>
+            <groupId>com.squareup.okhttp3</groupId>
+            <artifactId>okhttp</artifactId>
+        </dependency>
         <!-- Tests only: GeminiSchemaKeywordsTest sends the five tools' real schemas (C15 VERIFY). Main code depends on
              core alone; agent-runtime never depends on this module. -->
         <dependency>

@@ -52,8 +52,14 @@ public final class GeminiException extends RuntimeException implements ModelFail
     private final String cause;
     private final Optional<Duration> retryAfter;
 
+    /** A failure whose cause (6.5) is the reason's name in lower case, such as {@code configuration}. */
     GeminiException(Reason reason) {
-        this(reason, Objects.requireNonNull(reason, "reason").name(), Optional.empty());
+        this(reason, Objects.requireNonNull(reason, "reason").name().toLowerCase(java.util.Locale.ROOT), Optional.empty());
+    }
+
+    /** A failure of the answer, whose cause is {@code cause} (6.5): one of {@link GeminiMapping}'s constants. */
+    GeminiException(Reason reason, String cause) {
+        this(reason, cause, Optional.empty());
     }
 
     /**
@@ -77,21 +83,19 @@ public final class GeminiException extends RuntimeException implements ModelFail
         return reason.name();
     }
 
-    /** Skeleton for the red tests of the model_error cause: the reason's name for now. */
     @Override
     public String cause() {
-        return reason.name();
+        return cause;
     }
 
-    /** Skeleton: never retryable yet. */
+    /** 6.3: only an HTTP 429 or 503 may succeed when tried again. */
     @Override
     public boolean retryable() {
-        return false;
+        return cause.equals("http_429") || cause.equals("http_503");
     }
 
-    /** Skeleton: no Retry-After yet. */
     @Override
     public Optional<Duration> retryAfter() {
-        return Optional.empty();
+        return retryAfter;
     }
 }

@@ -43,6 +43,11 @@ public final class BudgetMeter {
         return refused;
     }
 
+    /** Whether the model-call limit leaves one more call; the other limits are checked when it is made. */
+    public boolean modelCallLeft() {
+        return modelCalls < budget.maxModelCalls();
+    }
+
     /** Counts a tool call, or names the limit that refuses it (the call is then not counted and must not be made). */
     public Optional<BudgetLimit> beforeToolCall() {
         Optional<BudgetLimit> refused = toolCalls >= budget.maxToolCalls()

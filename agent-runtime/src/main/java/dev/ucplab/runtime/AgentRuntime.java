@@ -3,6 +3,7 @@ package dev.ucplab.runtime;
 import dev.ucplab.core.agent.Conversation;
 import dev.ucplab.core.agent.Message;
 import dev.ucplab.core.agent.ModelClient;
+import dev.ucplab.core.agent.ModelFailure;
 import dev.ucplab.core.agent.ModelTurn;
 import dev.ucplab.core.agent.RunId;
 import dev.ucplab.core.agent.RunRecord;
@@ -50,6 +51,10 @@ import java.util.Optional;
 public final class AgentRuntime {
 
     private static final String INTERNAL_ERROR = "internal_error";
+    /** 6.3: the wait before trying a failed model call again when the API named none. */
+    static final Duration RETRY_WAIT = Duration.ofSeconds(2);
+    /** 6.3: the time kept for the retried call itself; a wait that leaves less is not made. */
+    static final Duration RETRY_CALL = Duration.ofSeconds(5);
 
     private final ModelClient model;
     private final String modelName;
@@ -208,6 +213,7 @@ public final class AgentRuntime {
 
         RunOutcome loop(Conversation initial) {
             conversation = initial;
+            boolean retried = false;
             while (true) {
                 Optional<BudgetLimit> refused = meter.beforeModelCall();
                 if (refused.isPresent()) {
@@ -220,11 +226,17 @@ public final class AgentRuntime {
                 } catch (ScriptDriftException e) {
                     throw e;
                 } catch (RuntimeException e) {
-                    // The trace keeps the failure's fixed code, so a 503, a timeout and a hang can be told apart;
-                    // the record's reason stays model_error.
+                    // The trace keeps the failure's fixed code and cause, so a 503, a timeout and a blocked answer
+                    // can be told apart; the record's reason stays model_error, with the cause beside it (6.5).
                     trace.llmCallFailed(meter.modelCalls(), Duration.between(before, clock.instant()), e);
-                    return new RunOutcome.Failed("model_error");
+                    Optional<Duration> wait = retried ? Optional.empty() : retryWait(e);
+                    if (wait.isPresent() && waited(wait.get())) {
+                        retried = true;
+                        continue;
+                    }
+                    return new RunOutcome.Failed("model_error", Optional.of(RunTrace.causeOf(e)));
                 }
+                retried = false;
                 meter.afterTurn(turn.usage());
                 trace.llmCall(meter.modelCalls(), Duration.between(before, clock.instant()),
                         turn.usage().inputTokens(), turn.usage().outputTokens(), turn.toolCalls().size());
@@ -267,6 +279,31 @@ public final class AgentRuntime {
             }
         }
 
+        /**
+         * 6.3: how long to wait before trying a failed model call once more, or empty when it is not tried again: only
+         * a retryable failure (HTTP 429 or 503), only with a model call left, and only when the wait, its
+         * {@code Retry-After} or {@link AgentRuntime#RETRY_WAIT}, plus {@link AgentRuntime#RETRY_CALL} for the call still fits in the wall
+         * clock left.
+         */
+        private Optional<Duration> retryWait(RuntimeException failure) {
+            if (!(failure instanceof ModelFailure f) || !f.retryable() || !meter.modelCallLeft()) {
+                return Optional.empty();
+            }
+            Duration wait = f.retryAfter().filter(d -> !d.isNegative()).orElse(RETRY_WAIT);
+            return wait.plus(RETRY_CALL).compareTo(meter.remaining()) <= 0 ? Optional.of(wait) : Optional.empty();
+        }
+
+        /** Waits before the retry; an interrupted wait is no retry, and the interrupt is kept. */
+        private boolean waited(Duration wait) {
+            try {
+                sleeper.sleep(wait);
+                return true;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+
         void finish(RunOutcome outcome) {
             String status = switch (outcome) {
                 case RunOutcome.Done d -> awaitingApproval() ? "waiting_for_approval" : "done";
@@ -279,7 +316,7 @@ public final class AgentRuntime {
                 case RunOutcome.Failed f -> f.reason();
                 default -> "";
             };
-            end(status, detail);
+            end(status, detail, outcome instanceof RunOutcome.Failed f ? f.cause() : Optional.empty());
         }
 
         /**
@@ -289,21 +326,21 @@ public final class AgentRuntime {
          */
         void finishFailed(String reason, RuntimeException cause) {
             try {
-                end("failed", reason);
+                end("failed", reason, Optional.empty());
             } catch (RuntimeException e) {
                 cause.addSuppressed(e);
             }
         }
 
-        private void end(String status, String detail) {
+        private void end(String status, String detail, Optional<String> cause) {
             Instant end = clock.instant();
             Instant ended = end.isBefore(start) ? start : end;
             Optional<String> reason = detail.isEmpty() ? Optional.empty() : Optional.of(detail);
             runs.update(auth.user(), new RunRecord(context.runId(), auth.user(), modelId, start, Optional.of(ended),
                     Optional.of(status), reason, baseModelCalls + meter.modelCalls(), baseToolCalls + meter.toolCalls(),
                     baseInputTokens + meter.usage().inputTokens(), baseOutputTokens + meter.usage().outputTokens(),
-                    intents, events));
-            trace.run(status, detail, baseModelCalls + meter.modelCalls(), baseToolCalls + meter.toolCalls(),
+                    intents, events).withCause(cause));
+            trace.run(status, detail, cause, baseModelCalls + meter.modelCalls(), baseToolCalls + meter.toolCalls(),
                     baseInputTokens + meter.usage().inputTokens(), baseOutputTokens + meter.usage().outputTokens(),
                     Duration.between(begun, ended));
         }

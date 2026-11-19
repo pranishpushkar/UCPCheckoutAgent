@@ -80,12 +80,16 @@ final class RunController {
         return out;
     }
 
-    /** The 201 and 200 shape of 23.1: {@code run_id, status, reason?, messages[], intent_ids[]}. */
+    /** The 201 and 200 shape of 23.1: {@code run_id, status, reason?, cause?, messages[], intent_ids[]}. */
     private static Map<String, Object> summary(RunView view) {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("run_id", view.id().value());
         out.put("status", view.status());
         view.reason().ifPresent(r -> out.put("reason", r));
+        // 23.1, 6.5: a model_error's cause, from the stored run, so it reads the same after a restart.
+        if (view.reason().equals(Optional.of("model_error"))) {
+            view.record().flatMap(RunRecord::cause).ifPresent(c -> out.put("cause", c));
+        }
         List<Map<String, Object>> messages = new ArrayList<>();
         for (RunMessage m : view.messages()) {
             Map<String, Object> message = new LinkedHashMap<>();

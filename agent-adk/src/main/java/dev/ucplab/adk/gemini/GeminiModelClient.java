@@ -3,6 +3,7 @@ package dev.ucplab.adk.gemini;
 import com.google.genai.Client;
 import com.google.genai.errors.ApiException;
 import com.google.genai.errors.GenAiIOException;
+import com.google.genai.types.ClientOptions;
 import com.google.genai.types.Content;
 import com.google.genai.types.GenerateContentConfig;
 import com.google.genai.types.GenerateContentResponse;
@@ -17,6 +18,7 @@ import dev.ucplab.core.agent.ModelKey;
 import dev.ucplab.core.agent.ModelTurn;
 import dev.ucplab.core.agent.ToolSpec;
 import java.io.InterruptedIOException;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -24,6 +26,9 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.UnaryOperator;
+import java.util.regex.Pattern;
+import okhttp3.OkHttpClient;
+import okhttp3.Response;
 
 /**
  * The live {@link ModelClient} (6.5, ADR 0004): one {@code client.models.generateContent} call per turn on
@@ -36,7 +41,11 @@ import java.util.function.UnaryOperator;
  * from outside its package. The key goes only into the SDK's builder, which sends it in the {@code x-goog-api-key}
  * header.
  *
- * <p>Every exception that leaves {@link #generate} is a {@link GeminiException} with a fixed reason (I8). For the live
+ * <p>Every exception that leaves {@link #generate} is a {@link GeminiException} with a fixed reason and a cause from
+ * 6.5's closed vocabulary: the HTTP status, the answer's finish reason, or an exception's class, never its content (I8).
+ * The SDK keeps no response header, so the client's own OkHttp client reads {@code Retry-After} for 6.3: an
+ * application interceptor, which runs on the calling thread (the SDK's call is synchronous), keeps the last answer's
+ * value for that thread alone; nothing else of the answer is kept, and nothing is logged. For the live
  * I6 check, {@link ModelClientSettings#requestedTools} is given the function names of every request this client
  * actually built, and {@link ModelClientSettings#answeringModel} the model version each response names.
  *
@@ -48,6 +57,10 @@ public final class GeminiModelClient implements ModelClient, AutoCloseable {
 
     static final String CLIENT_MODE = "GOOGLE_GENAI_CLIENT_MODE";
     private static final String ID_PREFIX = "ucplab-call-";
+    /** 6.3: a {@code Retry-After} read as a whole number of seconds; an HTTP date or anything else is not kept. */
+    private static final Pattern SECONDS = Pattern.compile("[0-9]{1,6}");
+    /** The last answer's {@code Retry-After} on this thread, set by the interceptor during {@link #generate}. */
+    private static final ThreadLocal<String> RETRY_AFTER = new ThreadLocal<>();
 
     private final Client client;
     private final String model;
@@ -77,16 +90,35 @@ public final class GeminiModelClient implements ModelClient, AutoCloseable {
                             .timeout(Math.toIntExact(settings.callTimeout().toMillis()))
                             .retryOptions(HttpRetryOptions.builder().attempts(1).build())
                             .build())
+                    .clientOptions(ClientOptions.builder().customHttpClient(http()).build())
                     .build();
         } catch (RuntimeException e) {
             throw new GeminiException(Reason.CONFIGURATION);
         }
     }
 
+    /**
+     * The OkHttp client the SDK builds on: no timeouts of its own (OkHttp's defaults are 10 s each), since the SDK adds
+     * the call timeout from {@link HttpOptions}, and the interceptor that keeps {@code Retry-After}.
+     */
+    private static OkHttpClient http() {
+        return new OkHttpClient.Builder()
+                .connectTimeout(Duration.ZERO)
+                .readTimeout(Duration.ZERO)
+                .writeTimeout(Duration.ZERO)
+                .addInterceptor(chain -> {
+                    Response answer = chain.proceed(chain.request());
+                    RETRY_AFTER.set(answer.header("Retry-After"));
+                    return answer;
+                })
+                .build();
+    }
+
     @Override
     public ModelTurn generate(Conversation conversation, List<ToolSpec> tools) {
         Objects.requireNonNull(conversation, "conversation");
         Objects.requireNonNull(tools, "tools");
+        RETRY_AFTER.remove();
         try {
             GenerateContentConfig config = GeminiMapping.config(conversation.systemPrompt(), tools,
                     GeminiModels.MAX_OUTPUT_TOKENS);
@@ -99,12 +131,29 @@ public final class GeminiModelClient implements ModelClient, AutoCloseable {
         } catch (GeminiException e) {
             throw e;
         } catch (ApiException e) {
-            throw new GeminiException(reason(e.code()));
+            throw new GeminiException(reason(e.code()), "http_" + Math.max(0, e.code()), retryAfter());
         } catch (GenAiIOException e) {
-            throw new GeminiException(timedOut(e) ? Reason.TIMEOUT : Reason.NETWORK);
+            throw timedOut(e) ? new GeminiException(Reason.TIMEOUT, "timeout")
+                    : new GeminiException(Reason.NETWORK, named("network_", e.getCause() == null ? e : e.getCause()));
         } catch (RuntimeException e) {
-            throw new GeminiException(Reason.INTERNAL);
+            throw new GeminiException(Reason.INTERNAL, named("exception_", e));
+        } finally {
+            RETRY_AFTER.remove();
         }
+    }
+
+    /** The answer's {@code Retry-After} in whole seconds, when it sent one (6.3). */
+    private static Optional<Duration> retryAfter() {
+        String value = RETRY_AFTER.get();
+        return value != null && SECONDS.matcher(value.strip()).matches()
+                ? Optional.of(Duration.ofSeconds(Long.parseLong(value.strip()))) : Optional.empty();
+    }
+
+    /** 6.5: {@code prefix} and the class's simple name, as identifier characters, at most 64 in all; never a message. */
+    static String named(String prefix, Throwable e) {
+        String name = e.getClass().getSimpleName().replaceAll("[^A-Za-z0-9_]", "_");
+        String cause = prefix + (name.isEmpty() ? "anonymous" : name);
+        return cause.length() > 64 ? cause.substring(0, 64) : cause;
     }
 
     static Reason reason(int status) {

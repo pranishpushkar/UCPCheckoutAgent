@@ -250,8 +250,9 @@ async function send(event) {
 
 // <run-end>
 // 24.3: the run's status and reason in words, and the chat text of a run that ended without an answer: fixed texts of
-// the page, chosen from the two fields, never the codes themselves. A reason the table does not list takes its status's
-// "" row; a status it does not list reads "Stopped.".
+// the page, chosen from the fields, never the codes themselves. A reason the table does not list takes its status's
+// "" row; a status it does not list reads "Stopped.". A model_error whose cause is a 429 or a 503 (6.3: tried once
+// more already) reads as a busy model.
 const STEPS = ["Stopped: ran out of steps.",
   "I looked at several options but ran out of steps before choosing. Try a narrower request."];
 const RUN_ENDS = new Map([
@@ -276,6 +277,9 @@ const RUN_ENDS = new Map([
     ["", ["Stopped.", "I stopped before finishing. Try again in a moment."]],
   ])],
 ]);
+const BUSY = ["Stopped: the model is busy.",
+  "The model is busy right now; try again in a minute."];
+const BUSY_CAUSES = new Set(["http_429", "http_503"]);
 const RUN_STATUSES = new Map([
   ["running", "Working on it."],
   ["waiting_for_user", "Waiting for your answer."],
@@ -285,6 +289,9 @@ const RUN_STATUSES = new Map([
 
 // [status line, chat text]; the chat text is "" when the run has its own answer or is not over.
 function runEnd(run) {
+  if (run.status === "failed" && run.reason === "model_error" && BUSY_CAUSES.has(run.cause)) {
+    return BUSY;
+  }
   const ends = RUN_ENDS.get(run.status);
   if (ends) {
     return ends.get(run.reason) || ends.get("");
@@ -981,7 +988,10 @@ async function startLab() {
   const select = $("lab-merchant");
   clear(select);
   clear($("order-counters"));
-  list.data.merchants.forEach((m) => {
+  // 24.3: only the merchants the lab controls have faults and orders; the others (the Global Catalog, a live store)
+  // are neither listed here nor polled.
+  const lab = list.data.merchants.filter((m) => m.lab === true);
+  lab.forEach((m) => {
     select.appendChild(el("option", m.name + (m.status === "ACTIVE" ? "" : " (suspended)")))
         .setAttribute("value", m.merchant_id);
     const box = el("div");
@@ -992,8 +1002,10 @@ async function startLab() {
     counters.set(m.merchant_id, count);
   });
   showMerchantMode();
-  refreshOrders();
-  window.setInterval(refreshOrders, 2000);
+  if (lab.length > 0) {
+    refreshOrders();
+    window.setInterval(refreshOrders, 2000);
+  }
 }
 
 async function refreshOrders() {
