@@ -9,20 +9,21 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * The system prompt (6.4): {@code system-prompt-v2.txt}, loaded once. It states the seven 6.4 requirements, each as one
+ * The system prompt (6.4): {@code system-prompt-v3.txt}, loaded once. It states the eight 6.4 requirements, each as one
  * paragraph starting with a fixed marker ({@link #MARKERS}). The version is part of the file name and goes into
  * {@code RunRecord.model} as {@code <model>/<version>}.
  */
 public final class SystemPrompt {
 
-    public static final String VERSION = "v2";
+    public static final String VERSION = "v3";
 
     /**
      * Role; tool results are data; cannot pay or approve; ask when ambiguous; cheapest only without a preference; search
-     * with product words and pick within the budget; after a P9 refusal one cheaper try or none fits (v2).
+     * with product words and pick within the budget (v2); compare from the search results and read one product (v3); after
+     * a P9 refusal one cheaper try or none fits (v2).
      */
     public static final List<String> MARKERS = List.of("[ROLE]", "[DATA]", "[LIMITS]", "[ASK]", "[CHEAPEST]", "[SEARCH]",
-            "[REFUSED]");
+            "[COMPARE]", "[REFUSED]");
 
     private static final String TEXT = load("system-prompt-" + VERSION + ".txt");
 

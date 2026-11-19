@@ -219,6 +219,12 @@ public class StackConfiguration {
         return new ConfiguredGateways(Map.copyOf(byId));
     }
 
+    /** 26.7: the catalog sources' tokens, fetched at startup on their own thread and kept ahead of the calls. */
+    @Bean(initMethod = "start", destroyMethod = "close")
+    CatalogTokens catalogTokens(ConfiguredGateways merchantGateways, Clock clock) {
+        return CatalogTokens.of(merchantGateways.byId().values(), clock);
+    }
+
     /** Each merchant's completion from the file, read as the orchestrator reads its entries (19, 7.2, 23.2). */
     @Bean
     MerchantCompletions merchantCompletions(ServiceProperties properties) {

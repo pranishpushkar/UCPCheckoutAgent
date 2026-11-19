@@ -24,9 +24,18 @@ public final class TokenRefresher {
         this.clock = Objects.requireNonNull(clock, "clock");
     }
 
-    /** Skeleton for the red tests of the catalog's startup token: fetches nothing yet. */
+    /**
+     * Holds a token, fetching one only when none is held or the held one is due ({@link TokenProvider#current}), and
+     * returns how long until the next refresh: until that token's refresh time, at least {@link #FLOOR}; or
+     * {@link #RETRY} when no token could be had. The reason of a failure is not kept: it names no secret, but nothing
+     * reads it.
+     */
     public Duration refresh() {
-        return RETRY;
+        if (!(tokens.current() instanceof TokenResult.Ok ok)) {
+            return RETRY;
+        }
+        Duration untilDue = Duration.between(clock.instant(), ok.token().refreshAt());
+        return untilDue.compareTo(FLOOR) < 0 ? FLOOR : untilDue;
     }
 
     @Override

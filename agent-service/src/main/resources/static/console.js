@@ -248,6 +248,51 @@ async function send(event) {
   showRun(result.data);
 }
 
+// <run-end>
+// 24.3: the run's status and reason in words, and the chat text of a run that ended without an answer: fixed texts of
+// the page, chosen from the two fields, never the codes themselves. A reason the table does not list takes its status's
+// "" row; a status it does not list reads "Stopped.".
+const STEPS = ["Stopped: ran out of steps.",
+  "I looked at several options but ran out of steps before choosing. Try a narrower request."];
+const RUN_ENDS = new Map([
+  ["budget_exceeded", new Map([
+    ["MODEL_CALLS", STEPS],
+    ["TOOL_CALLS", STEPS],
+    ["WALL_CLOCK", ["Stopped: ran out of time.", "I ran out of time before choosing. Try a narrower request."]],
+    ["TOKENS", ["Stopped: too much to read.", "I had too much to read before choosing. Try a narrower request."]],
+    ["", STEPS],
+  ])],
+  ["user_timeout", new Map([
+    ["", ["Stopped: no answer from you.", "I stopped waiting for your answer. Send a new message to start again."]],
+  ])],
+  ["failed", new Map([
+    ["model_error", ["Stopped: the model could not be reached.",
+      "I couldn't reach the model, so I stopped. Try again in a moment."]],
+    ["tool_error", ["Stopped: a step failed.", "A step failed, so I stopped. Try again in a moment."]],
+    ["internal_error", ["Stopped: something went wrong.",
+      "Something went wrong on our side, so I stopped. Try again in a moment."]],
+    ["interrupted", ["Stopped: the service restarted.",
+      "The service restarted while I was working, so I stopped. Send your request again."]],
+    ["", ["Stopped.", "I stopped before finishing. Try again in a moment."]],
+  ])],
+]);
+const RUN_STATUSES = new Map([
+  ["running", "Working on it."],
+  ["waiting_for_user", "Waiting for your answer."],
+  ["waiting_for_approval", "Waiting for your approval."],
+  ["done", "Done."],
+]);
+
+// [status line, chat text]; the chat text is "" when the run has its own answer or is not over.
+function runEnd(run) {
+  const ends = RUN_ENDS.get(run.status);
+  if (ends) {
+    return ends.get(run.reason) || ends.get("");
+  }
+  return [RUN_STATUSES.get(run.status) || "Stopped.", ""];
+}
+// </run-end>
+
 function showRun(run) {
   currentRun = {id: run.run_id, status: run.status, intents: run.intent_ids || []};
   clear($("chat"));
@@ -255,7 +300,11 @@ function showRun(run) {
     const item = el("li", m.text, m.role + (m.kind === "question" ? " question" : ""));
     $("chat").appendChild(item);
   });
-  setStatus("Run " + run.status.replace(/_/g, " ") + (run.reason ? " (" + run.reason + ")" : "") + ".");
+  const [statusText, chatText] = runEnd(run);
+  if (chatText) {
+    $("chat").appendChild(el("li", chatText, "agent"));
+  }
+  setStatus(statusText);
   const intents = run.intent_ids || [];
   if (intents.length > 0) {
     const newest = intents[intents.length - 1];
@@ -896,6 +945,20 @@ function showMerchantMode() {
   if (domain) {
     $("dev-tools").open = false;
   }
+  // 26.7: the Global Catalog reads as such, never as the lab, and has no Developer tools.
+  if (!domain && catalogMode()) {
+    badge.textContent = "Shopify Global Catalog";
+    $("dev-tools").hidden = true;
+    $("dev-tools").open = false;
+  }
+}
+
+// The followed intent is at a link merchant, or, before one, the lab's list has one (24.3).
+function catalogMode() {
+  if (currentIntent && currentIntent.merchant) {
+    return currentIntent.merchant.completion === "link";
+  }
+  return labMerchants.some((m) => m.completion === "link");
 }
 // </merchant-mode>
 

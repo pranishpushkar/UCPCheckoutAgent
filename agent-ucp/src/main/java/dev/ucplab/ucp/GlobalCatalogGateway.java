@@ -100,6 +100,14 @@ public final class GlobalCatalogGateway implements MerchantGateway, CatalogGatew
                 Optional.empty()), new FailureClassifier(clock), gate, sleeper, random, ids);
     }
 
+    /**
+     * The token-tier tokens this source's calls carry, or empty for the anonymous tier: for the service to fetch the
+     * token at startup and keep it ahead of the calls (26.7). The provider never shows the token (I8).
+     */
+    public Optional<TokenProvider> tokens() {
+        return tokens;
+    }
+
     // ---------------------------------------------------------------- the catalog
 
     @Override
