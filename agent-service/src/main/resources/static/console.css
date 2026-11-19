@@ -1,4 +1,5 @@
-/* 24.3: light by default; the dark variant below changes only the tokens. Every text pair meets WCAG AA. */
+/* 24.3: light by default, whatever the system's setting; the dark variant below, only after the header's toggle,
+   changes only the tokens. Every text pair meets WCAG AA. */
 :root {
   --bg: #ffffff;
   --surface: #ffffff;
@@ -17,25 +18,23 @@
   --live-border: #e8c35a;
   --pending: #b0b0b0;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #111318;
-    --surface: #1a1d23;
-    --border: #30353d;
-    --fg: #e8eaed;
-    --muted: #a6adb7;
-    --accent: #8ab4ff;
-    --accent-fg: #0b1424;
-    --accent-soft: #1b2638;
-    --success: #56d37b;
-    --success-bg: #15291c;
-    --warn: #e3b341;
-    --bad: #ff8f84;
-    --live-bg: #3a2c00;
-    --live-fg: #ffd666;
-    --live-border: #7a5c00;
-    --pending: #5c636e;
-  }
+:root[data-theme="dark"] {
+  --bg: #111318;
+  --surface: #1a1d23;
+  --border: #30353d;
+  --fg: #e8eaed;
+  --muted: #a6adb7;
+  --accent: #8ab4ff;
+  --accent-fg: #0b1424;
+  --accent-soft: #1b2638;
+  --success: #56d37b;
+  --success-bg: #15291c;
+  --warn: #e3b341;
+  --bad: #ff8f84;
+  --live-bg: #3a2c00;
+  --live-fg: #ffd666;
+  --live-border: #7a5c00;
+  --pending: #5c636e;
 }
 * { box-sizing: border-box; }
 body {
@@ -92,6 +91,8 @@ button, input, select, summary {
 button { cursor: pointer; }
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-weight: 600; }
 button:disabled { opacity: 0.5; cursor: default; }
+/* The theme toggle's state is its aria-pressed, shown as the accent's soft fill as well as by the screen reader. */
+#theme-toggle[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
 summary { display: flex; align-items: center; cursor: pointer; border: 0; padding-left: 0; list-style-position: inside; }
 summary::before { content: "▸"; margin-right: 8px; color: var(--muted); }
 details[open] > summary::before { content: "▾"; }

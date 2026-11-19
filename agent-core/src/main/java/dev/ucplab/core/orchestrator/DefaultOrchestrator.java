@@ -71,6 +71,7 @@ import dev.ucplab.core.merchant.Transport;
 import dev.ucplab.core.merchant.UpdateCheckout;
 import dev.ucplab.core.policy.PolicyDecision;
 import dev.ucplab.core.policy.PolicyEngine;
+import dev.ucplab.core.policy.PolicyRule;
 import dev.ucplab.core.policy.RequoteOutcome;
 import dev.ucplab.core.policy.RequotePolicy;
 import java.net.URI;
@@ -833,7 +834,7 @@ public final class DefaultOrchestrator implements Orchestrator {
         if (!decision.allowed()) {
             // DESIGN GAP: table 7.2 has no QUOTING row for a quote that policy denies (P2, P3, P4). This uses the
             // QUOTING -> FAILED_NOT_CHARGED row with a best-effort cancel; failure_reason names the rule.
-            policyEvent(base.id(), "quote", decision);
+            quoteDeniedEvent(base.id(), decision, view, base.budget());
             Step denied = finish(base, attempt, AttemptStatus.RESPONDED, http, summary,
                     move(base, TransitionEvent.ITEM_UNAVAILABLE), policyReason(decision));
             // The refused quote goes back with the result, so propose_purchase can name the total P9 refused (6.2).
@@ -2029,5 +2030,25 @@ public final class DefaultOrchestrator implements Orchestrator {
                 "status", a.status().name(), "sent_at", a.sentAt().toString())).toList()));
         transitionEvent(intent.id(), m.transition());
         return moved(intent, next);
+    }
+
+    /**
+     * A quote's policy denial, as {@link #policyEvent} records one; a P9 denial also stores the quoted total and the
+     * budget, numbers only, so the refusal can be explained from what was stored (9.1, 23.2 refused_quote). No lambda:
+     * the mutation equivalents name lambdas by number.
+     */
+    private void quoteDeniedEvent(IntentId id, PolicyDecision decision, CheckoutView view, Optional<Budget> budget) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("stage", "quote");
+        payload.put("allowed", false);
+        PolicyRule rule = decision.ruleId().orElseThrow();
+        payload.put("rule", rule.name());
+        payload.put("reason", decision.reason());
+        if (rule == PolicyRule.P9) {
+            payload.put("quoted", Map.of("currency", view.currency(), "total_minor", view.totalMinor()));
+            payload.put("budget", Map.of("amount_minor", budget.orElseThrow().amountMinor(),
+                    "currency", budget.orElseThrow().currency()));
+        }
+        event(id, "policy_decision", payload);
     }
 }

@@ -112,8 +112,9 @@ server. The Blue Mug quotes above $10.00 at the lab merchant.
   `under 500` (no sign or code) leave it empty.
 - [ ] Change the field by hand (or clear it), then keep typing an amount in the message: the field is **not** refilled.
 - [ ] Send `a blue mug under $10` with the field at 10 USD: the run ends with no approval card; the timeline ends
-  **Stopped: no order was placed**; the intent's `failure_reason` is `policy_P9`; the agent says nothing fits the
-  budget and names the quoted price. No order at the merchant.
+  **Over your budget: the store quoted $12.96, your budget is $10.00**, never the code `policy_P9`; the agent says
+  **Over your budget of $10.00; the closest I found was $12.96** and does not claim it asked for an approval. No order
+  at the merchant.
 - [ ] Send the same message with the field edited to **500**: the field wins and an approval card opens, with **Your
   budget: $500.00** under the total.
 - [ ] While the run continues (answering a question, or a follow-up), the field is disabled and keeps the run's budget.
@@ -135,8 +136,11 @@ server. The Blue Mug quotes above $10.00 at the lab merchant.
   Developer tools and, once it is open, every fault button, in a sensible order; each has a visible focus ring; Enter in the message box sends; Space or Enter presses a button.
 - [ ] **aria-live:** with a screen reader (or the accessibility tree), a status change ("Run done", "Intent completed",
   "Fault set") is announced once, politely.
-- [ ] Dark mode (system setting): the same layout in dark colours; text stays readable (WCAG AA), the live-store badge
-  stays amber, the success card green, and the focus ring stays visible.
+- [ ] With the system set to dark, the page still opens **light**.
+- [ ] **Dark theme** in the header turns the page dark (the button shows pressed): the same layout in dark colours;
+  text stays readable (WCAG AA), the live-store badge stays amber, the success card green, and the focus ring stays
+  visible. Reload: it stays dark. Press it again: light, and it stays light after a reload. In a private window it
+  starts light.
 
 ## 8. Handoff at a real store (H5, the owner only)
 

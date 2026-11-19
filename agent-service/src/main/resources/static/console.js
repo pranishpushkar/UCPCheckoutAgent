@@ -80,9 +80,44 @@ function errorText(result) {
   return result.data && result.data.message ? result.data.message : "Request failed (" + result.status + ").";
 }
 
+// <theme>
+// 24.3: light by default, whatever the system's setting; dark only after the header's toggle. The choice is the one
+// value the console keeps in browser storage, under one key; empty, blocked or anything else is light.
+const THEME_KEY = "ucplab.theme";
+
+function storedTheme() {
+  try {
+    return localStorage.getItem(THEME_KEY) === "dark" ? "dark" : "light";
+  } catch (e) {
+    return "light";
+  }
+}
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme);
+  $("theme-toggle").setAttribute("aria-pressed", String(theme === "dark"));
+}
+
+function toggleTheme() {
+  const theme = document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";
+  applyTheme(theme);
+  try {
+    localStorage.setItem(THEME_KEY, theme);
+  } catch (e) {
+    // Storage is blocked: the choice lasts for this page only.
+  }
+}
+
+function startTheme() {
+  applyTheme(storedTheme());
+  $("theme-toggle").addEventListener("click", toggleTheme);
+}
+// </theme>
+
 // ---- boot ----------------------------------------------------------------------------------------------------
 
 async function boot() {
+  startTheme();
   const me = await api("GET", "/api/me");
   if (!me.ok) {
     return;
@@ -581,11 +616,75 @@ function showSuccess(text, quote) {
 // <milestones>
 // 24.3: the stepper, made from the intent's state, its merchant's completion, its approval and the store's follow-up;
 // never from the name of anything the timeline records. Each step is {label, mark}: done, current, pending or ended.
+// The state's text, for a reason REASON_TEXT does not name or no reason.
 const ENDINGS = new Map([
-  ["REJECTED", "Rejected by you"],
+  ["REJECTED", "Rejected: no order was placed"],
   ["FAILED_NOT_CHARGED", "Stopped: no order was placed"],
   ["ESCALATED", "Stopped: the outcome needs a person to check"],
 ]);
+
+// 24.3: the text of each failure_reason. A Map, so no other key can match; the code itself is never shown.
+const REASON_TEXT = new Map([
+  ["approval_rejected", "Rejected by you"],
+  ["approval_expired", "The approval expired: no order was placed"],
+  ["handoff_timeout", "The handoff to the store timed out: no order was placed"],
+  ["price_unstable", "The store's price kept changing: no order was placed"],
+  ["policy_P1", "This store is not allowed: no order was placed"],
+  ["policy_P2", "Above the limit for one purchase: no order was placed"],
+  ["policy_P3", "Above your limit for the last 24 hours: no order was placed"],
+  ["policy_P4", "Too many items or too large a quantity: no order was placed"],
+  ["policy_P5", "Too many proposals in the last hour: no order was placed"],
+  ["policy_I12", "The agent buys only at stores the operator owns: no order was placed"],
+  ["out_of_stock", "Out of stock at the store: no order was placed"],
+  ["item_unavailable", "The item is not available at the store: no order was placed"],
+  ["quantity_adjusted", "The store changed the quantity: no order was placed"],
+  ["quote_lines_differ", "The store's quote did not match the request: no order was placed"],
+  ["quote_unsupported", "The store's checkout needs something the agent cannot provide: no order was placed"],
+  ["fulfillment_unsupported", "The store offered no delivery the agent can choose: no order was placed"],
+  ["quote_retries_exhausted", "The store did not answer with a quote: no order was placed"],
+  ["create_rejected", "The store refused the checkout: no order was placed"],
+  ["update_rejected", "The store refused the checkout: no order was placed"],
+  ["payment_declined", "The payment was declined: no order was placed"],
+  ["payment_invalid", "The payment was not accepted: no order was placed"],
+  ["canceled_by_merchant", "The store cancelled the checkout: no order was placed"],
+  ["complete_unavailable", "This store does not take orders from the agent: no order was placed"],
+  ["session_gone", "The checkout is no longer available at the store: no order was placed"],
+  ["continue_url_not_allowed", "The store's checkout link was not allowed: no order was placed"],
+  ["outcome_unknown", "Stopped: the store did not confirm whether an order was placed; a person needs to check"],
+  ["approval_invalid", "Stopped: the approval could not be confirmed; a person needs to check"],
+  ["merchant_changed", "Stopped: the store's settings changed; a person needs to check"],
+  ["merchant_not_owned", "Stopped: the store's settings changed; a person needs to check"],
+  ["handoff_status_unexpected", "Stopped: the store reported an unexpected checkout status; a person needs to check"]
+]);
+
+// The two families of merchant codes, by prefix: the code after it is the store's, never shown.
+const REASON_PREFIXES = [
+  ["merchant_error_", "The store refused the checkout: no order was placed"],
+  ["complete_error:", "The store refused the order: no order was placed"],
+];
+
+// P9: the total the store quoted and the user's budget, both from the intent answer (23.2), set as text.
+function overBudgetText(intent) {
+  const quoted = intent.refused_quote;
+  const budget = intent.budget;
+  if (!quoted || !budget) {
+    return "Over your budget: no order was placed";
+  }
+  return "Over your budget: the store quoted " + money(quoted.total_minor, quoted.currency)
+      + ", your budget is " + money(budget.amount_minor, budget.currency);
+}
+
+function endingText(intent) {
+  const reason = typeof intent.failure_reason === "string" ? intent.failure_reason : "";
+  if (reason === "policy_P9") {
+    return overBudgetText(intent);
+  }
+  if (REASON_TEXT.has(reason)) {
+    return REASON_TEXT.get(reason);
+  }
+  const prefixed = REASON_PREFIXES.find((p) => reason.startsWith(p[0]));
+  return prefixed ? prefixed[1] : ENDINGS.get(intent.state);
+}
 
 // How far the intent got: 0 Proposed, 1 Quoted, 2 approval, 3 sent or handed off, 4 the store's order.
 function reached(intent) {
@@ -609,7 +708,7 @@ function milestones(intent) {
   const labels = ["Proposed", "Quoted by the store", at > 2 ? "Approved by you" : "Waiting for your approval",
       handoff ? "Handed off to the store" : "Sent to the store", "Order placed at the store"];
   const steps = labels.map((label, i) => ({label: label, mark: i < at ? "done" : i === at ? "current" : "pending"}));
-  const ending = ENDINGS.get(intent.state);
+  const ending = ENDINGS.has(intent.state) ? endingText(intent) : "";
   if (ending) {
     return steps.slice(0, at).concat([{label: ending, mark: "ended"}]);
   }

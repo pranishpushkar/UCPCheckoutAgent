@@ -9,6 +9,7 @@ import dev.ucplab.core.intent.IntentEvent;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentState;
 import dev.ucplab.core.intent.ProposalResult;
+import dev.ucplab.core.intent.ProposedLine;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.fake.Fault;
 import dev.ucplab.core.merchant.fake.FaultRule;
@@ -58,13 +59,18 @@ class OrchestratorBudgetTest {
                         .contains("\"budget\":{\"amount_minor\":1000000,\"currency\":\"EUR\"}"));
     }
 
-    // Covers: P9, 9.1, 23.2 (only P9's event carries the amounts: an allowed quote's event and another rule's denial
-    // are as before)
+    // Covers: P9, 9.1, 23.2 (only P9's event carries the amounts: an allowed quote's event, and a P2 denial at quote
+    // of an intent that has a budget, are as before)
     @Test
     void otherPolicyEvents_carryNoAmounts() {
         IntentId allowed = lab.proposeWithin(w, TWO_SHIRTS, new Budget(5_400, "USD")).intentId();
+        IntentId overTheCap = lab.proposeWithin(w, List.of(new ProposedLine("item_789", 2)),
+                new Budget(1_000_000, "USD")).intentId();
 
+        assertThat(lab.intent(overTheCap).failureReason()).contains("policy_P2");
         assertThat(events(allowed, "policy_decision")).isNotEmpty()
+                .allSatisfy(e -> assertThat(e).doesNotContain("\"quoted\"").doesNotContain("\"budget\""));
+        assertThat(events(overTheCap, "policy_decision")).anySatisfy(e -> assertThat(e).contains("\"rule\":\"P2\""))
                 .allSatisfy(e -> assertThat(e).doesNotContain("\"quoted\"").doesNotContain("\"budget\""));
     }
 

@@ -25,7 +25,8 @@ import java.util.Set;
  * before any intent exists, and P4 stays the second layer behind it.
  *
  * <p>Returns {@code {intent_id, state, quote:{currency, total_minor, lines:[{item_id, quantity, unit_price_minor}]}}}
- * for AWAITING_APPROVAL, and {@code {intent_id, state, failure_reason?}} otherwise. It never returns the session id,
+ * for AWAITING_APPROVAL, and {@code {intent_id, state, failure_reason?}} otherwise; after a P9 denial also
+ * {@code reason}, {@code quoted} and {@code budget} (6.2). It never returns the session id,
  * merchant messages, the approval id or token, or the snapshot hash (I6, I8, 9.2).
  */
 final class ProposePurchaseTool implements Tool {
@@ -106,6 +107,8 @@ final class ProposePurchaseTool implements Tool {
                 result.put("reason", "over your budget of " + context.budget().get().display() + " (P9)");
                 result.put("quoted", Map.of("currency", proposal.quote().get().currency(),
                         "total_minor", proposal.quote().get().totalMinor()));
+                result.put("budget", Map.of("amount_minor", context.budget().get().amountMinor(),
+                        "currency", context.budget().get().currency()));
             }
         }
         return new ToolOutcome.Result(CanonicalJson.write(result), "ok", Optional.of(proposal.intentId()));
