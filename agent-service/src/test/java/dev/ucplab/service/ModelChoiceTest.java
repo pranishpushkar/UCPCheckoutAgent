@@ -75,6 +75,26 @@ class ModelChoiceTest {
                 .isEqualTo(dev.ucplab.service.config.ServiceProperties.AgentModel.SCRIPTED);
     }
 
+    // Covers: 23, 24.3, 26.6, I8 (GET /api/me names the service's model, scripted or gemini, as the model's name only:
+    // never the key or the API's URL)
+    @Test
+    void me_namesTheServicesModel_only() throws IOException {
+        service = TestService.start(dir);
+        ApiClient api = new ApiClient(service.port());
+        Session alice = api.signIn("alice");
+        assertThat(LenientJson.readObject(api.get(alice, "/api/me").body())).containsEntry("agent_model", "scripted");
+        service.close();
+
+        service = TestService.start(dir, Map.of("AGENT_MODEL", "gemini", "GEMINI_API_KEY", FAKE_KEY,
+                "GEMINI_BASE_URL", "http://127.0.0.1:9"), Optional.empty());
+        api = new ApiClient(service.port());
+        alice = api.signIn("alice");
+        HttpResponse<String> me = api.get(alice, "/api/me");
+        assertThat(LenientJson.readObject(me.body())).containsEntry("agent_model", "gemini");
+        assertThat(me.body()).doesNotContain(FAKE_KEY).doesNotContain("127.0.0.1:9");
+        assertThat(me.headers().map().toString()).doesNotContain(FAKE_KEY);
+    }
+
     // Covers: 25.4, I8 (gemini without a key refuses to start, with a fixed message that holds no value; so does an
     // unknown model name and a stub URL that is not loopback)
     @Test

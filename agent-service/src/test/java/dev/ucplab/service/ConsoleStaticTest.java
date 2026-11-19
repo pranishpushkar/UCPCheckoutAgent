@@ -230,6 +230,27 @@ class ConsoleStaticTest {
         assertThat(read("console.css")).contains(".badge.live {");
     }
 
+    // Covers: 24.3, 23, 26.6 (the header: a small fixed "Model: Gemini" label next to the merchant-mode badge, shown only
+    // when the service's /api/me says agent_model gemini; its text is fixed in the page, never set from data, and the
+    // model is never kept in the browser)
+    @Test
+    void header_showsAModelLabel_onlyWhenTheServiceRunsGemini() throws IOException {
+        String html = read("index.html");
+        String js = read("console.js");
+        String label = block(js, "model-label");
+
+        assertThat(html).contains("<span id=\"model-label\" class=\"badge model\" hidden>Model: Gemini</span>");
+        assertThat(html.indexOf("id=\"model-label\"")).as("right after the merchant-mode badge")
+                .isGreaterThan(html.indexOf("id=\"merchant-mode\""))
+                .isLessThan(html.indexOf("id=\"theme-toggle\""));
+        assertThat(label).contains("function showModel(me) {")
+                .contains("$(\"model-label\").hidden = me.agent_model !== \"gemini\";");
+        assertThat(block(js, "model-label").indexOf("textContent")).as("the label's text is the page's own").isNegative();
+        assertThat(count(js, "agent_model")).as("agent_model only in the label's code").isEqualTo(count(label, "agent_model"));
+        assertThat(js).contains("  showModel(me.data);\n");
+        assertThat(read("console.css")).contains(".badge.model {");
+    }
+
     // Covers: 24.3 (the Developer tools: the fault lab and the counters inside one details element, closed and hidden
     // until the lab answers, and hidden whenever the merchant shown is a live store)
     @Test

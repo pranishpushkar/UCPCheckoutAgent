@@ -665,5 +665,188 @@ class CtrlC(unittest.TestCase):
         self.assertIs(seen[0].get("start_new_session"), True)
 
 
+
+class GeminiModel(unittest.TestCase):
+    """--model gemini (DESIGN 26.6), with --console only: the service runs AGENT_MODEL=gemini with GEMINI_API_KEY from
+    the owner's environment only. Refused in one line when the key is unset; the key is never an argument, never printed
+    and never in the evidence. Without the option the run stays scripted, whatever the environment holds."""
+
+    KEY = "AIzaCANARY" + "k" * 10 + "0123456789abcde"
+    ENV = {"SHOPIFY_CLIENT_ID": "cid-canary-1", "SHOPIFY_CLIENT_SECRET": "csec-canary-1",
+           "SHOPIFY_STORE_DOMAIN": "my-dev-store.myshopify.com", "AGENT_PROFILE_URL": "https://example.test/profile.json",
+           "BUYER_IP": "81.2.69.161", "PATH": os.environ.get("PATH", "/bin")}
+    GUARDS = ["--console", "--i-own-this-store", "--with-buyer-ip"]
+
+    def setUp(self):
+        self.saved = dict(os.environ)
+        self.work = tempfile.mkdtemp()
+        os.environ.clear()
+        os.environ.update(self.ENV)
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self.saved)
+        if self.KEY in live.spike.TOKEN:
+            live.spike.TOKEN.remove(self.KEY)
+        shutil.rmtree(self.work)
+
+    def assertTakesAModel(self, function):
+        import inspect
+        self.assertIn("model", inspect.signature(function).parameters, "%s takes the model" % function.__name__)
+
+    def dry_run(self, *extra):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = live.main(self.GUARDS + ["--dry-run"] + list(extra))
+        self.assertEqual(code, 0)
+        return out.getvalue()
+
+    # Covers: 26.6 (scripted stays the default: no --model, no key passed on even when the shell holds one)
+    def test_scripted_staysTheDefault_andNoKeyIsPassedOn(self):
+        os.environ["GEMINI_API_KEY"] = self.KEY
+        env = live.service_env(os.environ, self.work, 8080)
+        self.assertEqual(env["AGENT_MODEL"], "scripted")
+        self.assertNotIn("GEMINI_API_KEY", env)
+        self.assertNotIn(self.KEY, json.dumps(env))
+        text = self.dry_run()
+        self.assertIn('"AGENT_MODEL": "scripted"', text)
+        self.assertNotIn("GEMINI_API_KEY", text)
+        self.assertNotIn(self.KEY, text)
+
+    # Covers: 26.6, I8 (--model gemini without the key refuses to start, in one line that names the variable; a blank
+    # key is unset)
+    def test_gemini_withoutTheKey_isRefusedInOneLine(self):
+        for value in (None, "", "   "):
+            if value is None:
+                os.environ.pop("GEMINI_API_KEY", None)
+            else:
+                os.environ["GEMINI_API_KEY"] = value
+            with self.assertRaises(SystemExit) as e:
+                live.main(self.GUARDS + ["--model", "gemini"])
+            message = str(e.exception)
+            self.assertEqual(message, "refused: --model gemini needs GEMINI_API_KEY in your environment "
+                                      "(it is never taken as an argument)", repr(value))
+            self.assertNotIn("\n", message)
+
+    # Covers: 26.6 (an unknown model, and --model outside --console, are refused)
+    def test_anUnknownModel_andTheOptionOutsideTheConsole_areRefused(self):
+        os.environ["GEMINI_API_KEY"] = self.KEY
+        with self.assertRaises(SystemExit) as e:
+            live.main(self.GUARDS + ["--dry-run", "--model", "gpt"])
+        self.assertEqual(str(e.exception), "refused: --model must be scripted or gemini")
+        with self.assertRaises(SystemExit) as e:
+            live.main(["--dry-run", "--i-own-this-store", "--with-buyer-ip", "--model", "gemini"])
+        self.assertEqual(str(e.exception), "refused: --model belongs to --console (scripts/shopify-console.sh)")
+
+    # Covers: 26.6, I8 (with --model gemini the service gets AGENT_MODEL=gemini and the key in its environment only;
+    # the dry run shows the key as <redacted> and never its value)
+    def test_gemini_putsTheKeyInTheServicesEnvironmentOnly_andTheDryRunRedactsIt(self):
+        os.environ["GEMINI_API_KEY"] = self.KEY
+        self.assertTakesAModel(live.service_env)
+        env = live.service_env(os.environ, self.work, 8080, model="gemini")
+        self.assertEqual(env["AGENT_MODEL"], "gemini")
+        self.assertEqual(env["GEMINI_API_KEY"], self.KEY)
+        text = self.dry_run("--model", "gemini")
+        self.assertIn('"AGENT_MODEL": "gemini"', text)
+        self.assertIn('"GEMINI_API_KEY": "<redacted>"', text)
+        self.assertNotIn(self.KEY, text)
+
+    # Covers: 26.6, I8 (the key is never an argument of the service's command, and is redacted from every printed line
+    # and every evidence file from the moment the service's environment holds it)
+    def test_theKey_isNeverAnArgument_andIsRedactedFromTheEvidence(self):
+        os.environ["GEMINI_API_KEY"] = self.KEY
+        self.assertTakesAModel(live.start_service)
+        seen = []
+
+        class Popen:
+            def __init__(self, command, **kwargs):
+                seen.append((command, kwargs))
+
+        real = live.subprocess.Popen
+        try:
+            live.subprocess.Popen = Popen
+            proc, log = live.start_service("agent-service.jar", self.work, "my-dev-store.myshopify.com", self.work,
+                                           8080, model="gemini")
+            log.close()
+        finally:
+            live.subprocess.Popen = real
+        command, kwargs = seen[0]
+        self.assertNotIn(self.KEY, " ".join(command))
+        self.assertEqual(kwargs["env"]["GEMINI_API_KEY"], self.KEY)
+        self.assertEqual(live.spike.redact("model key " + self.KEY), "model key <redacted>")
+        for name in os.listdir(self.work):
+            with open(os.path.join(self.work, name), errors="replace") as f:
+                self.assertNotIn(self.KEY, f.read(), name)
+        out = io.StringIO()
+        with redirect_stdout(out):
+            live.say("the key is " + self.KEY)
+        self.assertNotIn(self.KEY, out.getvalue())
+
+    # Covers: 26.6 (the jar the console runs must carry agent-adk, the live client, on its runtime classpath; one
+    # without it is refused before anything starts, saying what is needed)
+    def test_theJar_mustCarryAgentAdk(self):
+        import zipfile
+        self.assertTrue(hasattr(live, "jar_has_live_model"), "the script checks the jar for agent-adk")
+        good = os.path.join(self.work, "good.jar")
+        bad = os.path.join(self.work, "bad.jar")
+        with zipfile.ZipFile(good, "w") as z:
+            z.writestr("BOOT-INF/classpath.idx", '- "BOOT-INF/lib/agent-core-0.1.0-SNAPSHOT.jar"\n'
+                                                 '- "BOOT-INF/lib/agent-adk-0.1.0-SNAPSHOT.jar"\n')
+        with zipfile.ZipFile(bad, "w") as z:
+            z.writestr("BOOT-INF/classpath.idx", '- "BOOT-INF/lib/agent-core-0.1.0-SNAPSHOT.jar"\n')
+        self.assertTrue(live.jar_has_live_model(good))
+        self.assertFalse(live.jar_has_live_model(bad))
+        self.assertFalse(live.jar_has_live_model(os.path.join(self.work, "missing.jar")))
+        os.environ["GEMINI_API_KEY"] = self.KEY
+        with self.assertRaises(SystemExit) as e:
+            live.console_main(self.GUARDS + ["--model", "gemini", "--evidence", self.work], "my-dev-store.myshopify.com",
+                              self.work, 8080, bad)
+        self.assertEqual(str(e.exception), "refused: the jar has no agent-adk on its runtime classpath, so it cannot run "
+                                           "Gemini; rebuild it: ./mvnw -B -ntp -DskipTests package")
+
+    # Covers: 26.6 (the jar this repository builds carries agent-adk; skipped when it is not built)
+    def test_theBuiltJar_carriesAgentAdk(self):
+        jar = os.path.join(os.path.dirname(HERE), "agent-service/target/agent-service-0.1.0-SNAPSHOT.jar")
+        if not os.path.isfile(jar):
+            self.skipTest("build first: ./mvnw -B -ntp -DskipTests package")
+        self.assertTrue(hasattr(live, "jar_has_live_model"), "the script checks the jar for agent-adk")
+        self.assertTrue(live.jar_has_live_model(jar))
+
+
+class LeakScanGeminiKey(unittest.TestCase):
+    """scripts/h5-leak-scan.sh holds the Gemini key as a fixed pattern (26.6): fed to grep on a pipe like the others,
+    over the run's evidence and the branch. Its self-test plants a canary key and must find it."""
+
+    SCAN = os.path.join(HERE, "h5-leak-scan.sh")
+
+    def run_scan(self, *args, env=None):
+        return subprocess.run(["bash", self.SCAN] + list(args), capture_output=True, text=True, timeout=120,
+                              env=env or {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": os.environ.get("HOME", "")})
+
+    # Covers: 26.6, I8 (the self-test plants a canary Gemini key and finds it by its pattern name, in the evidence)
+    def test_theSelfTest_findsAPlantedGeminiKey(self):
+        done = self.run_scan("--self-test")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertRegex(done.stdout, r"HIT  the Gemini API key \(evidence\): [1-9]")
+        self.assertRegex(done.stdout, r"HIT  a Gemini API key shape \(evidence\): [1-9]")
+
+    # Covers: 26.6, I8 (the dry run names the Gemini key among the values, and never prints it)
+    def test_theDryRun_namesTheGeminiKey_andNeverItsValue(self):
+        key = "AIzaDRYRUN" + "q" * 25
+        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "GEMINI_API_KEY": key}
+        done = self.run_scan("--dry-run", env=env)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertTrue("the Gemini API key" in done.stdout, "the key among the dry run's values")
+        self.assertIn("DRY-RUN shape: a Gemini API key shape", done.stdout)
+        self.assertNotIn(key, done.stdout + done.stderr)
+
+    # Covers: 26.6, I8 (the key reaches grep on a pipe, never as an argument: the script never names it in a command)
+    def test_theKey_reachesGrepOnAPipe(self):
+        with open(self.SCAN) as f:
+            text = f.read()
+        self.assertTrue("printf 'the Gemini API key\\t%s\\n' \"$GEMINI_API_KEY\"" in text, "the fixed pattern's line")
+        self.assertNotRegex(text, r"grep[^\n]*\$GEMINI_API_KEY")
+
+
 if __name__ == "__main__":
     unittest.main()
