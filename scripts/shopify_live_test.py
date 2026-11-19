@@ -869,6 +869,15 @@ class LeakScanTrackingParameters(unittest.TestCase):
         for name in self.NAMES:
             self.assertRegex(done.stdout, r"HIT  %s \(evidence\): [1-9]" % re.escape(name))
 
+    # Covers: 26.7, I8 (the parameters as the catalog names them, attribution/click_id_value and click_id_tag, raw or
+    # percent-encoded, are found; the scan's own shapes say so)
+    def test_theShapes_matchTheCatalogsAttributionNames(self):
+        with open(self.SCAN) as f:
+            text = f.read()
+        self.assertTrue("'click_id_value=' 'click_id_tag='" in text, "the shapes match the name wherever it appears")
+        self.assertTrue("attribution%2Fclick_id_value=" in text, "the self-test plants the percent-encoded form")
+        self.assertTrue("attribution/click_id_tag=" in text, "the self-test plants the raw form")
+
     # Covers: 26.7, I8 (the dry run names the three shapes)
     def test_theDryRun_namesTheTrackingParameters(self):
         done = self.run_scan("--dry-run")
