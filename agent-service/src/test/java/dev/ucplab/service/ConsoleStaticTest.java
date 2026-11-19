@@ -907,4 +907,140 @@ class ConsoleStaticTest {
                 .as("the catalog's text replaces the lab's, after it").isLessThan(mode.indexOf("if (!domain && catalogMode()) {"));
         assertThat(count(mode, "Shopify Global Catalog")).isEqualTo(1);
     }
+
+    /** The code of function {@code name} in console.js, up to the next top-level function. */
+    private static String function(String js, String name) {
+        int from = js.indexOf("function " + name + "(");
+        assertThat(from).as("function " + name).isNotNegative();
+        int to = js.indexOf("\n}\n", from);
+        return js.substring(from, to + 2);
+    }
+
+    // Covers: 24.3 (on Send the button is disabled and reads "Working…", and under the user's message an agent bubble
+    // with a working indicator reads "Thinking…"; a second Send while it works sends nothing)
+    @Test
+    void working_onSend_disablesSendAsWorking_andShowsAThinkingBubble() throws IOException {
+        String js = read("console.js");
+        String working = block(js, "working");
+        String start = function(working, "startWorking");
+        String send = function(js, "send");
+
+        assertThat(read("index.html")).contains("<button type=\"submit\" class=\"primary\" id=\"send-button\">Send</button>");
+        assertThat(working).contains("const THINKING = \"Thinking…\";");
+        assertThat(start).contains("button.disabled = true;").contains("button.textContent = \"Working…\";")
+                .contains("el(\"li\", null, \"agent working\")").contains("el(\"span\", THINKING, \"working-step\")")
+                .contains("$(\"chat\").appendChild(bubble);");
+        assertThat(send).contains("  if (working) {\n    return;\n  }")
+                .contains("$(\"chat\").appendChild(el(\"li\", text, \"user\"));");
+        assertThat(send.indexOf("$(\"chat\").appendChild(el(\"li\", text, \"user\"));")).as("the message, then the bubble")
+                .isLessThan(send.indexOf("startWorking();"));
+        assertThat(send.indexOf("startWorking();")).as("before the request, which waits for a settle point")
+                .isLessThan(send.indexOf("await api("));
+    }
+
+    // Covers: 24.3 (each tool's step is a fixed text of the page, looked up by the tool's name)
+    @ParameterizedTest
+    @CsvSource({
+            "search_catalog, Searching the catalog…",
+            "propose_purchase, Preparing your approval…",
+            "get_purchase_status, Checking the purchase…"})
+    void working_eachToolHasItsStep(String tool, String text) throws IOException {
+        assertThat(block(read("console.js"), "working")).contains("[\"" + tool + "\", \"" + text + "\"]");
+    }
+
+    // Covers: 24.3, I2, S10 (the bubble's step comes from the run's tool events only: the newest event's tool name picks
+    // a fixed text, get_product names the one non-link merchant of the lab list, any other tool reads "Thinking…"; the
+    // step's code never reads a message, the model's text or an event's summary, and sets text only)
+    @Test
+    void working_theStepComesFromToolEventsOnly_neverTheModelsWords() throws IOException {
+        String js = read("console.js");
+        String working = block(js, "working");
+        String step = function(working, "stepText");
+        String price = function(working, "priceStep");
+
+        assertThat(step).contains("const newest = events.length > 0 ? events[events.length - 1].tool : \"\";")
+                .contains("if (newest === \"get_product\") {").contains("return STEP_TEXTS.get(newest) || THINKING;");
+        assertThat(price).contains("const only = labMerchants.length === 1 ? labMerchants[0] : null;")
+                .contains("only && only.completion !== \"link\" && only.name")
+                .contains("\"Checking the price at \" + only.name + \"…\"").contains("\"Checking the price…\"");
+        assertThat(function(working, "showWorking")).contains("working.step.textContent = stepText(run.tool_events || []);");
+        for (String other : List.of("messages", "summary", "rationale", "description", "innerHTML", "run.reason",
+                "run.cause")) {
+            assertThat(working).as("the working block reads " + other).doesNotContain(other);
+        }
+        assertThat(working).as("a text field (textContent is only written)").doesNotContainPattern("\\.text\\b");
+    }
+
+    // Covers: 24.3 (each tool call's chip appears while the run works: a poll that carries tool events shows them, with
+    // the same chips as at the end)
+    @Test
+    void working_toolChipsAppearLive() throws IOException {
+        String js = read("console.js");
+        String show = function(js, "showRun");
+
+        assertThat(show).contains("if (run.tool_events) {\n    showChips(run.tool_events);\n  }");
+        assertThat(function(js, "loadRunDetails")).contains("showChips(result.data.tool_events || []);");
+        assertThat(count(js, "el(\"span\", null, e.summary === \"ok\" ? \"dot ok\" : \"dot warn\")")).as("one chip maker")
+                .isEqualTo(1);
+        assertThat(function(js, "showChips")).contains("clear($(\"tools\"));");
+    }
+
+    // Covers: 24.3 (from 10 s after Send the bubble adds "Still working · <n> s", whole seconds by the page's clock,
+    // updated every second)
+    @Test
+    void working_after10s_addsTheElapsedTime() throws IOException {
+        String working = block(read("console.js"), "working");
+
+        assertThat(working).contains("const STILL_AFTER_MS = 10000;")
+                .contains("timer: window.setInterval(tickWorking, 1000)");
+        assertThat(function(working, "tickWorking")).contains("const ms = Date.now() - working.since;")
+                .contains("ms >= STILL_AFTER_MS ? \"Still working · \" + Math.floor(ms / 1000) + \" s\" : \"\"");
+    }
+
+    // Covers: 24.3 (when the run leaves running the bubble is removed and Send is enabled and reads Send again; a failed
+    // request or poll does the same and puts its error on the status line)
+    @Test
+    void working_onRunEnd_orAnError_removesTheBubble_andEnablesSend() throws IOException {
+        String js = read("console.js");
+        String stop = function(block(js, "working"), "stopWorking");
+        String show = function(js, "showRun");
+
+        assertThat(stop).contains("window.clearInterval(working.timer);").contains("working.bubble.remove();")
+                .contains("working = null;").contains("button.disabled = false;").contains("button.textContent = \"Send\";");
+        assertThat(show).contains("  if (run.status === \"running\") {\n    showWorking(run);\n  } else {\n    stopWorking();\n    setStatus(statusText);\n  }");
+        assertThat(show.indexOf("if (chatText) {")).as("the run-end text, then the bubble").isLessThan(show.indexOf("showWorking(run);"));
+        assertThat(function(js, "send")).contains("  if (!result.ok) {\n    stopWorking();\n    setStatus(errorText(result), true);\n    return;\n  }");
+        assertThat(function(js, "pollRun")).contains("  if (!result.ok) {\n    stopWorking();\n    setStatus(errorText(result), true);\n    return;\n  }");
+    }
+
+    // Covers: 24.3 (the status line says "Working on it." once, when the work starts, never on a poll or a step; the
+    // bubble is outside the aria-live region)
+    @Test
+    void working_theStatusLineSaysWorkingOnce_andTheBubbleIsNotAnnounced() throws IOException {
+        String js = read("console.js");
+        String html = read("index.html");
+
+        assertThat(count(js, "setStatus(\"Working on it.\")")).isEqualTo(1);
+        assertThat(function(block(js, "working"), "startWorking")).contains("setStatus(\"Working on it.\");");
+        assertThat(function(block(js, "working"), "showWorking")).doesNotContain("setStatus(");
+        assertThat(count(function(js, "showRun"), "setStatus(")).as("only for a run that left running").isEqualTo(1);
+        String chat = html.substring(html.indexOf("<ol id=\"chat\""), html.indexOf(">", html.indexOf("<ol id=\"chat\"")));
+        assertThat(chat).doesNotContain("aria-live").doesNotContain("role=\"status\"");
+    }
+
+    // Covers: 24.3 (the indicator's dots are its only animation, hidden from screen readers, and under
+    // prefers-reduced-motion: reduce they are gone, leaving the text)
+    @Test
+    void working_underReducedMotion_isTextOnly() throws IOException {
+        String css = read("console.css");
+        String start = function(block(read("console.js"), "working"), "startWorking");
+
+        assertThat(start).contains("dots.setAttribute(\"aria-hidden\", \"true\");");
+        assertThat(css).contains(".working-dots::before {").contains("animation: working-pulse 1.2s ease-in-out infinite;")
+                .contains("@keyframes working-pulse {");
+        assertThat(count(css, "animation:")).as("one animation").isEqualTo(1);
+        int reduced = css.indexOf("@media (prefers-reduced-motion: reduce) {");
+        assertThat(reduced).isPositive();
+        assertThat(css.substring(reduced, css.indexOf("\n}\n", reduced))).contains(".working-dots { display: none; }");
+    }
 }

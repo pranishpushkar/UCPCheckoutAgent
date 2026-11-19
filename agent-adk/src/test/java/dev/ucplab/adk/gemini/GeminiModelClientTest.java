@@ -17,7 +17,9 @@ import dev.ucplab.runtime.ModelClients;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -180,18 +182,65 @@ class GeminiModelClientTest {
         }
     }
 
-    // Covers: 6.3, 6.5 (a 429's Retry-After in whole seconds is kept; a date or anything else is not)
-    @Test
-    void generate_rateLimitedWithRetryAfter_keepsTheSecondsOnly() {
-        stub.answer(429, "{\"error\":{\"code\":429,\"message\":\"slow down\"}}").retryAfter("7");
-        assertThatThrownBy(() -> client().generate(ask("hi"), TOOLS)).isInstanceOfSatisfying(GeminiException.class,
-                e -> assertThat(e.retryAfter()).contains(Duration.ofSeconds(7)));
+    /** A 429 body as Gemini sends it: the message, the status and the details, here in the order given. */
+    private static String rateLimited(String... details) {
+        return "{\"error\": {\"code\": 429, \"message\": \"Quota exceeded.\", \"status\": \"RESOURCE_EXHAUSTED\","
+                + " \"details\": [" + String.join(", ", details) + "]}}";
+    }
 
-        for (String other : List.of("Wed, 21 Oct 2026 07:28:00 GMT", "-3", "1.5", "99999999999999999999", "")) {
-            stub.retryAfter(other);
-            assertThatThrownBy(() -> client().generate(ask("hi"), TOOLS)).as(other)
-                    .isInstanceOfSatisfying(GeminiException.class, e -> assertThat(e.retryAfter()).isEmpty());
+    private static String retryInfo(String delay) {
+        return "{\"@type\": \"type.googleapis.com/google.rpc.RetryInfo\", \"retryDelay\": \"" + delay + "\"}";
+    }
+
+    private static final String QUOTA_FAILURE = "{\"@type\": \"type.googleapis.com/google.rpc.QuotaFailure\","
+            + " \"violations\": [{\"quotaMetric\": \"generate_content_free_tier_requests\", \"quotaValue\": \"10\"}]}";
+
+    private Optional<Duration> retryAfterOf(int status, String body) {
+        stub.answer(status, body);
+        AtomicReference<Optional<Duration>> kept = new AtomicReference<>();
+        assertThatThrownBy(() -> client().generate(ask("hi"), TOOLS)).as(body)
+                .isInstanceOfSatisfying(GeminiException.class, e -> kept.set(e.retryAfter()));
+        return kept.get();
+    }
+
+    // Covers: 6.3, 6.5 (a 429's or 503's wait is the retryDelay of the error's google.rpc.RetryInfo detail, which the SDK
+    // passes on in its error's details, as seconds with up to nine decimals, wherever the detail stands among the others)
+    @Test
+    void generate_rateLimited_keepsTheRetryInfosDelay() {
+        Map<String, Duration> delays = Map.of("7s", Duration.ofSeconds(7), "0s", Duration.ZERO, "1.5s",
+                Duration.ofMillis(1500), "37.123456789s", Duration.ofSeconds(37, 123_456_789), "999999s",
+                Duration.ofSeconds(999_999));
+        for (Map.Entry<String, Duration> d : delays.entrySet()) {
+            assertThat(retryAfterOf(429, rateLimited(QUOTA_FAILURE, retryInfo(d.getKey())))).as(d.getKey())
+                    .contains(d.getValue());
         }
+        assertThat(retryAfterOf(429, rateLimited(retryInfo("4s"), QUOTA_FAILURE))).as("the first detail")
+                .contains(Duration.ofSeconds(4));
+        assertThat(retryAfterOf(503, rateLimited(retryInfo("3s")).replace("429", "503"))).as("a 503")
+                .contains(Duration.ofSeconds(3));
+    }
+
+    // Covers: 6.3, 6.5, I8 (Retry-After is not read, since the client keeps no header; a retryDelay in any other form,
+    // a RetryInfo text inside another detail or in the message, and a body with no RetryInfo keep no wait: 2 s then)
+    @Test
+    void generate_rateLimited_withoutAUsableRetryInfo_keepsNoWait() {
+        stub.retryAfter("7");
+        assertThat(retryAfterOf(429, rateLimited(QUOTA_FAILURE))).as("Retry-After alone").isEmpty();
+        stub.retryAfter(null);
+
+        for (String other : List.of("7", "-3s", "s", "1.s", ".5s", "1234567s", "1.1234567891s", "7m", "1e3s", " 7s",
+                "")) {
+            assertThat(retryAfterOf(429, rateLimited(retryInfo(other)))).as("retryDelay \"%s\"", other).isEmpty();
+        }
+        // As the SDK writes a detail back out: compact, so these are the exact lines a RetryInfo would make.
+        String compact = "{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"9s\"}";
+        String nested = "{\"@type\": \"type.googleapis.com/google.rpc.Help\", \"description\": \"\\n"
+                + compact.replace("\"", "\\\"") + "\"}";
+        assertThat(retryAfterOf(429, rateLimited(nested))).as("inside another detail's text").isEmpty();
+        assertThat(retryAfterOf(429, "{\"error\": {\"code\": 429, \"message\": \"x\\n" + compact.replace("\"", "\\\"")
+                + "\", \"status\": \"RESOURCE_EXHAUSTED\"}}")).as("in the message").isEmpty();
+        assertThat(retryAfterOf(429, rateLimited())).as("no details").isEmpty();
+        assertThat(retryAfterOf(429, "not json")).as("no body to read").isEmpty();
     }
 
     // Covers: 6.5, 11 (a timeout and a dropped connection have their own causes, never retryable)
