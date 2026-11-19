@@ -37,6 +37,9 @@ final class ApprovalController {
     /** 23.2: the note of a handoff merchant's approval, a fixed text of ours (never merchant text). */
     static final String HANDOFF_NOTE =
             "Shipping and tax are added by the store; you see the final total before you pay there.";
+    /** 23.2, 26.7: the note of a link merchant's approval, a fixed text of ours (never merchant text). */
+    static final String LINK_NOTE =
+            "Listed price from Shopify's catalog. The store adds any shipping and tax at its own checkout.";
     private static final int MAX_TOKEN_LENGTH = 1024;
     private static final System.Logger LOG = System.getLogger(ApprovalController.class.getName());
 
@@ -65,6 +68,12 @@ final class ApprovalController {
         if (completions.of(pending.snapshot().merchantId()) == Completion.HANDOFF) {
             body.put("completion", "handoff");
             body.put("note", HANDOFF_NOTE);
+        }
+        // 23.2, 26.7: the seller by its name and the link's host only; the link itself is never in this answer.
+        if (completions.of(pending.snapshot().merchantId()) == Completion.LINK && pending.snapshot().link().isPresent()) {
+            body.put("completion", "link");
+            body.put("note", LINK_NOTE);
+            body.put("seller", QuoteCard.seller(pending.snapshot().link().get()));
         }
         // 23.2, P9: the intent's stored budget, outside the snapshot too; read for the owner only, never cached (20).
         intents.find(auth.user(), pending.snapshot().intentId()).flatMap(PurchaseIntent::budget).ifPresent(b ->

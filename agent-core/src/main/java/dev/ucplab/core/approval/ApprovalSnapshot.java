@@ -94,6 +94,8 @@ public record ApprovalSnapshot(
         m.put("expiresAt", DateTimeFormatter.ISO_INSTANT.format(expiresAt));
         // Only when there is a shipping part, so a snapshot without one hashes exactly as before (9.2, D4).
         fulfillment.ifPresent(f -> m.put("fulfillment", fulfillmentJson(f)));
+        // Only at a link merchant, so every other snapshot hashes exactly as before (9.2, 26.7).
+        link.ifPresent(l -> m.put("link", linkJson(l)));
         return CanonicalJson.write(m);
     }
 
@@ -108,6 +110,16 @@ public record ApprovalSnapshot(
         m.put("label", f.label());
         m.put("priceMinor", f.priceMinor());
         f.destinationCountry().ifPresent(c -> m.put("destinationCountry", c));
+        return m;
+    }
+
+    /** The seller and the checkout_url exactly as read; sellerSite only when the seller has one (9.2). */
+    private static Map<String, Object> linkJson(LinkSnapshot l) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("sellerName", l.sellerName());
+        m.put("sellerDomain", l.sellerDomain());
+        l.sellerSite().ifPresent(s -> m.put("sellerSite", s));
+        m.put("url", l.url().value().toString());
         return m;
     }
 

@@ -1,6 +1,7 @@
 package dev.ucplab.service.web;
 
 import dev.ucplab.core.approval.ApprovalSnapshot;
+import dev.ucplab.core.approval.LinkSnapshot;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,5 +32,13 @@ final class QuoteCard {
         }).toList();
         card.put("lines", lines);
         return card;
+    }
+
+    /** 23.2, 26.7: a link intent's seller as the API shows it, {@code {name, host}}: the link's host, never the URL. */
+    static Map<String, Object> seller(LinkSnapshot link) {
+        Map<String, Object> seller = new LinkedHashMap<>();
+        seller.put("name", link.sellerName());
+        seller.put("host", link.url().value().getHost());
+        return seller;
     }
 }

@@ -1,7 +1,9 @@
 package dev.ucplab.service.config;
 
 import dev.ucplab.core.id.IdGenerator;
+import dev.ucplab.core.merchant.CallOutcome;
 import dev.ucplab.core.merchant.CatalogGateway;
+import dev.ucplab.core.merchant.LinkOffers;
 import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantGateway;
 import dev.ucplab.core.merchant.MerchantId;
@@ -137,6 +139,17 @@ final class MerchantWiring {
             case GlobalCatalogGateway global -> global;
             default -> throw new IllegalArgumentException("no catalog for " + gateway);
         };
+    }
+
+    /**
+     * The offer reads of the catalog sources among {@code gateways} (7.2 link rows, 26.7): a merchant whose gateway reads
+     * offers answers itself; any other is NotSent, so nothing of a store is ever read as a link.
+     */
+    static LinkOffers linkOffers(Map<MerchantId, MerchantGateway> gateways) {
+        Map<MerchantId, MerchantGateway> byId = Map.copyOf(gateways);
+        return (merchant, itemId) -> byId.get(merchant) instanceof LinkOffers catalog
+                ? catalog.offer(merchant, itemId)
+                : new CallOutcome.NotSent<>("not a catalog source: " + merchant.value());
     }
 
     static final String IN_FLIGHT_MERCHANT_REMOVED =

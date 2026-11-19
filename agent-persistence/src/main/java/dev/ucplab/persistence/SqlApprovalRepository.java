@@ -5,10 +5,12 @@ import dev.ucplab.core.approval.ApprovalRepository;
 import dev.ucplab.core.approval.ApprovalSnapshot;
 import dev.ucplab.core.approval.FulfillmentSnapshot;
 import dev.ucplab.core.approval.ApprovalStatus;
+import dev.ucplab.core.approval.LinkSnapshot;
 import dev.ucplab.core.approval.SnapshotLine;
 import dev.ucplab.core.identity.UserId;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.json.CanonicalJson;
+import dev.ucplab.core.merchant.ContinueUrl;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.SessionId;
 import java.sql.Connection;
@@ -196,6 +198,15 @@ public final class SqlApprovalRepository implements ApprovalRepository {
             f.destinationCountry().ifPresent(c -> shipping.put("destinationCountry", c));
             m.put("fulfillment", shipping);
         });
+        // 9.2, 26.7: a link intent's seller and checkout_url, exactly as read.
+        s.link().ifPresent(l -> {
+            Map<String, Object> link = new LinkedHashMap<>();
+            link.put("sellerName", l.sellerName());
+            link.put("sellerDomain", l.sellerDomain());
+            l.sellerSite().ifPresent(site -> link.put("sellerSite", site));
+            link.put("url", l.url().value().toString());
+            m.put("link", link);
+        });
         return CanonicalJson.write(m);
     }
 
@@ -217,6 +228,18 @@ public final class SqlApprovalRepository implements ApprovalRepository {
                 m.get("fulfillment") instanceof Map<?, ?> f
                         ? Optional.of(new FulfillmentSnapshot((String) f.get("optionId"), (String) f.get("label"),
                                 (Long) f.get("priceMinor"), Optional.ofNullable((String) f.get("destinationCountry"))))
-                        : Optional.empty());
+                        : Optional.empty(),
+                link(m.get("link")));
+    }
+
+    /** A stored link, or none for a snapshot without one (every snapshot stored before 26.7). */
+    private static Optional<LinkSnapshot> link(Object stored) {
+        if (!(stored instanceof Map<?, ?> l)) {
+            return Optional.empty();
+        }
+        return Optional.of(new LinkSnapshot((String) l.get("sellerName"), (String) l.get("sellerDomain"),
+                Optional.ofNullable((String) l.get("sellerSite")),
+                ContinueUrl.parse((String) l.get("url")).orElseThrow(
+                        () -> new IllegalStateException("a stored link snapshot's url does not parse"))));
     }
 }

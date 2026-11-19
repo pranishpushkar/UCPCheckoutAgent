@@ -93,7 +93,10 @@ public final class TransitionTable {
             row(APPROVED, TransitionEvent.UNCERTAIN, TransitionGuard.NONE, APPROVED, SideEffect.NONE),
             row(APPROVED, TransitionEvent.HAND_OFF_REFUSED, TransitionGuard.NONE, FAILED_NOT_CHARGED, SideEffect.CANCEL_SESSION),
             row(APPROVED, TransitionEvent.HAND_OFF_UNEXPECTED, TransitionGuard.NONE, ESCALATED, SideEffect.ESCALATION_EVENT),
-            row(APPROVED, TransitionEvent.HANDOFF_TIMEOUT, TransitionGuard.NONE, IntentState.REJECTED, SideEffect.CANCEL_SESSION));
+            row(APPROVED, TransitionEvent.HANDOFF_TIMEOUT, TransitionGuard.NONE, IntentState.REJECTED, SideEffect.CANCEL_SESSION),
+            // Link merchants (7.2, 26.7): QUOTE_READY, ITEM_UNAVAILABLE, RETRIES_EXHAUSTED and HAND_OFF serve the (link)
+            // rows under their own conditions; a link intent has no session, so nothing is cancelled.
+            row(QUOTING, TransitionEvent.LINK_REFUSED, TransitionGuard.NONE, FAILED_NOT_CHARGED, SideEffect.NONE));
 
     private TransitionTable() {
     }

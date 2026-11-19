@@ -886,5 +886,88 @@ class LeakScanTrackingParameters(unittest.TestCase):
             self.assertTrue("DRY-RUN shape: " + name in done.stdout, name)
 
 
+class Catalog(unittest.TestCase):
+    """--catalog (DESIGN 26.7), with --console only: the service lists Shopify's catalog alone and calls no store, so
+    the store's guards, the buyer IP and --after-payment are refused; it needs the client and the agent profile only;
+    the dry run names every call with the secrets replaced."""
+
+    ENV = {"SHOPIFY_CLIENT_ID": "cid-canary-2", "SHOPIFY_CLIENT_SECRET": "csec-canary-2",
+           "AGENT_PROFILE_URL": "https://example.test/profile.json", "BUYER_IP": "81.2.69.162",
+           "PATH": os.environ.get("PATH", "/bin")}
+
+    def setUp(self):
+        self.saved = dict(os.environ)
+        self.work = tempfile.mkdtemp()
+        os.environ.clear()
+        os.environ.update(self.ENV)
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self.saved)
+        shutil.rmtree(self.work)
+
+    def dry_run(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = live.main(["--console", "--catalog", "--dry-run"])
+        self.assertEqual(code, 0)
+        return out.getvalue()
+
+    # Covers: 26.7 (--catalog is for the console only)
+    def test_theOption_isForTheConsoleOnly(self):
+        with self.assertRaises(SystemExit) as e:
+            live.main(["--catalog", "--dry-run"])
+        self.assertEqual(str(e.exception), "refused: --catalog belongs to --console (scripts/shopify-console.sh)")
+
+    # Covers: 26.7, 26.5, I12 (no store is called: the store's guards and --after-payment are refused, not ignored)
+    def test_theStoresOptions_areRefused(self):
+        for flag in ("--i-own-this-store", "--with-buyer-ip", "--after-payment"):
+            with self.assertRaises(SystemExit, msg=flag) as e:
+                live.main(["--console", "--catalog", "--dry-run", flag])
+            self.assertIn("refused: %s belongs to the owned store" % flag, str(e.exception))
+
+    # Covers: 26.7 (a real run needs the client id and secret and the agent profile, and no store domain or buyer IP)
+    def test_aRealRun_needsTheClientAndTheProfile_only(self):
+        os.environ.clear()
+        os.environ["PATH"] = self.ENV["PATH"]
+        with self.assertRaises(SystemExit) as e:
+            live.main(["--console", "--catalog"])
+        self.assertEqual(str(e.exception),
+                         "missing environment: SHOPIFY_CLIENT_ID, SHOPIFY_CLIENT_SECRET, AGENT_PROFILE_URL")
+
+    # Covers: 19, 26.7 (the merchants file lists the catalog alone: catalog and link, Shopify's catalog URL, the
+    # client's credential_ref, and none of a store's keys)
+    def test_theMerchantsFile_listsTheCatalogAlone(self):
+        text = live.catalog_merchants_yaml()
+        for line in ("id: shopify-catalog", "url: https://catalog.shopify.com/api/ucp/mcp", "transport: catalog",
+                     "completion: link", "credential_ref: env:SHOPIFY_CLIENT"):
+            self.assertIn(line, text)
+        for never in ("owned", "shop_domain", "requires_buyer_ip", "ucp_versions", "myshopify.com"):
+            self.assertNotIn(never, text)
+
+    # Covers: 26.7, I8 (the service gets no BUYER_IP at all, even when the shell holds one; the client still goes in)
+    def test_theService_isNeverGivenTheBuyerIp(self):
+        env = live.service_env(os.environ, self.work, 8080, catalog=True)
+        self.assertNotIn("BUYER_IP", env)
+        self.assertNotIn(self.ENV["BUYER_IP"], json.dumps(env))
+        self.assertEqual(env["SHOPIFY_CLIENT"], "cid-canary-2:csec-canary-2")
+
+    # Covers: 26.7, I8 (the dry run shows the catalog's merchants file and every call, the secrets replaced; it names
+    # no buyer IP and no store, and calls nothing)
+    def test_theDryRun_showsEveryCall_withTheSecretsReplaced(self):
+        text = self.dry_run()
+        self.assertIn("transport: catalog", text)
+        self.assertIn("POST https://api.shopify.com/auth/access_token", text)
+        self.assertIn("POST https://catalog.shopify.com/api/ucp/mcp tools/call search_catalog and get_product", text)
+        self.assertIn("Authorization: Bearer <redacted>", text)
+        self.assertIn("no Shopify-Buyer-IP, and nothing is sent to any store", text)
+        self.assertIn('"SHOPIFY_CLIENT": "<redacted>"', text)
+        self.assertNotIn("BUYER_IP", text)
+        for secret in ("cid-canary-2", "csec-canary-2", "81.2.69.162"):
+            self.assertNotIn(secret, text)
+        for never in ("create_checkout", "get_checkout", "cancel_checkout", "myshopify.com"):
+            self.assertNotIn(never, text)
+
+
 if __name__ == "__main__":
     unittest.main()

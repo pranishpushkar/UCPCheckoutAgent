@@ -16,6 +16,7 @@ import dev.ucplab.core.merchant.LinkOffers;
 import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantGateway;
 import dev.ucplab.core.merchant.MerchantId;
+import dev.ucplab.core.merchant.MerchantMessage;
 import dev.ucplab.core.merchant.MerchantProfile;
 import dev.ucplab.core.merchant.SessionId;
 import dev.ucplab.core.merchant.Transport;
@@ -129,15 +130,27 @@ public final class GlobalCatalogGateway implements MerchantGateway, CatalogGatew
         return call("get_product", Map.of("id", id, "context", CONTEXT), GlobalCatalogParser::product);
     }
 
-    /** Skeleton for the red tests of real catalog stage 2. */
+    /**
+     * A link intent's offer (7.2 quote_ready (link), 26.7): {@code get_product} of the variant, with the US context,
+     * read fresh each time (20). The catalog's refusal, or an answer without that variant, is {@code Rejected}.
+     */
     @Override
     public CallOutcome<LinkOffer> offer(MerchantId merchant, String itemId) {
-        return new CallOutcome.NotSent<>("not built yet");
+        Objects.requireNonNull(merchant, "merchant");
+        Objects.requireNonNull(itemId, "itemId");
+        return call("get_product", Map.of("id", itemId, "context", CONTEXT), body -> GlobalCatalogParser.offer(body, itemId),
+                true);
     }
 
     /** One read tool call, its answer read by {@code parser}. */
     private <T> CallOutcome<T> call(String tool, Map<String, Object> catalogArgs,
                                     Function<byte[], CatalogParser.Parsed<T>> parser) {
+        return call(tool, catalogArgs, parser, false);
+    }
+
+    /** As above; with {@code refusals}, the catalog's error answer is its refusal ({@code Rejected}), not a fault. */
+    private <T> CallOutcome<T> call(String tool, Map<String, Object> catalogArgs,
+                                    Function<byte[], CatalogParser.Parsed<T>> parser, boolean refusals) {
         Redactor redactor = new Redactor(secrets);
         Optional<TokenResult> token = tokens.map(TokenProvider::current);
         if (token.isPresent() && token.get() instanceof TokenResult.Failed failed) {
@@ -159,8 +172,10 @@ public final class GlobalCatalogGateway implements MerchantGateway, CatalogGatew
             case RetryExecutor.Fetched.Body b -> switch (parser.apply(b.reply().body())) {
                 case CatalogParser.Parsed.Found<T> found -> new CallOutcome.Ok<>(b.reply().status(), found.value(),
                         List.of());
-                case CatalogParser.Parsed.Error<T> e ->
-                        new CallOutcome.ProtocolError<>(b.reply().status(), e.code(), e.content(), Optional.empty());
+                case CatalogParser.Parsed.Error<T> e -> refusals
+                        ? new CallOutcome.Rejected<>(b.reply().status(), List.of(new MerchantMessage("error", e.code(),
+                                Optional.empty(), e.content(), Optional.empty())))
+                        : new CallOutcome.ProtocolError<>(b.reply().status(), e.code(), e.content(), Optional.empty());
                 case CatalogParser.Parsed.Invalid<T> i ->
                         new CallOutcome.ProtocolError<>(b.reply().status(), "invalid_response", i.reason(), Optional.empty());
             };

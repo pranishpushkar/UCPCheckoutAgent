@@ -41,6 +41,9 @@ KEY_REFUSED = "refused: --model gemini needs GEMINI_API_KEY in your environment 
 JAR_REFUSED = ("refused: the jar has no agent-adk on its runtime classpath, so it cannot run Gemini; rebuild it: "
                "./mvnw -B -ntp -DskipTests package")
 REDACTED_ENV = ("SHOPIFY_CLIENT", "BUYER_IP", "APPROVAL_SECRET", "GEMINI_API_KEY")
+CATALOG_URL = "https://catalog.shopify.com/api/ucp/mcp"   # DESIGN 26.7, 19: off loopback a catalog entry is exactly this
+# --catalog calls no store, so a store's guards and options are refused rather than silently ignored (DESIGN 26.7).
+CATALOG_REFUSED = ("--i-own-this-store", "--with-buyer-ip", "--after-payment")
 
 
 def remember(value):
@@ -66,6 +69,20 @@ def configuration(env, argv, dry):
     if not domain.endswith(".myshopify.com") or "/" in domain or ":" in domain:
         raise SystemExit("refused: SHOPIFY_STORE_DOMAIN must be a host ending in .myshopify.com")
     return domain
+
+
+def catalog_configuration(env, argv, dry):
+    """--catalog (DESIGN 26.7): Shopify's Global Catalog with a link-only handoff. The service reads the catalog alone
+    (search_catalog, get_product) with the owner's client token and sends nothing to any store, so the buyer IP and the
+    store's guards do not apply. It needs the client id and secret and the agent profile only."""
+    if "--console" not in argv:
+        raise SystemExit("refused: --catalog belongs to --console (scripts/shopify-console.sh)")
+    for flag in CATALOG_REFUSED:
+        if flag in argv:
+            raise SystemExit("refused: %s belongs to the owned store; --catalog calls no store (DESIGN 26.7)" % flag)
+    missing = [v for v in ("SHOPIFY_CLIENT_ID", "SHOPIFY_CLIENT_SECRET", "AGENT_PROFILE_URL") if not env.get(v)]
+    if missing and not dry:
+        raise SystemExit("missing environment: " + ", ".join(missing))
 
 
 def option(argv, name, default):
@@ -108,12 +125,31 @@ def merchants_yaml(domain):
         ""])
 
 
+def catalog_merchants_yaml():
+    """The catalog source alone (DESIGN 19, 26.7): never owned, no shop_domain, no buyer IP."""
+    return "\n".join([
+        "merchants:",
+        "  - id: shopify-catalog",
+        "    name: Shopify catalog",
+        "    url: %s" % CATALOG_URL,
+        "    transport: catalog",
+        "    completion: link",
+        "    credential_ref: env:SHOPIFY_CLIENT",
+        ""])
+
+
+def console_merchants(domain):
+    """The console's merchants file: the owned store, or with --catalog (no domain) the catalog alone."""
+    return catalog_merchants_yaml() if domain is None else merchants_yaml(domain)
+
+
 POLICY_YAML = "per_purchase_cap_minor: 200000\ndaily_cap_minor: 400000\n"
 
 
-def service_env(env, tmp, port, model="scripted"):
+def service_env(env, tmp, port, model="scripted", catalog=False):
     """The service's whole environment: built from nothing, so no other variable of the owner's shell reaches it. With
-    gemini the key goes in here and nowhere else, never on the command line (DESIGN 26.6)."""
+    gemini the key goes in here and nowhere else, never on the command line (DESIGN 26.6). With --catalog there is no
+    BUYER_IP at all: the catalog is never sent one (DESIGN 26.7)."""
     out = {k: env[k] for k in ("PATH", "HOME", "LANG", "TMPDIR", "JAVA_HOME") if env.get(k)}
     approval_secret = random_bytes.token_hex(32)
     remember(approval_secret)
@@ -132,6 +168,8 @@ def service_env(env, tmp, port, model="scripted"):
         "UCP_AGENT_PROFILE": env.get("AGENT_PROFILE_URL", ""),
         "UCP_AGENT_VERSION": AGENT_VERSION,
     })
+    if catalog:
+        del out["BUYER_IP"]
     if model == "gemini":
         key = (env.get("GEMINI_API_KEY") or "").strip()
         remember(key)
@@ -591,25 +629,32 @@ def after_payment_for(argv, store_factory, db, api, evidence):
     return lambda: after_payment_reads(store_factory(), db, api, evidence)
 
 
-def shown_env(port, model="scripted"):
+def shown_env(port, model="scripted", catalog=False):
     """The service's environment as a dry run prints it: every secret replaced, an unset Gemini key named as unset."""
-    env = service_env(os.environ, "<tmp>", port, model)
+    env = service_env(os.environ, "<tmp>", port, model, catalog)
     return {k: ("<redacted>" if k in REDACTED_ENV and v else "<unset: the real run refuses>" if k in REDACTED_ENV else v)
             for k, v in env.items() if k not in ("PATH", "HOME", "LANG", "TMPDIR")}
 
 
 def console_dry_run(domain, port, evidence, jar, after_payment=False, model="scripted"):
-    say("DRY-RUN --console: merchants.yaml (temporary, deleted on exit):\n" + merchants_yaml(domain))
+    catalog = domain is None
+    say("DRY-RUN --console: merchants.yaml (temporary, deleted on exit):\n" + console_merchants(domain))
     say("DRY-RUN policy.yaml (temporary): " + POLICY_YAML.strip().replace("\n", ", "))
-    shown = shown_env(port, model)
+    shown = shown_env(port, model, catalog)
+    if catalog:
+        say("DRY-RUN --catalog: the service's only calls to Shopify: POST %s (token for client <redacted>, secret "
+            "<redacted>); then POST %s tools/call search_catalog and get_product, Authorization: Bearer <redacted>, "
+            "meta.ucp-agent.profile %s; no Shopify-Buyer-IP, and nothing is sent to any store. An approved purchase "
+            "gives a Continue at <seller's host> link that you open yourself"
+            % (TOKEN_ENDPOINT, CATALOG_URL, os.environ.get("AGENT_PROFILE_URL") or "<AGENT_PROFILE_URL>"))
     if model == "gemini":
         say("DRY-RUN model: gemini, GEMINI_API_KEY from your environment into the service's environment only; the jar "
             + ("carries agent-adk" if jar_has_live_model(jar) else "is missing or has no agent-adk: the real run refuses"))
     say("DRY-RUN service: java -jar %s, environment %s, log to %s/service.log" % (jar, json.dumps(shown, sort_keys=True),
                                                                                   evidence))
     say("DRY-RUN wait for http://localhost:%d/readyz; then leave it running: open it, sign in as %s, ask for a product; "
-        "approve on the console's card (nothing is approved on the terminal); the store is called only by the service"
-        % (port, USER))
+        "approve on the console's card (nothing is approved on the terminal); %s"
+        % (port, USER, "Shopify's catalog is read only by the service" if catalog else "the store is called only by the service"))
     say("DRY-RUN on Ctrl-C: save each intent's intent.json, events.json and attempts.json (redacted) to %s/<intent>/; "
         "wait up to %d s for owed cancels to drain, naming any still owed or given up; a HANDED_OFF checkout is not "
         "cancelled (you may be paying at the store); stop the service; delete the temporary directory"
@@ -627,13 +672,14 @@ def console_dry_run(domain, port, evidence, jar, after_payment=False, model="scr
 
 
 def start_service(jar, tmp, domain, evidence, port, model="scripted"):
-    """Writes the temporary merchants and policy files and starts the service; returns the process and its log."""
+    """Writes the temporary merchants and policy files and starts the service; returns the process and its log. With
+    --catalog (no domain) the file lists the catalog alone."""
     with open(os.path.join(tmp, "merchants.yaml"), "w") as f:
-        f.write(merchants_yaml(domain))
+        f.write(console_merchants(domain))
     with open(os.path.join(tmp, "policy.yaml"), "w") as f:
         f.write(POLICY_YAML)
     log = open(os.path.join(evidence, "service.log"), "w")
-    return spawn(["java", "-jar", jar], service_env(os.environ, tmp, port, model), log, tmp), log
+    return spawn(["java", "-jar", jar], service_env(os.environ, tmp, port, model, domain is None), log, tmp), log
 
 
 def spawn(command, env, log, cwd):
@@ -660,7 +706,8 @@ def console_main(argv, domain, root, port, jar):
     """--console: the service and the owner's store, for the browser, until Ctrl-C (docs/demo.md)."""
     console_options(argv)
     model = model_choice(argv, os.environ, "--dry-run" in argv)
-    evidence = os.path.abspath(option(argv, "--evidence", os.path.join(root, "notes/h5/console/evidence")))
+    default = "notes/catalog/console/evidence" if domain is None else "notes/h5/console/evidence"
+    evidence = os.path.abspath(option(argv, "--evidence", os.path.join(root, default)))
     base = "http://localhost:%d" % port
     if "--dry-run" in argv:
         return console_dry_run(domain, port, evidence, jar, "--after-payment" in argv, model)
@@ -669,7 +716,8 @@ def console_main(argv, domain, root, port, jar):
     if model == "gemini" and not jar_has_live_model(jar):
         raise SystemExit(JAR_REFUSED)
     os.makedirs(evidence, exist_ok=True)
-    remember(os.environ["BUYER_IP"])
+    if domain is not None:
+        remember(os.environ["BUYER_IP"])
     stop_on_signals()
     tmp = tempfile.mkdtemp(prefix="ucplab-console-")
     db = os.path.join(tmp, "ucplab.db")
@@ -694,7 +742,11 @@ def console_main(argv, domain, root, port, jar):
 
 def main(argv):
     dry = "--dry-run" in argv
-    domain = configuration(os.environ, argv, dry)
+    if "--catalog" in argv:
+        catalog_configuration(os.environ, argv, dry)
+        domain = None   # DESIGN 26.7: no store at all
+    else:
+        domain = configuration(os.environ, argv, dry)
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     port = int(option(argv, "--port", "8080"))
     remember((os.environ.get("GEMINI_API_KEY") or "").strip())   # whatever the model, never printed or recorded

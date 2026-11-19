@@ -355,7 +355,14 @@ function showApprovalCard(id, approvalResponse) {
   const head = el("div", null, "card-head");
   const heading = el("div");
   heading.appendChild(el("h3", "Approval needed"));
-  heading.appendChild(el("p", "From " + snapshot.merchant_id, "muted"));
+  // 24.3, 26.7: at a link merchant the card names the seller, by the answer's seller name, set as text.
+  const linked = approval.completion === "link";
+  if (linked) {
+    heading.appendChild(el("p", "From " + approval.seller.name, "muted"));
+    heading.appendChild(el("span", "Shopify catalog", "pill"));
+  } else {
+    heading.appendChild(el("p", "From " + snapshot.merchant_id, "muted"));
+  }
   head.appendChild(heading);
   const expiry = el("span", null, "pill");
   head.appendChild(expiry);
@@ -387,6 +394,10 @@ function showApprovalCard(id, approvalResponse) {
     linesTotal += line.quantity * line.unit_price_minor;
   });
   const rows = cardCharges(snapshot, approval.completion === "handoff", linesTotal);
+  if (linked) {
+    // 24.3, 26.7: the catalog's listed price is the whole quote; the store adds its charges at its own checkout.
+    rows.splice(0, rows.length, ["Listed price", snapshot.total_minor]);
+  }
   rows.forEach(([label, minor], i) => {
     const last = i === rows.length - 1;
     const row = el("tr", null, last ? "total" : null);
@@ -402,7 +413,10 @@ function showApprovalCard(id, approvalResponse) {
   table.appendChild(body);
   table.appendChild(foot);
   card.appendChild(table);
-  if (approval.budget) {
+  if (linked && approval.budget) {
+    card.appendChild(el("p", "Your budget: " + money(approval.budget.amount_minor, approval.budget.currency)
+        + " (before the store's shipping and tax)", "budget-line"));
+  } else if (approval.budget) {
     card.appendChild(el("p", "Your budget: " + money(approval.budget.amount_minor, approval.budget.currency)
         + (approval.completion === "handoff" ? " (before the store's shipping and tax)" : ""), "budget-line"));
   }
@@ -411,9 +425,15 @@ function showApprovalCard(id, approvalResponse) {
   if (approval.completion === "handoff") {
     info.appendChild(el("p", approval.note));
   }
+  if (linked) {
+    info.appendChild(el("p", approval.note));
+  }
   card.appendChild(info);
   const actions = el("div", null, "actions");
   const approve = el("button", "Approve " + money(snapshot.total_minor, snapshot.currency), "primary");
+  if (linked) {
+    approve.textContent = "Approve and get the link";
+  }
   approve.type = "button";
   const reject = el("button", "Reject");
   reject.type = "button";
@@ -496,6 +516,11 @@ async function pollIntent() {
   currentIntent.merchant = result.data.merchant;
   showMerchantMode();
   showSteps(milestones(result.data));
+  // 26.7: a link intent is never followed up. Its {watching: false} is not a follow-up that ended, so the link stays
+  // and no follow-up text is shown.
+  if (linkSeller(result.data.merchant)) {
+    delete result.data.follow_up;
+  }
   if (state !== currentIntent.state) {
     currentIntent.state = state;
     $("timeline-state").textContent = "Intent " + id;
@@ -542,11 +567,24 @@ function showHandoffLink(url) {
     return;
   }
   const anchor = el("a", "Continue at the store");
+  const seller = linkSeller(currentIntent && currentIntent.merchant);
+  if (seller) {
+    // 24.3, 26.7: the seller's host, from the owner's intent, as the link's text; never the address itself.
+    anchor.replaceChildren(document.createTextNode("Continue at " + seller.host));
+  }
   anchor.href = url;
   anchor.target = "_blank";
   anchor.rel = "noopener noreferrer";
   anchor.referrerPolicy = "no-referrer";
   holder.appendChild(anchor);
+  if (seller) {
+    holder.appendChild(el("p", "If you buy, the store emails you. The agent can't see this purchase."));
+  }
+}
+
+// 26.7: a link intent's seller {name, host}, from the owner's intent; null at any other merchant.
+function linkSeller(merchant) {
+  return merchant && merchant.completion === "link" && merchant.seller ? merchant.seller : null;
 }
 // </handoff-link>
 
@@ -707,6 +745,9 @@ function reached(intent) {
 function milestones(intent) {
   const handoff = intent.merchant && intent.merchant.completion === "handoff";
   const at = reached(intent);
+  if (intent.merchant && intent.merchant.completion === "link") {
+    return linkMilestones(intent, at);
+  }
   const labels = ["Proposed", "Quoted by the store", at > 2 ? "Approved by you" : "Waiting for your approval",
       handoff ? "Handed off to the store" : "Sent to the store", "Order placed at the store"];
   const steps = labels.map((label, i) => ({label: label, mark: i < at ? "done" : i === at ? "current" : "pending"}));
@@ -727,6 +768,21 @@ function milestones(intent) {
     } else {
       steps[4].mark = "pending";
     }
+  }
+  return steps;
+}
+
+// 24.3, 26.7: a link intent's steps. There is no order step: the agent can't see a purchase at the seller.
+function linkMilestones(intent, at) {
+  const labels = ["Proposed", "Priced from Shopify's catalog",
+      at > 2 ? "Approved by you" : "Waiting for your approval", "Link ready"];
+  const steps = labels.map((label, i) => ({label: label, mark: i < at ? "done" : i === at ? "current" : "pending"}));
+  const ending = ENDINGS.has(intent.state) ? endingText(intent) : "";
+  if (ending) {
+    return steps.slice(0, at).concat([{label: ending, mark: "ended"}]);
+  }
+  if (intent.state === "HANDED_OFF") {
+    steps[3].mark = "done";
   }
   return steps;
 }

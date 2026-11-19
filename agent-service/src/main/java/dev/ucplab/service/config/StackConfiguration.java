@@ -282,8 +282,9 @@ public class StackConfiguration {
         Map<MerchantId, MerchantEntry> entries = new HashMap<>();
         properties.merchants().forEach(m -> entries.put(m.id(), m.entry(m.fileStatus())));
         return new DefaultOrchestrator(intents, approvals, approvalService, MerchantGateways.of(merchantGateways.byId()),
-                id -> Optional.ofNullable(entries.get(id)), policy, new RequotePolicy(properties.policy()),
-                MerchantInstruments.of(merchantInstruments.byId()), FulfillmentPolicy.cheapest(), orchestratorConfig,
+                id -> Optional.ofNullable(entries.get(id)), MerchantWiring.linkOffers(merchantGateways.byId()), policy,
+                new RequotePolicy(properties.policy()), MerchantInstruments.of(merchantInstruments.byId()),
+                FulfillmentPolicy.cheapest(), orchestratorConfig,
                 clock, ids, workerId.value(), random);
     }
 

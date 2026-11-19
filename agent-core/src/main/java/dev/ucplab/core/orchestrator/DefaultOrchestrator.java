@@ -11,6 +11,7 @@ import dev.ucplab.core.approval.ApprovalService;
 import dev.ucplab.core.approval.ApprovalSnapshot;
 import dev.ucplab.core.approval.ApprovalStatus;
 import dev.ucplab.core.approval.DefaultApprovalService;
+import dev.ucplab.core.approval.LinkSnapshot;
 import dev.ucplab.core.approval.SnapshotLine;
 import dev.ucplab.core.crypto.Sha256;
 import dev.ucplab.core.id.IdGenerator;
@@ -51,6 +52,7 @@ import dev.ucplab.core.merchant.CreateCheckout;
 import dev.ucplab.core.merchant.FrozenBody;
 import dev.ucplab.core.merchant.IdempotencyKey;
 import dev.ucplab.core.merchant.LineView;
+import dev.ucplab.core.merchant.LinkOffer;
 import dev.ucplab.core.merchant.LinkOffers;
 import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantGateway;
@@ -67,6 +69,7 @@ import dev.ucplab.core.merchant.MutatingOp;
 import dev.ucplab.core.merchant.OrderRef;
 import dev.ucplab.core.merchant.PaymentInstrument;
 import dev.ucplab.core.merchant.QuoteShape;
+import dev.ucplab.core.merchant.Seller;
 import dev.ucplab.core.merchant.SessionId;
 import dev.ucplab.core.merchant.Transport;
 import dev.ucplab.core.merchant.UpdateCheckout;
@@ -362,7 +365,7 @@ public final class DefaultOrchestrator implements Orchestrator {
         // I12 (4.3): an entry that is not owned is denied here, before the PolicyEngine, with rule id I12 (7.2). A
         // merchant the registry does not list has no entry and is the PolicyEngine's (P1).
         Optional<MerchantEntry> entry = entry(merchantId);
-        Optional<PolicyDecision> decision = entry.isPresent() && !OwnStoreGuard.entryAllows(entry) ? Optional.empty()
+        Optional<PolicyDecision> decision = entry.isPresent() && !OwnStoreGuard.proposalAllows(entry) ? Optional.empty()
                 : Optional.of(policy.evaluateProposal(auth.user(), merchantId, lines));
         boolean allowed = decision.map(PolicyDecision::allowed).orElse(false);
         Transition t = allowed
@@ -514,7 +517,7 @@ public final class DefaultOrchestrator implements Orchestrator {
 
     /** PROPOSED is never stored by {@link #propose}; this handles an intent inserted in PROPOSED by other code. */
     private Step applyProposalPolicy(PurchaseIntent intent, Optional<MerchantEntry> entry) {
-        if (!OwnStoreGuard.entryAllows(entry)) {
+        if (!OwnStoreGuard.proposalAllows(entry)) {
             Move m = move(intent, TransitionEvent.POLICY_DENIED);
             PurchaseIntent next = m.next().withFailureReason(POLICY_PREFIX + OwnStoreGuard.RULE);
             intents.update(next, intent.version(), workerId);
@@ -572,6 +575,10 @@ public final class DefaultOrchestrator implements Orchestrator {
     // ---------------------------------------------------------------- QUOTING
 
     private Step quote(PurchaseIntent intent, List<MerchantAttempt> attempts) {
+        // Link merchants [CONTRACT] (7.2, 26.7): one read of the catalog's offer, never a checkout call.
+        if (link(intent)) {
+            return quoteLink(intent);
+        }
         boolean create = intent.requoteCount() == 0;
         AttemptOp op = create ? AttemptOp.CREATE : AttemptOp.UPDATE;
         // The attempts of this quote cycle: those after the last complete, or the get of a handoff re-quote (7.2).
@@ -961,7 +968,7 @@ public final class DefaultOrchestrator implements Orchestrator {
         Optional<ApprovalRecord> usable = latest
                 .filter(a -> hash.isPresent() && a.snapshotHash().equals(hash.get()))
                 // I3, I4: the approved snapshot is for this intent's session.
-                .filter(a -> intent.sessionId().equals(Optional.of(a.snapshot().sessionId())))
+                .filter(a -> approvedSession(intent, a.snapshot()))
                 .filter(a -> Set.of(ApprovalStatus.PENDING, ApprovalStatus.APPROVED, ApprovalStatus.CONSUMED)
                         .contains(a.status()));
         if (usable.isEmpty()) {
@@ -976,6 +983,10 @@ public final class DefaultOrchestrator implements Orchestrator {
         // Handoff merchants [CONTRACT] (7.2): send_complete is never taken; approval_invalid applied just above.
         if (handoff(intent)) {
             return handOff(intent, attempts, approval);
+        }
+        // Link merchants [CONTRACT] (7.2, 26.7): only hand_off (link); approval_invalid applied just above.
+        if (link(intent)) {
+            return handOffLink(intent, approval);
         }
         SessionId session = requireSession(intent);
         int revision = intent.requoteCount();
@@ -1636,7 +1647,7 @@ public final class DefaultOrchestrator implements Orchestrator {
                 : codes.contains(ITEM_UNAVAILABLE) ? ITEM_UNAVAILABLE : CREATE_REJECTED_REASON;
     }
 
-    private static boolean isRetryable(CallOutcome.ProtocolError<CheckoutView> e) {
+    private static boolean isRetryable(CallOutcome.ProtocolError<?> e) {
         return e.retryAfter().isPresent() || e.httpStatus() == 429 || e.httpStatus() == 503;
     }
 
@@ -2067,5 +2078,139 @@ public final class DefaultOrchestrator implements Orchestrator {
                     "currency", budget.orElseThrow().currency()));
         }
         event(id, "policy_decision", payload);
+    }
+
+    // ---------------------------------------------------------------- link merchants (7.2, 26.7)
+    // New code of the real catalog goes here, after every older method, and has no lambda: the approved mutation
+    // equivalents name the class's lambdas by number.
+
+    static final String LINK_QUANTITY_UNSUPPORTED = "link_quantity_unsupported";
+    static final String LINK_NOT_ALLOWED = "link_not_allowed";
+    static final String CATALOG_UNREADABLE = "catalog_unreadable";
+    /** A link intent's session id in its snapshot (9.2): no checkout session exists. */
+    static final String LINK_SESSION_PREFIX = "link:";
+
+    private boolean link(PurchaseIntent intent) {
+        return entry(intent.merchantId()).map(MerchantEntry::completion).equals(Optional.of(Completion.LINK));
+    }
+
+    /**
+     * I3, I4: the approved snapshot is for this intent's session; at a link merchant, which has none, for
+     * {@code link:<the line's item id>} (9.2).
+     */
+    private boolean approvedSession(PurchaseIntent intent, ApprovalSnapshot snapshot) {
+        if (!link(intent)) {
+            return intent.sessionId().equals(Optional.of(snapshot.sessionId()));
+        }
+        return intent.lines().size() == 1
+                && snapshot.sessionId().equals(new SessionId(LINK_SESSION_PREFIX + intent.lines().getFirst().itemId()));
+    }
+
+    /**
+     * QUOTING at a link merchant (7.2 quote_ready (link), item_unavailable (link), link_refused, retries exhausted
+     * (link)): one fresh read of the offer, never cached (20), and no attempt row: nothing is sent to a seller. The
+     * quantity is checked first, so a proposal of anything but one item of quantity 1 reads nothing.
+     */
+    private Step quoteLink(PurchaseIntent intent) {
+        if (intent.lines().size() != 1 || intent.lines().getFirst().quantity() != 1) {
+            return linkRefused(intent, LINK_QUANTITY_UNSUPPORTED, Optional.empty());
+        }
+        String itemId = intent.lines().getFirst().itemId();
+        CallOutcome<LinkOffer> read = links.offer(intent.merchantId(), itemId);
+        if (read instanceof CallOutcome.Rejected<LinkOffer>) {
+            return linkFailed(intent, TransitionEvent.ITEM_UNAVAILABLE, ITEM_UNAVAILABLE);
+        }
+        if (read instanceof CallOutcome.ProtocolError<LinkOffer> e && !isRetryable(e)) {
+            return linkRefused(intent, CATALOG_UNREADABLE, Optional.empty());
+        }
+        if (!(read instanceof CallOutcome.Ok<LinkOffer> ok)) {
+            // NotSent, Uncertain or a retryable ProtocolError after the gateway's retries (8.2).
+            return linkFailed(intent, TransitionEvent.RETRIES_EXHAUSTED, QUOTE_RETRIES_EXHAUSTED);
+        }
+        LinkOffer offer = ok.value();
+        if (!offer.itemId().equals(itemId) || !offer.available()) {
+            return linkFailed(intent, TransitionEvent.ITEM_UNAVAILABLE, ITEM_UNAVAILABLE);
+        }
+        Seller seller = offer.seller();
+        if (offer.checkoutUrl().isEmpty()
+                || !OwnStoreGuard.linkAllowed(seller.domain(), seller.site(), offer.checkoutUrl().get())) {
+            return linkRefused(intent, LINK_NOT_ALLOWED, offer.checkoutUrl());
+        }
+        CheckoutView view = linkView(offer);
+        PolicyDecision decision = policy.evaluateQuote(intent.owner(), view, intent.budget());
+        if (!decision.allowed()) {
+            // As at any merchant: failure_reason policy_<rule>; the refused quote goes back with the result (6.2).
+            quoteDeniedEvent(intent.id(), decision, view, intent.budget());
+            Step denied = linkFailed(intent, TransitionEvent.ITEM_UNAVAILABLE, policyReason(decision));
+            return new Step(denied.before(), denied.after(), denied.idle(), Optional.of(view));
+        }
+        Move m = move(intent, TransitionEvent.QUOTE_READY, TransitionGuard.QUOTE_POLICY_ALLOWS);
+        // Opened before the state write, as at any merchant (quoteReady). The link is the one this read returned.
+        approvalService.openLink(m.next(), view,
+                new LinkSnapshot(seller.name(), seller.domain(), seller.site(), offer.checkoutUrl().get()));
+        intents.update(m.next(), intent.version(), workerId);
+        policyEvent(intent.id(), "quote", decision);
+        transitionEvent(intent.id(), m.transition());
+        return new Step(QUOTING, m.next().state(), false, Optional.of(view));
+    }
+
+    /** The offer as a quote, for policy and the approval: one line, its listed price, session id link:<item id>. */
+    private static CheckoutView linkView(LinkOffer offer) {
+        long price = offer.price().minor();
+        return new CheckoutView(new SessionId(LINK_SESSION_PREFIX + offer.itemId()), CheckoutStatus.READY_FOR_COMPLETE,
+                offer.price().currency(), List.of(new LineView(offer.itemId(), 1, price, Optional.empty(), offer.title())),
+                price, 0, price, Optional.empty(), List.of());
+    }
+
+    /** A link intent ends FAILED_NOT_CHARGED with {@code reason}: no session, so nothing to cancel. */
+    private Step linkFailed(PurchaseIntent intent, TransitionEvent event, String reason) {
+        Move m = move(intent, event);
+        PurchaseIntent next = m.next().withFailureReason(reason);
+        intents.update(next, intent.version(), workerId);
+        transitionEvent(intent.id(), m.transition());
+        return moved(intent, next);
+    }
+
+    /** 7.2 link_refused: event link_refused with the reason and, when there is a link, its host only (I8). */
+    private Step linkRefused(PurchaseIntent intent, String reason, Optional<ContinueUrl> url) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        if (url.isPresent() && url.get().value().getHost() != null) {
+            payload.put("host", url.get().value().getHost());
+        }
+        payload.put("reason", reason);
+        Step step = linkFailed(intent, TransitionEvent.LINK_REFUSED, reason);
+        event(intent.id(), "link_refused", payload);
+        return step;
+    }
+
+    /**
+     * 7.2 hand_off (link): the approved snapshot's link, checked again by I12's link rule, becomes handoff_url with no
+     * follow-up; no read and no call of any kind. The fenced write comes first; then the approval is consumed in
+     * send_complete's order (a PENDING approval is first recovered to APPROVED). A link that fails the rule takes
+     * hand_off_refused.
+     */
+    private Step handOffLink(PurchaseIntent intent, ApprovalRecord approval) {
+        Optional<LinkSnapshot> link = approval.snapshot().link();
+        if (link.isEmpty()
+                || !OwnStoreGuard.linkAllowed(link.get().sellerDomain(), link.get().sellerSite(), link.get().url())) {
+            return handOffRefused(intent, link.map(LinkSnapshot::url));
+        }
+        ContinueUrl url = link.get().url();
+        Move m = move(intent, TransitionEvent.HAND_OFF);
+        PurchaseIntent next = m.next().withHandoffUrl(url);
+        intents.update(next, intent.version(), workerId);
+        if (approval.status() == ApprovalStatus.PENDING) {
+            approvals.transition(approval.id(), ApprovalStatus.PENDING, ApprovalStatus.APPROVED, clock.instant(),
+                    Optional.of(intent.owner()));
+            event(intent.id(), "approval_decision_recovered", Map.of("approval_id", approval.id()));
+        }
+        if (approval.status() != ApprovalStatus.CONSUMED) {
+            approvals.transition(approval.id(), ApprovalStatus.APPROVED, ApprovalStatus.CONSUMED, clock.instant(),
+                    Optional.empty());
+        }
+        // I8: the host only; the link carries the catalog's tracking values.
+        event(intent.id(), "handed_off", Map.of("host", url.value().getHost()));
+        transitionEvent(intent.id(), m.transition());
+        return moved(intent, next);
     }
 }

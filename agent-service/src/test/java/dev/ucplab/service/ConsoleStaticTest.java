@@ -284,15 +284,15 @@ class ConsoleStaticTest {
     }
 
     // Covers: I2, 9.3 L4, 24.3, 9.2 (the approval card is its own component and reads only the approval response's
-    // fields: the snapshot's lines with their merchant titles, currency and total, the expiry and the token; never the
-    // chat, the run, the messages or a description)
+    // fields: the snapshot's lines with their merchant titles, currency and total, the expiry and the token, and at a link
+    // merchant the answer's seller (23.2, 26.7); never the chat, the run, the messages or a description)
     @Test
     void approvalCard_readsOnlyTheApprovalResponsesFields() throws IOException {
         String js = read("console.js");
         String card = card(js);
 
         Set<String> allowed = Set.of("snapshot", "lines", "item_id", "title", "quantity", "unit_price_minor", "currency",
-                "total_minor", "expires_at", "token", "merchant_id", "completion", "note", "budget");
+                "total_minor", "expires_at", "token", "merchant_id", "completion", "note", "budget", "seller");
         Set<String> read = new LinkedHashSet<>();
         Matcher fields = Pattern.compile("\\b(?:approval|snapshot|line)\\.([A-Za-z_]+)").matcher(card);
         while (fields.find()) {

@@ -85,7 +85,11 @@ class TransitionTableTest {
             row(36, "QUOTING", "UPDATE_REJECTED", "NONE", "FAILED_NOT_CHARGED", "CANCEL_SESSION_BEST_EFFORT"),
             // Added in H5 Stage 3: "QUOTING | quote_unsupported (handoff) | ... | FAILED_NOT_CHARGED | ... cancel_pending",
             // after quote_ready (handoff) in DESIGN; fulfillment_unsupported ends through the same event.
-            row(37, "QUOTING", "QUOTE_UNSUPPORTED", "NONE", "FAILED_NOT_CHARGED", "CANCEL_SESSION_BEST_EFFORT"));
+            row(37, "QUOTING", "QUOTE_UNSUPPORTED", "NONE", "FAILED_NOT_CHARGED", "CANCEL_SESSION_BEST_EFFORT"),
+            // Added in the real catalog (7.2 link rows, 26.7): "QUOTING | link_refused | ... | FAILED_NOT_CHARGED |
+            // ... Nothing to cancel". quote_ready, item_unavailable, retries exhausted and hand_off (link) are the rows
+            // above under their own conditions.
+            row(38, "QUOTING", "LINK_REFUSED", "NONE", "FAILED_NOT_CHARGED", "NONE"));
 
     static Stream<Arguments> expectedRows() {
         return EXPECTED.stream();
