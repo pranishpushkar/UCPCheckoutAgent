@@ -4,6 +4,7 @@ Not part of ./mvnw verify (verify needs no Python)."""
 import io
 import json
 import os
+import re
 import shutil
 import signal
 import sqlite3
@@ -846,6 +847,34 @@ class LeakScanGeminiKey(unittest.TestCase):
             text = f.read()
         self.assertTrue("printf 'the Gemini API key\\t%s\\n' \"$GEMINI_API_KEY\"" in text, "the fixed pattern's line")
         self.assertNotRegex(text, r"grep[^\n]*\$GEMINI_API_KEY")
+
+
+
+class LeakScanTrackingParameters(unittest.TestCase):
+    """scripts/h5-leak-scan.sh holds the Global Catalog's tracking parameters (_gsid=, click_id_value=, click_id_tag=)
+    as shapes (real catalog stage 0): recordings keep a buy link's host only, so any of them in the evidence means a
+    full link was recorded."""
+
+    SCAN = os.path.join(HERE, "h5-leak-scan.sh")
+    NAMES = ("a buy link's _gsid=", "a buy link's click_id_value=", "a buy link's click_id_tag=")
+
+    def run_scan(self, *args):
+        return subprocess.run(["bash", self.SCAN] + list(args), capture_output=True, text=True, timeout=120,
+                              env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": os.environ.get("HOME", "")})
+
+    # Covers: 26.7, I8 (the self-test plants a full buy link and finds each tracking parameter by its pattern name)
+    def test_theSelfTest_findsEachTrackingParameter(self):
+        done = self.run_scan("--self-test")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        for name in self.NAMES:
+            self.assertRegex(done.stdout, r"HIT  %s \(evidence\): [1-9]" % re.escape(name))
+
+    # Covers: 26.7, I8 (the dry run names the three shapes)
+    def test_theDryRun_namesTheTrackingParameters(self):
+        done = self.run_scan("--dry-run")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        for name in self.NAMES:
+            self.assertTrue("DRY-RUN shape: " + name in done.stdout, name)
 
 
 if __name__ == "__main__":
