@@ -68,6 +68,9 @@ final class ProposePurchaseTool implements Tool {
         return SPEC;
     }
 
+    /** The failure_reason of a quote P9 refused (9.1). */
+    private static final String OVER_BUDGET = "policy_P9";
+
     @Override
     public ToolOutcome run(ToolContext context, Map<String, Object> arguments) {
         MerchantId merchant;
@@ -86,7 +89,9 @@ final class ProposePurchaseTool implements Tool {
         } catch (Args.Invalid e) {
             return ToolOutcome.invalid(e.getMessage());
         }
-        ProposalResult proposal = ports.orchestrator().propose(context.auth(), merchant, lines, rationale);
+        // The budget is the run's, from its context: no argument can set, raise or clear it (6.2, P9).
+        ProposalResult proposal = ports.orchestrator().propose(context.auth(), merchant, lines, rationale,
+                context.budget());
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("intent_id", proposal.intentId().value());
         result.put("state", proposal.state().name());
@@ -95,6 +100,13 @@ final class ProposePurchaseTool implements Tool {
         } else {
             IntentStatus status = ports.orchestrator().status(context.auth(), proposal.intentId());
             status.failureReason().ifPresent(r -> result.put("failure_reason", ToolText.failureReason(r)));
+            if (status.failureReason().filter(OVER_BUDGET::equals).isPresent() && context.budget().isPresent()
+                    && proposal.quote().isPresent()) {
+                // Our own text and numbers only (6.2), so the agent can try a cheaper item or say none fits.
+                result.put("reason", "over your budget of " + context.budget().get().display() + " (P9)");
+                result.put("quoted", Map.of("currency", proposal.quote().get().currency(),
+                        "total_minor", proposal.quote().get().totalMinor()));
+            }
         }
         return new ToolOutcome.Result(CanonicalJson.write(result), "ok", Optional.of(proposal.intentId()));
     }

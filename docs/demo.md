@@ -102,6 +102,25 @@ purchase; to see two cards, use the CLI (`scripts/ucplab`) or a live model.
   merchant and state.
 - [ ] Press **Approve** on a card whose approval has expired: the status line says so and the card is refreshed.
 
+## 5c. The user's budget (P9)
+
+The Budget field under the message box is the only budget that counts (23.1, 24.3). The message is never parsed on the
+server. The Blue Mug quotes above $10.00 at the lab merchant.
+
+- [ ] Type `a blue mug under $10`: the Budget field fills to **10** with **USD** as you type, before you press Send.
+- [ ] Type `€40 or less`, `max £5` or `no more than 80 EUR`: the field follows, with the currency. `a mug for $20` and
+  `under 500` (no sign or code) leave it empty.
+- [ ] Change the field by hand (or clear it), then keep typing an amount in the message: the field is **not** refilled.
+- [ ] Send `a blue mug under $10` with the field at 10 USD: the run ends with no approval card; the timeline ends
+  **Stopped: no order was placed**; the intent's `failure_reason` is `policy_P9`; the agent says nothing fits the
+  budget and names the quoted price. No order at the merchant.
+- [ ] Send the same message with the field edited to **500**: the field wins and an approval card opens, with **Your
+  budget: $500.00** under the total.
+- [ ] While the run continues (answering a question, or a follow-up), the field is disabled and keeps the run's budget.
+- [ ] At a handoff store (section 8), the card line reads **Your budget: $500.00 (before the store's shipping and
+  tax)**.
+- [ ] Send with the field set to `abc` or `0`: the status line asks for an amount and nothing is sent.
+
 ## 6. Markup safety (`textContent` only)
 
 - [ ] Send `<img src=x onerror=alert(1)> <b>bold</b>`. It appears as literal text in the chat. No alert, no bold.

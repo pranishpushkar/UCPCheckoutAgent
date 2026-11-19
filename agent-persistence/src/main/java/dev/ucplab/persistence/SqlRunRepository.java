@@ -5,6 +5,7 @@ import dev.ucplab.core.agent.RunRecord;
 import dev.ucplab.core.agent.RunRepository;
 import dev.ucplab.core.agent.ToolEvent;
 import dev.ucplab.core.identity.UserId;
+import dev.ucplab.core.intent.Budget;
 import dev.ucplab.core.intent.IntentId;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -46,10 +47,18 @@ public final class SqlRunRepository implements RunRepository {
     public void insert(UserId owner, RunRecord run) {
         checkOwner(owner, run);
         db.write(c -> {
-            try (PreparedStatement s = c.prepareStatement("INSERT INTO agent_run (" + RUN_COLUMNS + ", updated_at)"
-                    + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+            try (PreparedStatement s = c.prepareStatement("INSERT INTO agent_run (" + RUN_COLUMNS + ", updated_at,"
+                    + " budget_minor, budget_currency) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
                 bindRun(s, run);
                 s.setString(12, SqlTimes.format(clock.instant()));
+                // The budget is written here only: an update never touches it (23.1, fixed for the run).
+                if (run.budget().isPresent()) {
+                    s.setLong(13, run.budget().get().amountMinor());
+                    s.setString(14, run.budget().get().currency());
+                } else {
+                    s.setNull(13, java.sql.Types.INTEGER);
+                    s.setString(14, null);
+                }
                 s.executeUpdate();
             } catch (SQLException e) {
                 if (SqlErrors.isUniqueViolation(e)) {
@@ -236,13 +245,17 @@ public final class SqlRunRepository implements RunRepository {
     private static List<RunRecord> runs(Connection c, String where, String... params) throws SQLException {
         List<RunRecord> out = new ArrayList<>();
         try (PreparedStatement s = c.prepareStatement(
-                "SELECT " + RUN_COLUMNS + " FROM agent_run WHERE " + where + " ORDER BY started_at, id")) {
+                "SELECT " + RUN_COLUMNS + ", budget_minor, budget_currency FROM agent_run WHERE " + where
+                        + " ORDER BY started_at, id")) {
             for (int i = 0; i < params.length; i++) {
                 s.setString(i + 1, params[i]);
             }
             try (ResultSet r = s.executeQuery()) {
                 while (r.next()) {
                     String id = r.getString("id");
+                    long budgetMinor = r.getLong("budget_minor");
+                    Optional<Budget> budget = r.wasNull() ? Optional.empty()
+                            : Optional.of(new Budget(budgetMinor, r.getString("budget_currency")));
                     out.add(new RunRecord(
                             new RunId(id),
                             new UserId(r.getString("user_id")),
@@ -256,7 +269,8 @@ public final class SqlRunRepository implements RunRepository {
                             r.getLong("input_tokens"),
                             r.getLong("output_tokens"),
                             intents(c, id),
-                            toolEvents(c, id)));
+                            toolEvents(c, id),
+                            budget));
                 }
             }
         }

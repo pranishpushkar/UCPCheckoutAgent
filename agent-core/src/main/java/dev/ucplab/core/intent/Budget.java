@@ -1,6 +1,7 @@
 package dev.ucplab.core.intent;
 
 import java.util.Objects;
+import java.util.regex.Pattern;
 
 /**
  * The user's budget for a run (9.1 P9, Appendix B): {@code amountMinor} in {@code currency}'s minor units. It comes from
@@ -9,7 +10,21 @@ import java.util.Objects;
  */
 public record Budget(long amountMinor, String currency) {
 
+    private static final Pattern CURRENCY = Pattern.compile("[A-Z]{3}");
+
     public Budget {
         Objects.requireNonNull(currency, "currency");
+        if (amountMinor < 1) {
+            throw new IllegalArgumentException("a budget is at least one minor unit: " + amountMinor);
+        }
+        if (!CURRENCY.matcher(currency).matches()) {
+            throw new IllegalArgumentException("a budget's currency is three upper-case letters");
+        }
+    }
+
+    /** The amount as the console shows money (24.3): "$500.00" in USD, "EUR 500.00" otherwise; two minor digits. */
+    public String display() {
+        String amount = amountMinor / 100 + "." + String.format("%02d", amountMinor % 100);
+        return (currency.equals("USD") ? "$" : currency + " ") + amount;
     }
 }

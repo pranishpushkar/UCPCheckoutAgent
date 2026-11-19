@@ -102,7 +102,21 @@ public final class RuleBasedPolicyEngine implements PolicyEngine {
         if (size.isPresent()) {
             return size.get();
         }
-        return PolicyDecision.allow("P2, P3 and P4 passed");
+        Objects.requireNonNull(budget, "budget");
+        if (budget.isEmpty()) {
+            return PolicyDecision.allow("P2, P3 and P4 passed");
+        }
+        // P9 (9.1): exact, in the budget's own currency; a total in another currency never fits.
+        Budget limit = budget.get();
+        if (!quote.currency().equals(limit.currency())) {
+            return PolicyDecision.deny(PolicyRule.P9, "quoted in " + quote.currency() + "; the budget is in "
+                    + limit.currency());
+        }
+        if (total > limit.amountMinor()) {
+            return PolicyDecision.deny(PolicyRule.P9, "quoted total " + total + " is above the budget "
+                    + limit.amountMinor());
+        }
+        return PolicyDecision.allow("P2, P3, P4 and P9 passed");
     }
 
     private Optional<PolicyDecision> checkSize(int lineCount, int maxQuantity) {

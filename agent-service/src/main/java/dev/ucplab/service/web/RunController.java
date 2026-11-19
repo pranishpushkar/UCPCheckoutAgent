@@ -4,6 +4,7 @@ import dev.ucplab.core.agent.RunId;
 import dev.ucplab.core.agent.RunRecord;
 import dev.ucplab.core.agent.ToolEvent;
 import dev.ucplab.core.identity.AuthContext;
+import dev.ucplab.core.intent.Budget;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.service.run.RunMessage;
 import dev.ucplab.service.run.RunRefused;
@@ -36,6 +37,10 @@ import org.springframework.web.bind.annotation.RestController;
 final class RunController {
 
     static final String BAD_MESSAGE = "message must be 1 to 2000 characters";
+    static final String BAD_BUDGET = "budget_minor and currency must both be set or both left out: an integer from 1 to"
+            + " 10^12 and three upper-case letters";
+    static final String BUDGET_FIXED = "the budget is fixed for the run; start a new run for a new budget";
+    static final long MAX_BUDGET = 1_000_000_000_000L;
     static final int MAX_MESSAGE = 2000;
 
     private final RunSupervisor supervisor;
@@ -47,13 +52,18 @@ final class RunController {
     @PostMapping("/api/runs")
     ResponseEntity<Map<String, Object>> start(AuthContext auth, @RequestBody Map<String, Object> body) {
         String message = message(body);
-        return ResponseEntity.status(HttpStatus.CREATED).body(summary(refusing(() -> supervisor.start(auth, message))));
+        Optional<Budget> budget = budget(body);
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(summary(refusing(() -> supervisor.start(auth, message, budget))));
     }
 
     @PostMapping("/api/runs/{id}/messages")
     Map<String, Object> answer(AuthContext auth, @PathVariable("id") String id, @RequestBody Map<String, Object> body) {
         RunId run = runId(id);
         String message = message(body);
+        if (body.containsKey("budget_minor") || body.containsKey("currency")) {
+            throw ApiException.of(ErrorCode.VALIDATION_FAILED, BUDGET_FIXED);
+        }
         return summary(refusing(() -> supervisor.answer(auth, run, message)));
     }
 
@@ -130,6 +140,30 @@ final class RunController {
         } catch (IllegalArgumentException | NullPointerException e) {
             throw ApiException.of(ErrorCode.NOT_FOUND);
         }
+    }
+
+    /**
+     * The user's budget for the run (23.1, P9), from the body's own fields only, never from the message: both or
+     * neither, an integer from 1 to 10^12 and three upper-case letters; anything else is 422 with a fixed message.
+     */
+    private static Optional<Budget> budget(Map<String, Object> body) {
+        boolean hasAmount = body.containsKey("budget_minor");
+        if (hasAmount != body.containsKey("currency")) {
+            throw ApiException.of(ErrorCode.VALIDATION_FAILED, BAD_BUDGET);
+        }
+        if (!hasAmount) {
+            return Optional.empty();
+        }
+        Object amount = body.get("budget_minor");
+        if (!(amount instanceof Integer || amount instanceof Long) || !(body.get("currency") instanceof String currency)
+                || !currency.matches("[A-Z]{3}")) {
+            throw ApiException.of(ErrorCode.VALIDATION_FAILED, BAD_BUDGET);
+        }
+        long minor = ((Number) amount).longValue();
+        if (minor < 1 || minor > MAX_BUDGET) {
+            throw ApiException.of(ErrorCode.VALIDATION_FAILED, BAD_BUDGET);
+        }
+        return Optional.of(new Budget(minor, currency));
     }
 
     private static String message(Map<String, Object> body) {

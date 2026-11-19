@@ -162,6 +162,11 @@ tr.total th, tr.total td { color: var(--fg); font-size: 1.2rem; font-weight: 700
 #send { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 #send label { flex-basis: 100%; }
 #send input { flex: 1 1 12rem; min-width: 0; }
+/* 24.3: the optional Budget field, an amount and a currency, under the message box. */
+#send .budget { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex-basis: 100%; }
+#send .budget label:first-child { flex-basis: 100%; }
+#send .budget input { flex: 0 1 10rem; }
+.budget-line { color: var(--muted); margin: -4px 0 12px; text-align: right; }
 
 /* The timeline: a stepper of milestones, each marked done, current, pending or ended. */
 .steps li { position: relative; padding: 0 0 14px 28px; }

@@ -201,7 +201,8 @@ public final class RunSupervisor implements AutoCloseable {
         live.put(id, run);
         CompletableFuture<Phase> first = run.settled.get();
         RunTrace trace = new RunTrace(id);
-        launch(run, trace, () -> runtime.start(auth, id, message, run.channel(), trace));
+        Objects.requireNonNull(budget, "budget");
+        launch(run, trace, () -> runtime.start(auth, id, message, run.channel(), trace, budget));
         return await(run, first);
     }
 

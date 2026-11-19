@@ -92,6 +92,13 @@ async function boot() {
   $("sign-out").hidden = false;
   $("sign-out").addEventListener("click", signOut);
   $("send").addEventListener("submit", send);
+  $("message").addEventListener("input", onMessageInput);
+  $("budget").addEventListener("input", () => {
+    budgetTouched = true;
+  });
+  $("budget-currency").addEventListener("change", () => {
+    budgetTouched = true;
+  });
   document.querySelectorAll("[data-preset]").forEach((button) => {
     button.addEventListener("click", () => preset(button.getAttribute("data-preset")));
   });
@@ -116,6 +123,71 @@ async function signOut() {
 
 // ---- the agent panel --------------------------------------------------------------------------------------------
 
+// <budget>
+// 24.3: the optional Budget field. As the user types a first message, the console fills the field, visibly, from an
+// amount with a limit word, until the user edits or clears the field or changes its currency. Only what the field holds
+// when the user presses Send is sent (23.1); the server never parses the message, and neither does send().
+let budgetTouched = false;
+
+const BUDGET_AMOUNT = "([$€£]|USD|EUR|GBP)?\\s*((?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d{1,2})?)\\s*(USD|EUR|GBP)?";
+const BUDGET_LIMIT = new RegExp(
+    "\\b(?:under|below|maximum|max|no more than|at most|less than)\\s+" + BUDGET_AMOUNT
+    + "|" + BUDGET_AMOUNT + "\\s+or less\\b", "i");
+const BUDGET_SIGNS = {"$": "USD", "€": "EUR", "£": "GBP"};
+
+// An amount with a limit word and a sign or code ("under $500", "max 80 EUR", "£40 or less"), or null.
+function budgetFromMessage(text) {
+  const m = BUDGET_LIMIT.exec(text);
+  if (!m) {
+    return null;
+  }
+  const sign = m[1] || m[3] || m[4] || m[6];
+  const amount = m[2] || m[5];
+  if (!sign) {
+    return null;
+  }
+  return {amount: amount.replace(/,/g, ""), currency: BUDGET_SIGNS[sign] || sign.toUpperCase()};
+}
+
+function continuingRun() {
+  return Boolean(currentRun && RUN_WAITING.includes(currentRun.status));
+}
+
+function onMessageInput() {
+  if (budgetTouched || continuingRun()) {
+    return;
+  }
+  const found = budgetFromMessage($("message").value);
+  $("budget").value = found ? found.amount : "";
+  if (found) {
+    $("budget-currency").value = found.currency;
+  }
+}
+
+// The field as budget_minor and currency: {} when it is empty, null when it is not an amount of at least 0.01.
+function budgetToSend() {
+  const raw = $("budget").value.trim().replace(/,/g, "");
+  if (raw === "") {
+    return {};
+  }
+  const m = /^(\d{1,10})(?:\.(\d{1,2}))?$/.exec(raw);
+  if (!m) {
+    return null;
+  }
+  const minor = Number(m[1]) * 100 + Number((m[2] || "0").padEnd(2, "0"));
+  if (minor < 1) {
+    return null;
+  }
+  return {budget_minor: minor, currency: $("budget-currency").value};
+}
+
+// While a run continues, the field keeps the run's budget and cannot change: the budget is fixed for the run.
+function showBudgetField() {
+  $("budget").disabled = continuingRun();
+  $("budget-currency").disabled = continuingRun();
+}
+// </budget>
+
 async function send(event) {
   event.preventDefault();
   const input = $("message");
@@ -123,11 +195,16 @@ async function send(event) {
   if (!text) {
     return;
   }
+  const continuing = continuingRun();
+  const budget = continuing ? {} : budgetToSend();
+  if (budget === null) {
+    setStatus("Enter the budget as an amount such as 500 or 499.99, or leave it empty.", true);
+    return;
+  }
   input.value = "";
-  const continuing = currentRun && RUN_WAITING.includes(currentRun.status);
   const result = continuing
       ? await api("POST", "/api/runs/" + currentRun.id + "/messages", {message: text})
-      : await api("POST", "/api/runs", {message: text});
+      : await api("POST", "/api/runs", Object.assign({message: text}, budget));
   if (!result.ok) {
     setStatus(errorText(result), true);
     return;
@@ -161,6 +238,7 @@ function showRun(run) {
     }
   }
   showOtherIntents(intents);
+  showBudgetField();
 }
 
 async function pollRun() {
@@ -288,6 +366,10 @@ function showApprovalCard(id, approvalResponse) {
   table.appendChild(body);
   table.appendChild(foot);
   card.appendChild(table);
+  if (approval.budget) {
+    card.appendChild(el("p", "Your budget: " + money(approval.budget.amount_minor, approval.budget.currency)
+        + (approval.completion === "handoff" ? " (before the store's shipping and tax)" : ""), "budget-line"));
+  }
   const info = el("div", null, "info");
   info.appendChild(el("p", "Price and stock are not held."));
   if (approval.completion === "handoff") {

@@ -330,10 +330,11 @@ public final class DefaultOrchestrator implements Orchestrator {
         Objects.requireNonNull(merchantId, "merchantId");
         Objects.requireNonNull(lines, "lines");
         Objects.requireNonNull(rationale, "rationale");
+        Objects.requireNonNull(budget, "budget");
         if (lines.isEmpty()) {
             throw new IllegalArgumentException("a proposal needs at least one line");
         }
-        String dedupeKey = dedupeKey(auth.user(), merchantId, lines);
+        String dedupeKey = dedupeKey(auth.user(), merchantId, lines, budget);
         Optional<ProposalResult> existing = existingProposal(auth.user(), dedupeKey);
         if (existing.isPresent()) {
             return existing.get();
@@ -352,6 +353,7 @@ public final class DefaultOrchestrator implements Orchestrator {
         PurchaseIntent intent = PurchaseIntent.proposed(new IntentId(ids.next()), auth.user(), merchantId,
                         entry.map(MerchantEntry::fingerprint).orElse(OwnStoreGuard.NO_ENTRY), dedupeKey, lines,
                         auth.email(), now)
+                .withBudget(budget)
                 .withState(t.to(), now)
                 .withLease(Optional.of(workerId), Optional.of(now.plus(config.lease())));
         if (!allowed) {
@@ -380,8 +382,8 @@ public final class DefaultOrchestrator implements Orchestrator {
 
         // Quote now: one create call. Retries live in the gateway (7.2, 8.2); this never loops.
         Step last = step(intent.id());
-        return new ProposalResult(intent.id(), last.after(),
-                last.after() == AWAITING_APPROVAL ? last.quote() : Optional.empty());
+        // The quote of a step that opened the approval, or of one whose quote policy refused; no other step has one.
+        return new ProposalResult(intent.id(), last.after(), last.quote());
     }
 
     @Override
@@ -432,14 +434,17 @@ public final class DefaultOrchestrator implements Orchestrator {
     }
 
     /** {@code dedupe_key = sha256(userId + '|' + merchantId + '|' + sorted(itemId:quantity))} (7.7), comma-joined. */
-    public static String dedupeKey(UserId user, MerchantId merchantId, List<ProposedLine> lines, Optional<Budget> budget) {
-        return dedupeKey(user, merchantId, lines);
+    public static String dedupeKey(UserId user, MerchantId merchantId, List<ProposedLine> lines) {
+        return dedupeKey(user, merchantId, lines, Optional.empty());
     }
 
-    public static String dedupeKey(UserId user, MerchantId merchantId, List<ProposedLine> lines) {
+    /** 7.7: with the run's budget appended when it has one, so proposals under different budgets never share an intent. */
+    public static String dedupeKey(UserId user, MerchantId merchantId, List<ProposedLine> lines, Optional<Budget> budget) {
         String items = lines.stream().map(l -> l.itemId() + ':' + l.quantity()).sorted()
                 .collect(Collectors.joining(","));
-        return Sha256.hex(user.value() + '|' + merchantId.value() + '|' + items);
+        // No lambda: a new one here would renumber those the mutation equivalents name.
+        String limit = budget.isPresent() ? "|" + budget.get().currency() + ':' + budget.get().amountMinor() : "";
+        return Sha256.hex(user.value() + '|' + merchantId.value() + '|' + items + limit);
     }
 
     // ---------------------------------------------------------------- the step function (7.3)
@@ -824,13 +829,15 @@ public final class DefaultOrchestrator implements Orchestrator {
     private Step quoteReady(
             PurchaseIntent base, MerchantAttempt attempt, Optional<Integer> http, Optional<String> summary,
             CheckoutView view, TransitionEvent event) {
-        PolicyDecision decision = policy.evaluateQuote(base.owner(), view, Optional.empty());
+        PolicyDecision decision = policy.evaluateQuote(base.owner(), view, base.budget());
         if (!decision.allowed()) {
             // DESIGN GAP: table 7.2 has no QUOTING row for a quote that policy denies (P2, P3, P4). This uses the
             // QUOTING -> FAILED_NOT_CHARGED row with a best-effort cancel; failure_reason names the rule.
             policyEvent(base.id(), "quote", decision);
-            return finish(base, attempt, AttemptStatus.RESPONDED, http, summary,
+            Step denied = finish(base, attempt, AttemptStatus.RESPONDED, http, summary,
                     move(base, TransitionEvent.ITEM_UNAVAILABLE), policyReason(decision));
+            // The refused quote goes back with the result, so propose_purchase can name the total P9 refused (6.2).
+            return new Step(denied.before(), denied.after(), denied.idle(), Optional.of(view));
         }
         Optional<RequoteOutcome> p7 = Optional.empty();
         if (base.requoteCount() > 0) {

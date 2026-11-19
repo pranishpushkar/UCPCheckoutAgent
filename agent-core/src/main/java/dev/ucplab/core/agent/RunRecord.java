@@ -69,7 +69,13 @@ public record RunRecord(
 
     /** A run that has just started under the user's {@code budget}. */
     public static RunRecord started(RunId id, UserId owner, String model, Instant at, Optional<Budget> budget) {
-        return started(id, owner, model, at);
+        return started(id, owner, model, at).withBudget(budget);
+    }
+
+    /** This record with {@code runBudget}: a store keeps the budget written at insert whatever an update carries. */
+    public RunRecord withBudget(Optional<Budget> runBudget) {
+        return new RunRecord(id, owner, model, startedAt, endedAt, outcome, reason, modelCalls, toolCalls, inputTokens,
+                outputTokens, intentIds, toolEvents, runBudget);
     }
 
     /** A run that has just started: no calls, no intents, no outcome, no reason. */

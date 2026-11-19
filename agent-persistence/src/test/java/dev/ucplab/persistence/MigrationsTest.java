@@ -333,7 +333,7 @@ class MigrationsTest {
             assertThat(column(db, dump)).isEqualTo(before);
             assertThat(column(db, "SELECT count(*) FROM purchase_intent")).containsExactly("2");
             assertThat(column(db, "SELECT name FROM sqlite_master WHERE type = 'trigger'"))
-                    .containsExactly("purchase_intent_merchant_immutable");
+                    .containsExactlyInAnyOrder("purchase_intent_merchant_immutable", "purchase_intent_budget_immutable");
             assertThat(column(db, "SELECT version FROM flyway_schema_history WHERE success = 1"
                     + " ORDER BY installed_rank")).containsSubsequence("6", "7");
         }
@@ -416,7 +416,7 @@ class MigrationsTest {
                     .contains("ux_intent_active_dedupe", "ix_intent_user", "ux_intent_order", "ix_intent_state_created",
                             "ix_intent_cancel_pending", "ix_approval_pending_expiry");
             assertThat(column(db, "SELECT name FROM sqlite_master WHERE type = 'trigger'"))
-                    .containsExactly("purchase_intent_merchant_immutable");
+                    .containsExactlyInAnyOrder("purchase_intent_merchant_immutable", "purchase_intent_budget_immutable");
             org.assertj.core.api.Assertions.assertThatThrownBy(
                     () -> exec(db, "UPDATE purchase_intent SET merchant_id = 'other' WHERE id = 'i1'"))
                     .hasStackTraceContaining("I11");
@@ -607,7 +607,7 @@ class MigrationsTest {
             assertThat(column(db, "SELECT state || ':' || budget_minor || budget_currency FROM purchase_intent WHERE id = 'ib'"))
                     .containsExactly("QUOTING:500USD");
             assertThat(column(db, "SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name"))
-                    .contains("purchase_intent_budget_immutable", "purchase_intent_merchant_immutable");
+                    .containsExactly("purchase_intent_budget_immutable", "purchase_intent_merchant_immutable");
         }
     }
 }

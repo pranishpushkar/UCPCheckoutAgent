@@ -31,7 +31,11 @@ public final class SystemPrompt {
 
     /** The system prompt, then the run's [BUDGET] paragraph when it has a budget (6.4): a hint, never a guarantee. */
     public static String text(Optional<Budget> budget) {
-        return TEXT;
+        if (budget.isEmpty()) {
+            return TEXT;
+        }
+        return TEXT + "\n\n[BUDGET] The user's budget for this run is " + budget.get().display()
+                + ". Propose only items whose total fits it; a quote above it is refused.";
     }
 
     private static String load(String name) {

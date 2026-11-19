@@ -66,6 +66,9 @@ final class ApprovalController {
             body.put("completion", "handoff");
             body.put("note", HANDOFF_NOTE);
         }
+        // 23.2, P9: the intent's stored budget, outside the snapshot too; read for the owner only, never cached (20).
+        intents.find(auth.user(), pending.snapshot().intentId()).flatMap(PurchaseIntent::budget).ifPresent(b ->
+                body.put("budget", Map.of("amount_minor", b.amountMinor(), "currency", b.currency())));
         return body;
     }
 
