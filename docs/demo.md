@@ -35,6 +35,11 @@ a clean volume. Stop with `docker compose down -v` (README step 9).
 - [ ] Answer `a blue mug`. The agent proposes a purchase; the status says the run is waiting for approval.
 - [ ] The tool calls show as small chips `search_catalog · n ms` and `propose_purchase · n ms`, each with a green dot.
   A call that did not answer `ok` has an amber dot and its code as text (`· not_found`). No raw tool output.
+- [ ] While a run works (24.3): right after **Send** the button is greyed out and reads **Working…**, your message is
+  in the chat, and under it an agent bubble reads **Thinking…** with three moving dots. The status line says "Working
+  on it." once. With the scripted model the run settles within a second, so the bubble may only flash; section 8b
+  shows it at length. When the run settles, the bubble is gone, the reply or the card is there, and **Send** reads
+  **Send** again.
 - [ ] The **approval card** appears, headed **Approval needed** with **From merchant-a** under it (the merchant of the
   stored quote, never the agent's words; the scripted model's first search hit is merchant-a's). Check each part
   against 24.3:
@@ -230,6 +235,12 @@ scripts/shopify-console.sh --i-own-this-store --with-buyer-ip --model gemini
 - [ ] Without `GEMINI_API_KEY`, the script refuses in one line and starts nothing.
 - [ ] The header shows a small **Model: Gemini** label next to the **Live store · <store>.myshopify.com** badge. Without
   `--model gemini` there is no label.
+- [ ] **Send** `a snowboard`. While the model works, **Send** reads **Working…** and the agent bubble moves from
+  **Thinking…** to **Searching the catalog…** and **Checking the price at <your store's name>…** (or **Checking the
+  price…** with several merchants) to **Preparing your approval…**, as each tool's chip appears. After about 10 s it
+  adds **Still working · 10 s**, counting up. The steps are the page's own texts, chosen from the tool names: never the
+  model's words. With the system's "Reduce motion" setting on, the dots do not move; the text is the same.
+- [ ] A screen reader says "Working on it." once, not on every step or second.
 
 **Natural requests.** Unlike the scripted model, the model reads what you write. The Budget field fills from the message
 as you type (section 5c), and it alone is enforced. The words in the message only guide the model.
