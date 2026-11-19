@@ -34,6 +34,11 @@ scripts/shopify-live.sh --i-own-this-store --with-buyer-ip --cancel-after       
   apply, and `--approve`, `--cancel-after`, `--query` and `--record` are refused. On exit it keeps each intent's
   evidence under `notes/h5/console/evidence/<intent>/` and drains owed cancels. It never cancels a handed-off checkout,
   since you may be paying at the store.
+- `--model gemini`, with `--console` only (DESIGN 26.6): the service runs the live model instead of the scripted one
+  (the default). The key is `GEMINI_API_KEY` in your shell, never an argument: the script refuses to start, in one
+  line, when it is unset, and refuses a jar without `agent-adk` (the live client) on its runtime classpath. The key
+  goes into the service's environment only. It is never printed (the dry run shows `<redacted>`), and never written to
+  a file, log or evidence. See [What reaches Gemini](#what-reaches-gemini) and [Cost](#cost-of-a-console-run-with-gemini).
 - `--after-payment`, with `--console` only: on Ctrl-C, after the evidence and before the drain, one read-only
   `get_checkout` of each handed-off checkout, then another 60 s later. Each answer is recorded, redacted, as
   `notes/h5/console/evidence/<intent>/after_payment_get_checkout_{0s,60s}.json` (VERIFY 7: what the store says of a
@@ -51,7 +56,8 @@ scripts/shopify-live.sh --i-own-this-store --with-buyer-ip --cancel-after       
    `requires_buyer_ip: true`, `ucp_versions: ["2026-04-08"]`. Also a temporary policy file with a cap above the store's
    prices, and a temporary SQLite database. All three are deleted on exit, on failure too.
 2. Starts the service (`java -jar`) in the `local` profile with `AGENT_MODEL=scripted`, so the run is the same each time
-   and costs nothing. The service's environment is built from nothing: the client id and secret reach it as
+   and costs nothing. (`--console --model gemini` sets `AGENT_MODEL=gemini` and passes `GEMINI_API_KEY`; the scripted
+   run always uses the scripted model.) The service's environment is built from nothing: the client id and secret reach it as
    `SHOPIFY_CLIENT`, never as an argument.
 3. Signs in as `alice`, starts a run with the query, and waits for the intent to reach `AWAITING_APPROVAL`.
 4. Records the store's answers that the service does not keep raw (it stores status, currency, total and lines only):
@@ -83,11 +89,53 @@ scripts/shopify-live.sh --i-own-this-store --with-buyer-ip --cancel-after       
   (N1).
 - `BUYER_IP` is your own public IP. The store needs it on every call. It goes to no one else, and is never printed or
   recorded.
+- To `generativelanguage.googleapis.com`, with `--model gemini` only: the key, in the API's authentication header, and
+  what [What reaches Gemini](#what-reaches-gemini) lists.
+
+## What reaches Gemini
+
+With `--model gemini` (DESIGN 26.6), each model call sends the following.
+
+- The system prompt (DESIGN 6.4, version v2). When the run has a budget, the system prompt is followed by the
+  `[BUDGET]` hint: "The user's budget for this run is $700.00…". This is our own text, built from the run's stored
+  budget.
+- The conversation: your messages, and the model's own earlier turns.
+- The five tool specs (DESIGN 6.2).
+- The tool results:
+  - search results and product details, which include the store's product titles and descriptions. These are
+    **untrusted** text (S10), cleaned and wrapped as `<untrusted ...>`;
+  - the proposal's state and quote, or the P9 refusal with the budget and the quoted total;
+  - a handed-off intent's status, with the fixed note "handed to the store for payment".
+
+It never gets:
+
+- the Shopify client id, client secret or access token;
+- the buyer IP;
+- the handoff URL (`continue_url`) or a checkout id with its `?key=`;
+- the store order's id or its confirmation code (`label`);
+- an approval token, the session cookie or the CSRF token.
+
+`GeminiBoundaryTest` (in `./mvnw verify`, offline) enforces this. It runs the real Gemini client against a loopback
+stub of the API, through a whole handoff with a canary in each of those values, and scans every request the stub
+receives.
+
+The budget stays yours. Only P9 enforces it, in code. `propose_purchase` has no budget argument and refuses any
+argument it does not know, so no model output can set, raise or clear the budget. The same test checks this under the
+live client.
+
+## Cost of a console run with Gemini
+
+The limits that exist are per run (DESIGN 6.3, `AgentBudget.DEFAULT`): 6 model calls, 8 tool calls, 30 s of wall clock
+(your time answering excluded) and 20,000 input plus output tokens. A run that reaches any of them ends with
+`BUDGET_EXCEEDED`. There is no daily cap on model calls or tokens. The console's daily cap is P3's on purchases
+(`daily_cap_minor: 400000`, 4,000.00 in the store's currency, in the temporary policy file), not on the model. The
+console runs only while you keep it open, and each message you send is one run. Check Gemini's current pricing
+yourself.
 
 ## What is never written
 
-The client id or secret, the access token, the buyer IP, the session cookie, the CSRF token, an approval token, the
-approval secret, or the handoff URL. Recorded answers go through the spike's `sanitize()` and `redact()`:
+The client id or secret, the access token, the buyer IP, the Gemini API key, the session cookie, the CSRF token, an
+approval token, the approval secret, or the handoff URL. Recorded answers go through the spike's `sanitize()` and `redact()`:
 `continue_url` and `checkout_url` are cut to their host, and every `?key=` is masked. The intent's `handoff_url` in
 `intent.json` is cut to its host too. Recordings and evidence go under
 `notes/` (git-ignored). A recording becomes a fixture only after the F strip (store host replaced, ids faked), since
@@ -100,3 +148,7 @@ approval secret, or the handoff URL. Recorded answers go through the spike's `sa
 2. `--dry-run` with canary values in `SHOPIFY_CLIENT_ID`, `SHOPIFY_CLIENT_SECRET` and `BUYER_IP`: none appears in the
    output; every header and credential reads `<redacted>`.
 3. After the real run: `scripts/h5-leak-scan.sh` over the evidence and recordings directories finds nothing.
+4. After a console run with `--model gemini`: with `GEMINI_API_KEY` still exported,
+   `scripts/h5-leak-scan.sh --evidence notes/h5/console/evidence` finds neither the key (a fixed pattern, fed to grep on
+   a pipe) nor a key's shape in the evidence, and finds the key in no commit of the branch. `--dry-run` with
+   `--model gemini` shows `"GEMINI_API_KEY": "<redacted>"`.
