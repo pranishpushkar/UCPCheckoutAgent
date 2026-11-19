@@ -249,6 +249,20 @@ public abstract class IntentRepositoryContract {
         assertThat(repo.findForSystem(new IntentId("i2")).orElseThrow().budget()).isEmpty();
     }
 
+    // Covers: P9, 10 (V10, V11) (an intent with no budget keeps every column written before the budget pair: a full
+    // handoff watch, store order label included, inserted with no budget reads back whole; HANDED_OFF, the one state a
+    // follow-up is stored in, 7.6)
+    @Test
+    void insert_withoutABudget_keepsTheHandoffWatchBesideIt() {
+        HandoffWatch watch = new HandoffWatch(Optional.of(clock.instant().plus(HandoffWatch.WINDOW)),
+                Optional.of(clock.instant().plusSeconds(60)), Optional.of(new StoreOrder("o-1", Optional.of("#1001"))));
+        repo.insert(proposed("i1", ALICE, "d1").withHandoffWatch(watch).withState(IntentState.HANDED_OFF, clock.instant()));
+
+        PurchaseIntent stored = repo.findForSystem(new IntentId("i1")).orElseThrow();
+        assertThat(stored.handoffWatch()).isEqualTo(watch);
+        assertThat(stored.budget()).isEmpty();
+    }
+
     // Covers: P9, I3, 10 (V11) (an update never sets, raises or clears the budget: whatever the caller passes, the stored
     // budget is the one written at insert)
     @Test
