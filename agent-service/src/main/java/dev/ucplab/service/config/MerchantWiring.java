@@ -11,6 +11,7 @@ import dev.ucplab.core.merchant.Transport;
 import dev.ucplab.ucp.CatalogClient;
 import dev.ucplab.ucp.CircuitBreakers;
 import dev.ucplab.ucp.HttpTransport;
+import dev.ucplab.ucp.GlobalCatalogGateway;
 import dev.ucplab.ucp.McpCatalogGateway;
 import dev.ucplab.ucp.McpMerchantGateway;
 import dev.ucplab.ucp.Sleeper;
@@ -98,23 +99,42 @@ final class MerchantWiring {
             return new UcpHttpGateway(entry, p.ucp(), p.transports().get(), p.breakers(), p.clock(), p.sleeper(),
                     p.random(), p.ids(), s.endpointHosts(), requiredHandler(s), s.ucpVersions());
         }
-        String variable = s.credentialRef().orElseThrow().substring("env:".length());
-        ClientCredentials credentials = ClientCredentials.parse(p.environment().get(variable)
-                .orElseThrow(() -> new IllegalStateException(ServiceProperties.CREDENTIAL_UNSET)));
-        TokenProvider tokens = new TokenProvider(p.tokenEndpoint(), credentials, p.transports().get(), p.clock(),
-                TOKEN_DEFAULT_LIFETIME, TOKEN_REFRESH_MARGIN, p.ucp().requestTimeout());
+        if (s.transport() == Transport.CATALOG) {
+            // 26.7: the token tier when the entry names its key, else the anonymous tier; never the buyer IP.
+            Optional<ClientCredentials> credentials = s.credentialRef().map(ref -> credentials(ref, p));
+            return new GlobalCatalogGateway(entry, p.ucp(), p.transports().get(), p.breakers(), p.clock(), p.sleeper(),
+                    p.random(), p.ids(), p.agentVersion(), credentials.map(c -> tokens(c, p)),
+                    credentials.map(ClientCredentials::redactable).orElse(List.of()));
+        }
+        ClientCredentials credentials = credentials(s.credentialRef().orElseThrow(), p);
+        TokenProvider tokens = tokens(credentials, p);
         return new McpMerchantGateway(entry, p.ucp(), p.transports().get(), p.breakers(), p.clock(), p.sleeper(),
                 p.random(), p.ids(), s.endpointHosts(), requiredHandler(s), s.ucpVersions(), p.agentVersion(), tokens,
                 credentials,
                 s.requiresBuyerIp() ? p.buyerIp() : Optional.empty());
     }
 
-    /** The catalog of a merchant's gateway: over REST {@link CatalogClient}, over MCP {@link McpCatalogGateway}. */
+    /** The client credentials {@code ref} ({@code env:NAME}) names; startup has checked that it is set and splits. */
+    private static ClientCredentials credentials(String ref, GatewayParts p) {
+        return ClientCredentials.parse(p.environment().get(ref.substring("env:".length()))
+                .orElseThrow(() -> new IllegalStateException(ServiceProperties.CREDENTIAL_UNSET)));
+    }
+
+    private static TokenProvider tokens(ClientCredentials credentials, GatewayParts p) {
+        return new TokenProvider(p.tokenEndpoint(), credentials, p.transports().get(), p.clock(),
+                TOKEN_DEFAULT_LIFETIME, TOKEN_REFRESH_MARGIN, p.ucp().requestTimeout());
+    }
+
+    /**
+     * The catalog of a merchant's gateway: over REST {@link CatalogClient}, over MCP {@link McpCatalogGateway}; a
+     * catalog source is its own ({@link GlobalCatalogGateway}, 26.7).
+     */
     static CatalogGateway catalog(MerchantGateway gateway, GatewayParts p) {
         return switch (gateway) {
             case UcpHttpGateway rest -> new CatalogClient(rest, p.ucp(), p.transports().get(), p.breakers(), p.clock(),
                     p.sleeper(), p.random(), p.ids());
             case McpMerchantGateway mcp -> new McpCatalogGateway(mcp);
+            case GlobalCatalogGateway global -> global;
             default -> throw new IllegalArgumentException("no catalog for " + gateway);
         };
     }

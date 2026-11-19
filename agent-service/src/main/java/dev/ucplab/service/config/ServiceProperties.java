@@ -8,6 +8,7 @@ import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantStatus;
 import dev.ucplab.core.merchant.Transport;
 import dev.ucplab.core.policy.PolicyConfig;
+import dev.ucplab.ucp.GlobalCatalogGateway;
 import dev.ucplab.ucp.UcpHttpGateway;
 import dev.ucplab.ucp.auth.ClientCredentials;
 import dev.ucplab.ucp.registry.BuyerIp;
@@ -245,13 +246,18 @@ public final class ServiceProperties {
         URI agentProfile = agentProfile(env);
         // 19, 26.2: the default's host is not ours, so it serves the loopback lab merchants only.
         boolean realStore = merchants.stream()
-                .anyMatch(m -> m.transport() == Transport.MCP || !MerchantEntry.isLoopback(m.url()));
+                .anyMatch(m -> m.transport() != Transport.REST || !MerchantEntry.isLoopback(m.url()));
         if (realStore && agentProfile.equals(DEFAULT_AGENT_PROFILE)) {
             throw new IllegalStateException(AGENT_PROFILE_DEFAULT);
         }
         String agentVersion = env.get("UCP_AGENT_VERSION").orElse(DEFAULT_AGENT_VERSION);
         if (!UcpHttpGateway.SUPPORTED_VERSIONS.contains(agentVersion)) {
             throw new IllegalStateException(AGENT_VERSION_UNSUPPORTED);
+        }
+        // 19, 26.7: the Global Catalog answers at the version of Shopify's sample profile only.
+        if (merchants.stream().anyMatch(m -> m.transport() == Transport.CATALOG)
+                && !GlobalCatalogGateway.VERSION.equals(agentVersion)) {
+            throw new IllegalStateException(CATALOG_VERSION);
         }
         MerchantSettings first = merchants.getFirst();
 

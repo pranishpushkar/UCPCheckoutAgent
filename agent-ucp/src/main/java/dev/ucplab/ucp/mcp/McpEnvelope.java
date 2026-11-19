@@ -21,8 +21,8 @@ public final class McpEnvelope {
 
     /** The tools 8.4 names whose call changes state at the store: each needs an idempotency key. */
     public static final Set<String> MUTATING_TOOLS = Set.of("create_checkout", "update_checkout", "cancel_checkout");
-    /** The tools 8.4 names that only read: none carries a key. */
-    public static final Set<String> READ_TOOLS = Set.of("get_checkout", "search_catalog");
+    /** The tools that only read, 8.4's and the Global Catalog's {@code get_product} (26.7): none carries a key. */
+    public static final Set<String> READ_TOOLS = Set.of("get_checkout", "search_catalog", "get_product");
 
     private McpEnvelope() {
     }

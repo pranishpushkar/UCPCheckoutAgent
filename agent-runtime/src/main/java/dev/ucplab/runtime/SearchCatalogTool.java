@@ -19,7 +19,8 @@ import java.util.Set;
 /**
  * {@code search_catalog} (6.2): {@code query} (1 to 200 characters) and {@code max_results} (1 to 10). Searches each
  * active merchant's catalog and returns {@code {items:[{merchant_id, item_id, title, price_minor, currency,
- * in_stock}]}}, one entry per variant, at most {@code max_results}. {@code title} is wrapped; the merchant's own
+ * in_stock, seller?}]}}, one entry per variant, at most {@code max_results}. {@code title} is wrapped, and so is
+ * {@code seller}, a catalog source's seller name (26.7); the merchant's own
  * availability word is left out. A variant whose id a tool would not accept back is left out. Every active merchant is
  * asked at once, for {@link ToolPorts#perMerchant()} at most (19); the items are merged round-robin in registry order. A
  * merchant that timed out or failed is left out and named in {@code unavailable}; when every active merchant failed:
@@ -127,6 +128,8 @@ final class SearchCatalogTool implements Tool {
         item.put("price_minor", variant.price().minor());
         item.put("currency", variant.price().currency());
         item.put("in_stock", variant.availability().available());
+        // 6.2, 26.7: a catalog source's seller, by name only, wrapped like the title; never its domain or a URL (I6).
+        variant.seller().ifPresent(s -> item.put("seller", UntrustedText.wrap("merchant", "seller", s)));
         return item;
     }
 }

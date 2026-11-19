@@ -6,6 +6,7 @@ import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantStatus;
 import dev.ucplab.core.merchant.Transport;
+import dev.ucplab.ucp.GlobalCatalogGateway;
 import dev.ucplab.ucp.UcpHttpGateway;
 import dev.ucplab.ucp.registry.MerchantSettings;
 import java.io.IOException;
@@ -52,8 +53,8 @@ final class MerchantsFile {
     static final String BAD_VERSION = "MERCHANTS_FILE has a ucp_versions pin the agent does not support";
     static final String BAD_HANDLER = "MERCHANTS_FILE has a payment_handler without a valid id, type, credential_type and token_ref";
     static final String BAD_TOKEN_REF = "MERCHANTS_FILE has a token_ref that is not env:NAME";
-    static final String BAD_TRANSPORT = "MERCHANTS_FILE has a transport other than rest or mcp";
-    static final String BAD_COMPLETION = "MERCHANTS_FILE has a completion other than agent or handoff";
+    static final String BAD_TRANSPORT = "MERCHANTS_FILE has a transport other than rest, mcp or catalog";
+    static final String BAD_COMPLETION = "MERCHANTS_FILE has a completion other than agent, handoff or link";
     static final String BAD_SHOP_DOMAIN = "MERCHANTS_FILE has a shop_domain that is not a host name without port or path";
     static final String BAD_CREDENTIAL_REF = "MERCHANTS_FILE has a credential_ref that is not env:NAME";
     static final String MCP_INCOMPLETE = "MERCHANTS_FILE has a transport: mcp merchant without credential_ref or shop_domain";
@@ -76,6 +77,9 @@ final class MerchantsFile {
     private static final Set<String> KEYS = Set.of("id", "name", "url", "status", "lab_url", "endpoint_hosts",
             "ucp_versions", "payment_handler", "transport", "completion", "owned", "shop_domain", "credential_ref",
             "requires_buyer_ip");
+    /** A store's keys, none of which a catalog source has (19). */
+    private static final List<String> CATALOG_STORE_KEYS = List.of("owned", "shop_domain", "requires_buyer_ip",
+            "payment_handler", "endpoint_hosts", "ucp_versions");
     private static final Set<String> HANDLER_KEYS = Set.of("id", "type", "credential_type", "token_ref");
     private static final Pattern ID = Pattern.compile("[A-Za-z0-9_-]{1,100}");
     private static final Pattern HOST = Pattern.compile("(?:[A-Za-z0-9.-]{1,253}|\\[[0-9A-Fa-f:.]{2,45}\\])(?::[0-9]{1,5})?");
@@ -154,6 +158,12 @@ final class MerchantsFile {
         Optional<URI> lab = m.containsKey("lab_url") ? Optional.of(uri(string(m.get("lab_url")))) : Optional.empty();
         Transport transport = transport(m);
         Completion completion = completion(m);
+        if ((transport == Transport.CATALOG) != (completion == Completion.LINK)) {
+            throw refuse(CATALOG_LINK_PAIR);
+        }
+        if (transport == Transport.CATALOG) {
+            return catalogSource(m, id, name, url, status, lab);
+        }
         boolean owned = m.containsKey("owned") ? bool(m.get("owned")) : MerchantEntry.isLoopback(url);
         Optional<String> shopDomain = shopDomain(m);
         Optional<String> credentialRef = credentialRef(m);
@@ -174,6 +184,25 @@ final class MerchantsFile {
                 handler(m), transport, completion, owned, shopDomain, credentialRef, buyerIp);
     }
 
+    /**
+     * A catalog source (19 "Catalog sources", 26.7): none of a store's keys, its url Shopify's Global Catalog off
+     * loopback, never owned, no shop_domain; {@code credential_ref} optional.
+     */
+    private static MerchantSettings catalogSource(Map<?, ?> m, String id, String name, URI url, MerchantStatus status,
+                                                  Optional<URI> lab) {
+        for (String key : CATALOG_STORE_KEYS) {
+            if (m.containsKey(key)) {
+                throw refuse(CATALOG_STORE_KEY);
+            }
+        }
+        if (!MerchantEntry.isLoopback(url) && !url.equals(GlobalCatalogGateway.SHOPIFY_CATALOG)) {
+            throw refuse(CATALOG_URL_NOT_SHOPIFYS);
+        }
+        return new MerchantSettings(new MerchantId(id), name, url, status, lab, Set.of(),
+                Set.of(GlobalCatalogGateway.VERSION), Optional.empty(), Transport.CATALOG, Completion.LINK, false,
+                Optional.empty(), credentialRef(m), false);
+    }
+
     private static MerchantStatus status(Map<?, ?> m) {
         if (!m.containsKey("status")) {
             return MerchantStatus.ACTIVE;
@@ -192,6 +221,7 @@ final class MerchantsFile {
         return switch (string(m.get("transport"))) {
             case "rest" -> Transport.REST;
             case "mcp" -> Transport.MCP;
+            case "catalog" -> Transport.CATALOG;
             default -> throw refuse(BAD_TRANSPORT);
         };
     }
@@ -203,6 +233,7 @@ final class MerchantsFile {
         return switch (string(m.get("completion"))) {
             case "agent" -> Completion.AGENT;
             case "handoff" -> Completion.HANDOFF;
+            case "link" -> Completion.LINK;
             default -> throw refuse(BAD_COMPLETION);
         };
     }

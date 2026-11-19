@@ -105,7 +105,7 @@ class GlobalCatalogGatewayTest {
                 "pagination", Map.of("limit", 10L)));
         assertThat(sent.arguments().get("meta")).isEqualTo(Map.of("ucp-agent", Map.of("profile", PROFILE)));
         assertThat(sent.header("Authorization")).isEqualTo("Bearer tok-1");
-        assertThat(sent.header(StoreHeaders.BUYER_IP_HEADER)).isNull();
+        assertThat(sent.headers().keySet()).noneMatch(k -> k.equalsIgnoreCase(StoreHeaders.BUYER_IP_HEADER));
     }
 
     // Covers: 26.7, I6 (no URL reaches a search result: a variant carries no checkout_url, product url or seller url)
