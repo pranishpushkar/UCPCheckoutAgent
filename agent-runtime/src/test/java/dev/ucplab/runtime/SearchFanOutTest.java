@@ -10,10 +10,12 @@ import dev.ucplab.core.merchant.CatalogPage;
 import dev.ucplab.core.merchant.CatalogProduct;
 import dev.ucplab.core.merchant.CatalogSearch;
 import dev.ucplab.core.merchant.CatalogVariant;
+import dev.ucplab.core.merchant.Completion;
 import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantStatus;
 import dev.ucplab.core.merchant.Money;
+import dev.ucplab.core.merchant.Transport;
 import java.lang.reflect.Proxy;
 import java.net.URI;
 import java.time.Duration;
@@ -276,5 +278,43 @@ class SearchFanOutTest {
         ToolPorts ports = new ToolPorts(Stubs.registry(List.of()), Map.of(), noOrchestrator());
 
         assertThat(search(ports, 5).json()).isEqualTo("{\"items\":[]}");
+    }
+
+    private static CallOutcome<CatalogPage> after(long millis, String... ids) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return new CallOutcome.NotSent<>("cancelled");
+        }
+        return page(ids);
+    }
+
+    // Covers: 6.2, 26.7 (a catalog source waits 5 s by default, a store 2 s)
+    @Test
+    void theCatalogSourcesLimit_isFiveSeconds() {
+        assertThat(ToolPorts.DEFAULT_CATALOG_SOURCE).isEqualTo(Duration.ofSeconds(5));
+        assertThat(new ToolPorts(Stubs.registry(List.of()), Map.of(), noOrchestrator()).catalogSource())
+                .isEqualTo(Duration.ofSeconds(5));
+    }
+
+    // Covers: 6.2, 26.7, 19 (a catalog source is waited for up to its own limit, longer than a store's: one that answers
+    // after the store limit is kept, while a store that answers as late is left out and named unavailable)
+    @Test
+    void aCatalogSource_isWaitedForUpToItsOwnLimit_aStoreUpToTheStoreLimit() {
+        MerchantEntry catalogSource = new MerchantEntry(A, URI.create("https://catalog.shopify.com/api/ucp/mcp"),
+                "Shopify catalog", MerchantStatus.ACTIVE, Transport.CATALOG, Completion.LINK, false, Optional.empty());
+        Map<MerchantId, CatalogGateway> catalogs = catalogs(A, catalog(() -> after(400, "a1")),
+                B, catalog(() -> after(400, "b1")));
+        ToolPorts ports = new ToolPorts(Stubs.registry(List.of(catalogSource, entry(B))), catalogs, noOrchestrator())
+                .withPerMerchant(Duration.ofMillis(150)).withCatalogSource(Duration.ofSeconds(3));
+
+        long started = System.nanoTime();
+        ToolOutcome.Result r = search(ports, 5);
+        long ms = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+
+        assertThat(itemIds(r.json())).containsExactly("a1");
+        assertThat(r.json()).contains("\"unavailable\":[\"merchant-b\"]");
+        assertThat(ms).as("returns when the catalog has answered, not at its limit").isBetween(380L, 2500L);
     }
 }

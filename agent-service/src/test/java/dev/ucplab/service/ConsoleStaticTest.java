@@ -802,4 +802,77 @@ class ConsoleStaticTest {
                 .isGreaterThan(card.indexOf("card.appendChild(table);"))
                 .isLessThan(card.indexOf("const info = el(\"div\", null, \"info\");"));
     }
+
+    /** 24.3's run-end table: each status line and chat text, in the page's own words. */
+    private static final List<String> RUN_END_TEXTS = List.of(
+            "Working on it.", "Waiting for your answer.", "Waiting for your approval.", "Done.",
+            "Stopped: ran out of steps.",
+            "I looked at several options but ran out of steps before choosing. Try a narrower request.",
+            "Stopped: ran out of time.", "I ran out of time before choosing. Try a narrower request.",
+            "Stopped: too much to read.", "I had too much to read before choosing. Try a narrower request.",
+            "Stopped: no answer from you.", "I stopped waiting for your answer. Send a new message to start again.",
+            "Stopped: the model could not be reached.", "I couldn't reach the model, so I stopped. Try again in a moment.",
+            "Stopped: a step failed.", "A step failed, so I stopped. Try again in a moment.",
+            "Stopped: something went wrong.", "Something went wrong on our side, so I stopped. Try again in a moment.",
+            "Stopped: the service restarted.",
+            "The service restarted while I was working, so I stopped. Send your request again.",
+            "Stopped.", "I stopped before finishing. Try again in a moment.");
+
+    // Covers: 24.3, 23 (the status line names every run status and reason in words, never the codes: the live check
+    // showed "Run budget exceeded (TOOL_CALLS)."; each of 24.3's texts is in the page, and each limit and reason code
+    // is only a key of its table)
+    @Test
+    void runEnd_theStatusLineNamesEveryStatusAndReasonInWords_neverTheCode() throws IOException {
+        String js = read("console.js");
+        String end = block(js, "run-end");
+
+        assertThat(end).as("24.3's run-end table").isNotEmpty();
+        for (String text : RUN_END_TEXTS) {
+            assertThat(end).as(text).contains("\"" + text + "\"");
+        }
+        for (String code : List.of("MODEL_CALLS", "TOOL_CALLS", "WALL_CLOCK", "TOKENS", "model_error", "tool_error",
+                "internal_error", "interrupted", "budget_exceeded", "user_timeout", "failed", "running",
+                "waiting_for_user", "done")) {
+            assertThat(end).as(code).contains("\"" + code + "\"");
+        }
+        assertThat(js).as("the codes are never shown").doesNotContain("run.status.replace(")
+                .doesNotContain("run.reason ? \" (\"");
+        assertThat(count(js, "run.reason")).as("the reason is read only by the table").isEqualTo(count(end, "run.reason"));
+        assertThat(end).doesNotContain("innerHTML").doesNotContain("textContent");
+    }
+
+    // Covers: 24.3, 6.3 (a run that ended in budget_exceeded, user_timeout or failed gets the table's chat text as the
+    // agent's last bubble, after the run's messages, set as text; the status line takes the table's text)
+    @Test
+    void runEnd_aRunThatEndedWithoutAnAnswer_saysSoInTheChat() throws IOException {
+        String js = read("console.js");
+        String show = js.substring(js.indexOf("function showRun(run) {"), js.indexOf("async function pollRun() {"));
+
+        assertThat(show).contains("const [statusText, chatText] = runEnd(run);")
+                .contains("if (chatText) {")
+                .contains("$(\"chat\").appendChild(el(\"li\", chatText, \"agent\"));")
+                .contains("setStatus(statusText);");
+        assertThat(show.indexOf("(run.messages || []).forEach")).as("after the run's messages")
+                .isLessThan(show.indexOf("if (chatText) {"));
+        String end = block(js, "run-end");
+        assertThat(end).contains("[\"budget_exceeded\",").contains("[\"user_timeout\",").contains("[\"failed\",");
+    }
+
+    // Covers: 24.3, 26.7 (in catalog mode the badge reads "Shopify Global Catalog", not "Lab merchants", and Developer
+    // tools stay hidden: from the followed intent's merchant.completion, or before one from the lab list's completion;
+    // a live store's badge comes first)
+    @Test
+    void merchantMode_inCatalogMode_readsShopifyGlobalCatalog_andHidesDeveloperTools() throws IOException {
+        String mode = block(read("console.js"), "merchant-mode");
+
+        assertThat(mode).contains("currentIntent.merchant.completion === \"link\"")
+                .contains("labMerchants.some((m) => m.completion === \"link\")")
+                .contains("if (!domain && catalogMode()) {")
+                .contains("badge.textContent = \"Shopify Global Catalog\";")
+                .contains("$(\"dev-tools\").hidden = true;")
+                .contains("$(\"dev-tools\").open = false;");
+        assertThat(mode.indexOf("badge.textContent = domain ? \"Live store · \" + domain : \"Lab merchants\";"))
+                .as("the catalog's text replaces the lab's, after it").isLessThan(mode.indexOf("if (!domain && catalogMode()) {"));
+        assertThat(count(mode, "Shopify Global Catalog")).isEqualTo(1);
+    }
 }
