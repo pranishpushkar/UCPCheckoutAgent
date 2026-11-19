@@ -529,7 +529,8 @@ class MigrationsTest {
     }
 
     // Covers: 10 V11, P9 (a database at V10 holding intents and runs upgrades to V11: every row keeps every value it had
-    // and has no budget; V11 is the last migration)
+    // and has no budget; V11 follows V10. It was the last migration until V12, #28's precedent for a test that follows
+    // a contract change)
     @Test
     void v11_upgradesAV10DatabaseWithRows_givingEachNoBudget() {
         Path file = dir.resolve("v10-to-v11.db");
@@ -554,7 +555,7 @@ class MigrationsTest {
             assertThat(column(db, "SELECT id || ':' || coalesce(budget_minor, '-') || ':' || coalesce(budget_currency, '-')"
                     + " FROM agent_run")).containsExactly("r:-:-");
             assertThat(column(db, "SELECT version FROM flyway_schema_history WHERE success = 1"
-                    + " ORDER BY installed_rank")).endsWith("10", "11");
+                    + " ORDER BY installed_rank")).containsSubsequence("10", "11");
         }
     }
 
@@ -608,6 +609,58 @@ class MigrationsTest {
                     .containsExactly("QUOTING:500USD");
             assertThat(column(db, "SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name"))
                     .containsExactly("purchase_intent_budget_immutable", "purchase_intent_merchant_immutable");
+        }
+    }
+
+    // Covers: 10 V12, 6.5 (a database at V11 holding runs upgrades to V12: every run keeps its values and has no cause;
+    // V12 is the last migration)
+    @Test
+    void v12_upgradesAV11DatabaseWithRuns_givingEachNoCause() {
+        Path file = dir.resolve("v11-to-v12.db");
+        Flyway.configure().dataSource("jdbc:sqlite:" + file, null, null).locations("classpath:db/migration")
+                .target("11").load().migrate();
+        String dump = "SELECT group_concat(id || '|' || coalesce(outcome, '-') || '|' || coalesce(reason, '-'), ';')"
+                + " FROM (SELECT * FROM agent_run ORDER BY id)";
+        List<String> before;
+        try (Database old = Database.open(file, 1)) {
+            exec(old, "INSERT INTO agent_run (id, user_id, model, started_at, updated_at) VALUES ('r1', 'u', 'm', 't', 't')",
+                    "INSERT INTO agent_run (id, user_id, model, started_at, updated_at, ended_at, outcome, reason)"
+                            + " VALUES ('r2', 'u', 'm', 't', 't', 't', 'failed', 'model_error')");
+            before = column(old, dump);
+        }
+
+        Migrations.migrate(file);
+
+        try (Database db = Database.open(file, 1)) {
+            assertThat(column(db, "SELECT name FROM pragma_table_info('agent_run')")).contains("cause");
+            assertThat(column(db, dump)).isEqualTo(before);
+            assertThat(column(db, "SELECT count(*) FROM agent_run WHERE cause IS NULL")).containsExactly("2");
+            assertThat(column(db, "SELECT version FROM flyway_schema_history WHERE success = 1"
+                    + " ORDER BY installed_rank")).endsWith("11", "12");
+        }
+    }
+
+    // Covers: 10 V12, 6.5, I8 (a cause is stored only with reason model_error, and only as an identifier of 1 to 64
+    // characters; anything else is refused by the database)
+    @Test
+    void v12_aCauseGoesOnlyWithModelError_andIsAnIdentifier() {
+        Path file = dir.resolve("v12.db");
+        Migrations.migrate(file);
+        try (Database db = Database.open(file, 1)) {
+            assertThat(column(db, "SELECT name FROM pragma_table_info('agent_run')")).contains("cause");
+            exec(db, "INSERT INTO agent_run (id, user_id, model, started_at, updated_at, ended_at, outcome, reason)"
+                    + " VALUES ('r', 'u', 'm', 't', 't', 't', 'failed', 'model_error')",
+                    "INSERT INTO agent_run (id, user_id, model, started_at, updated_at, ended_at, outcome, reason)"
+                    + " VALUES ('t', 'u', 'm', 't', 't', 't', 'failed', 'tool_error')");
+            exec(db, "UPDATE agent_run SET cause = 'http_429' WHERE id = 'r'");
+            for (String bad : List.of("''", "'http 429'", "'finish-SAFETY'", "'SECRET: text'", "'" + "a".repeat(65) + "'")) {
+                org.assertj.core.api.Assertions.assertThatThrownBy(() -> exec(db, "UPDATE agent_run SET cause = " + bad
+                        + " WHERE id = 'r'")).as(bad).isInstanceOf(DatabaseException.class);
+            }
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> exec(db,
+                    "UPDATE agent_run SET cause = 'http_429' WHERE id = 't'")).isInstanceOf(DatabaseException.class);
+            assertThat(column(db, "SELECT id || ':' || coalesce(cause, '-') FROM agent_run ORDER BY id"))
+                    .containsExactly("r:http_429", "t:-");
         }
     }
 }

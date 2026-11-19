@@ -255,6 +255,189 @@ class AgentRuntimeTest {
         assertThat(trace.jsonl()).doesNotContain("SECRET").doesNotContain("example.invalid");
     }
 
+    /** A failure as GeminiException gives one for an HTTP status: its cause, whether to retry, its Retry-After. */
+    private static final class HttpFailure extends RuntimeException implements ModelFailure {
+        private final int status;
+        private final Optional<Duration> retryAfter;
+
+        HttpFailure(int status, Optional<Duration> retryAfter) {
+            super("SECRET-MODEL-FAILURE-DETAIL");
+            this.status = status;
+            this.retryAfter = retryAfter;
+        }
+
+        @Override
+        public String code() {
+            return status == 429 ? "RATE_LIMITED" : "SERVER_ERROR";
+        }
+
+        @Override
+        public String cause() {
+            return "http_" + status;
+        }
+
+        @Override
+        public boolean retryable() {
+            return status == 429 || status == 503;
+        }
+
+        @Override
+        public Optional<Duration> retryAfter() {
+            return retryAfter;
+        }
+    }
+
+    /** Every wait the runtime asks for; each moves the clock instead of sleeping. */
+    private final List<Duration> slept = new CopyOnWriteArrayList<>();
+
+    private AgentRuntime sleepingRuntime(ModelClient model, AgentBudget budget) {
+        return new AgentRuntime(model, "scripted", Stubs.ports(catalog, orchestrator), runs, budget,
+                Duration.ofMinutes(5), clock, d -> {
+                    slept.add(d);
+                    clock.advance(d);
+                });
+    }
+
+    /** Fails with {@code failures} in order, then answers with text. */
+    private static ModelClient failingThen(AtomicInteger calls, RuntimeException... failures) {
+        return (conversation, tools) -> {
+            int n = calls.getAndIncrement();
+            if (n < failures.length) {
+                throw failures[n];
+            }
+            return new ModelTurn("Here you go.", List.of(), new Usage(10, 2));
+        };
+    }
+
+    // Covers: 6.3, 6.5 (a 429 is tried once more after its Retry-After; the second call counts as a model call, and
+    // the trace has one llm.call line per attempt, the first with its cause)
+    @Test
+    void run_rateLimitedOnce_isTriedAgainAfterItsRetryAfter_andIsDone() {
+        AtomicInteger calls = new AtomicInteger();
+        RunTrace trace = new RunTrace(RUN);
+        RunOutcome outcome = sleepingRuntime(failingThen(calls, new HttpFailure(429, Optional.of(Duration.ofSeconds(3)))),
+                AgentBudget.DEFAULT).run(Stubs.ALICE, RUN, "m", SILENT, trace);
+
+        assertThat(outcome).isInstanceOf(RunOutcome.Done.class);
+        assertThat(calls).hasValue(2);
+        assertThat(slept).containsExactly(Duration.ofSeconds(3));
+        assertThat(record().modelCalls()).isEqualTo(2);
+        assertThat(record().cause()).isEmpty();
+        assertThat(trace.lines()).hasSize(3);
+        assertThat(trace.lines().getFirst()).contains("\"span\":\"llm.call\"").contains("\"index\":1")
+                .contains("\"outcome\":\"RATE_LIMITED\"").contains("\"cause\":\"http_429\"");
+        assertThat(trace.lines().get(1)).contains("\"span\":\"llm.call\"").contains("\"index\":2")
+                .doesNotContain("\"cause\"");
+        assertThat(trace.jsonl()).doesNotContain("SECRET");
+    }
+
+    // Covers: 6.3 (a 503 with no Retry-After waits 2 s; failing again ends the run model_error with the cause, stored
+    // on the record and on the agent.run line)
+    @Test
+    void run_unavailableTwice_waitsTwoSeconds_thenFailsWithTheCause() {
+        AtomicInteger calls = new AtomicInteger();
+        RunTrace trace = new RunTrace(RUN);
+        RunOutcome outcome = sleepingRuntime(failingThen(calls, new HttpFailure(503, Optional.empty()),
+                new HttpFailure(503, Optional.empty())), AgentBudget.DEFAULT).run(Stubs.ALICE, RUN, "m", SILENT, trace);
+
+        assertThat(outcome).isEqualTo(new RunOutcome.Failed("model_error", Optional.of("http_503")));
+        assertThat(calls).as("one retry only").hasValue(2);
+        assertThat(slept).containsExactly(Duration.ofSeconds(2));
+        assertThat(record().reason()).contains("model_error");
+        assertThat(record().cause()).contains("http_503");
+        assertThat(trace.lines().getLast()).contains("\"span\":\"agent.run\"").contains("\"detail\":\"model_error\"")
+                .contains("\"cause\":\"http_503\"");
+    }
+
+    // Covers: 6.3 (a Retry-After that, with 5 s for the call, does not fit in the wall clock left is not waited for)
+    @Test
+    void run_retryAfterLongerThanTheTimeLeft_isNotWaitedFor() {
+        AtomicInteger calls = new AtomicInteger();
+        RunOutcome outcome = sleepingRuntime(failingThen(calls, new HttpFailure(429, Optional.of(Duration.ofSeconds(26)))),
+                AgentBudget.DEFAULT).run(Stubs.ALICE, RUN, "m", SILENT);
+
+        assertThat(outcome).isEqualTo(new RunOutcome.Failed("model_error", Optional.of("http_429")));
+        assertThat(calls).hasValue(1);
+        assertThat(slept).isEmpty();
+
+        calls.set(0);
+        RunId second = new RunId("run-2");
+        RunOutcome fits = sleepingRuntime(failingThen(calls, new HttpFailure(429, Optional.of(Duration.ofSeconds(25)))),
+                AgentBudget.DEFAULT).run(Stubs.ALICE, second, "m", SILENT);
+        assertThat(fits).as("25 s + 5 s fits in 30 s").isInstanceOf(RunOutcome.Done.class);
+    }
+
+    // Covers: 6.3 (no retry when the run has no model call left; the run still ends model_error with the cause)
+    @Test
+    void run_rateLimitedOnTheLastModelCall_isNotTriedAgain() {
+        AtomicInteger calls = new AtomicInteger();
+        AgentBudget one = new AgentBudget(1, 8, Duration.ofSeconds(30), AgentBudget.DEFAULT.maxTokens());
+        RunOutcome outcome = sleepingRuntime(failingThen(calls, new HttpFailure(429, Optional.empty())), one)
+                .run(Stubs.ALICE, RUN, "m", SILENT);
+
+        assertThat(outcome).isEqualTo(new RunOutcome.Failed("model_error", Optional.of("http_429")));
+        assertThat(calls).hasValue(1);
+        assertThat(slept).isEmpty();
+    }
+
+    // Covers: 6.3, 6.5, 11 (a failure that may not be retried is not; one that is no ModelFailure has the cause
+    // exception_<class>, never its message)
+    @Test
+    void run_notRetryableFailures_triedOnce_withTheirCauses() {
+        AtomicInteger calls = new AtomicInteger();
+        RunTrace trace = new RunTrace(RUN);
+        RunOutcome outcome = sleepingRuntime(failingThen(calls, new HttpFailure(400, Optional.of(Duration.ofSeconds(1)))),
+                AgentBudget.DEFAULT).run(Stubs.ALICE, RUN, "m", SILENT, trace);
+        assertThat(outcome).isEqualTo(new RunOutcome.Failed("model_error", Optional.of("http_400")));
+        assertThat(calls).hasValue(1);
+        assertThat(slept).isEmpty();
+        assertThat(trace.lines().getFirst()).contains("\"cause\":\"http_400\"");
+
+        calls.set(0);
+        RunId second = new RunId("run-2");
+        RunTrace plain = new RunTrace(second);
+        RunOutcome other = sleepingRuntime(failingThen(calls, new IllegalStateException("SECRET-503 text")),
+                AgentBudget.DEFAULT).run(Stubs.ALICE, second, "m", SILENT, plain);
+        assertThat(other).isEqualTo(new RunOutcome.Failed("model_error", Optional.of("exception_IllegalStateException")));
+        assertThat(runs.find(Stubs.ALICE.user(), second).orElseThrow().cause())
+                .contains("exception_IllegalStateException");
+        assertThat(plain.jsonl()).contains("\"cause\":\"exception_IllegalStateException\"").doesNotContain("SECRET");
+    }
+
+    // Covers: 6.5, 11, I8 (a cause that is not an identifier is recorded as unknown, so no text reaches the trace or
+    // the record)
+    @Test
+    void run_causeNotAnIdentifier_isUnknown() {
+        ModelFailure odd = new ModelFailureWithCause("SECRET text, not a cause");
+        AtomicInteger calls = new AtomicInteger();
+        RunTrace trace = new RunTrace(RUN);
+        RunOutcome outcome = sleepingRuntime(failingThen(calls, (RuntimeException) odd), AgentBudget.DEFAULT)
+                .run(Stubs.ALICE, RUN, "m", SILENT, trace);
+
+        assertThat(outcome).isEqualTo(new RunOutcome.Failed("model_error", Optional.of("unknown")));
+        assertThat(record().cause()).contains("unknown");
+        assertThat(trace.jsonl()).doesNotContain("SECRET");
+    }
+
+    private static final class ModelFailureWithCause extends RuntimeException implements ModelFailure {
+        private final String cause;
+
+        ModelFailureWithCause(String cause) {
+            super("SECRET");
+            this.cause = cause;
+        }
+
+        @Override
+        public String code() {
+            return "SERVER_ERROR";
+        }
+
+        @Override
+        public String cause() {
+            return cause;
+        }
+    }
+
     // Covers: 11 (D7), I8, m5-stage5b (a failure that carries no code is "unknown")
     @Test
     void run_modelFailureWithoutACode_llmCallLineUnknown() {

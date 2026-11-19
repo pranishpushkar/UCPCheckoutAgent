@@ -16,7 +16,8 @@ import java.util.Optional;
  * ended that way ({@code model_error}, {@code tool_error}, {@code script_drift}, {@code internal_error}, or the budget
  * limit's name), empty for {@code done} and {@code waiting_for_approval}, and never set while the run is in progress.
  * The record holds no prompt, model text, tool output or exception message. {@code budget} is the user's budget for the
- * run (23.1, P9), set when the run starts and never changed by an update.
+ * run (23.1, P9), set when the run starts and never changed by an update. {@code cause} is a {@code model_error}'s
+ * cause (6.5, migration V12): present only with that reason, and only from 6.5's closed vocabulary.
  */
 public record RunRecord(
         RunId id,
@@ -32,7 +33,11 @@ public record RunRecord(
         long outputTokens,
         List<IntentId> intentIds,
         List<ToolEvent> toolEvents,
-        Optional<Budget> budget) {
+        Optional<Budget> budget,
+        Optional<String> cause) {
+
+    /** 6.5: what a cause may hold, a status, an enum name or a class's simple name. */
+    public static final java.util.regex.Pattern CAUSE = java.util.regex.Pattern.compile("[A-Za-z0-9_]{1,64}");
 
     public RunRecord {
         Objects.requireNonNull(id, "id");
@@ -45,6 +50,10 @@ public record RunRecord(
         intentIds = List.copyOf(Objects.requireNonNull(intentIds, "intentIds"));
         toolEvents = List.copyOf(Objects.requireNonNull(toolEvents, "toolEvents"));
         Objects.requireNonNull(budget, "budget");
+        Objects.requireNonNull(cause, "cause");
+        if (cause.isPresent() && (!reason.equals(Optional.of("model_error")) || !CAUSE.matcher(cause.get()).matches())) {
+            throw new IllegalArgumentException("a cause goes only with model_error, and is an identifier (6.5)");
+        }
         if (modelCalls < 0 || toolCalls < 0 || inputTokens < 0 || outputTokens < 0) {
             throw new IllegalArgumentException("counts must not be negative");
         }
@@ -57,6 +66,14 @@ public record RunRecord(
         if (reason.isPresent() && endedAt.isEmpty()) {
             throw new IllegalArgumentException("a run has a reason only once it has ended");
         }
+    }
+
+    /** A run record with no cause: the fields before V12. */
+    public RunRecord(RunId id, UserId owner, String model, Instant startedAt, Optional<Instant> endedAt,
+            Optional<String> outcome, Optional<String> reason, int modelCalls, int toolCalls, long inputTokens,
+            long outputTokens, List<IntentId> intentIds, List<ToolEvent> toolEvents, Optional<Budget> budget) {
+        this(id, owner, model, startedAt, endedAt, outcome, reason, modelCalls, toolCalls, inputTokens, outputTokens,
+                intentIds, toolEvents, budget, Optional.empty());
     }
 
     /** A run record with no budget: the fields before V11. An update with it never clears a stored budget. */
@@ -75,7 +92,13 @@ public record RunRecord(
     /** This record with {@code runBudget}: a store keeps the budget written at insert whatever an update carries. */
     public RunRecord withBudget(Optional<Budget> runBudget) {
         return new RunRecord(id, owner, model, startedAt, endedAt, outcome, reason, modelCalls, toolCalls, inputTokens,
-                outputTokens, intentIds, toolEvents, runBudget);
+                outputTokens, intentIds, toolEvents, runBudget, cause);
+    }
+
+    /** This record with a {@code model_error}'s {@code cause} (6.5). */
+    public RunRecord withCause(Optional<String> modelErrorCause) {
+        return new RunRecord(id, owner, model, startedAt, endedAt, outcome, reason, modelCalls, toolCalls, inputTokens,
+                outputTokens, intentIds, toolEvents, budget, modelErrorCause);
     }
 
     /** A run that has just started: no calls, no intents, no outcome, no reason. */

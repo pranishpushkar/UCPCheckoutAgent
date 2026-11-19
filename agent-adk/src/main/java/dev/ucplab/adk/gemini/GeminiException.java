@@ -1,7 +1,9 @@
 package dev.ucplab.adk.gemini;
 
 import dev.ucplab.core.agent.ModelFailure;
+import java.time.Duration;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * Every failure that leaves {@link GeminiModelClient} (I8, ADR 0004): one of our fixed {@link Reason}s, never the
@@ -47,10 +49,22 @@ public final class GeminiException extends RuntimeException implements ModelFail
     }
 
     private final Reason reason;
+    private final String cause;
+    private final Optional<Duration> retryAfter;
 
     GeminiException(Reason reason) {
+        this(reason, Objects.requireNonNull(reason, "reason").name(), Optional.empty());
+    }
+
+    /**
+     * @param cause 6.5's cause: a status, an enum name or a class's simple name, never content (I8)
+     * @param retryAfter the API's {@code Retry-After}, when it sent one as a number of seconds
+     */
+    GeminiException(Reason reason, String cause, Optional<Duration> retryAfter) {
         super(Objects.requireNonNull(reason, "reason").message, null, false, true);
         this.reason = reason;
+        this.cause = Objects.requireNonNull(cause, "cause");
+        this.retryAfter = Objects.requireNonNull(retryAfter, "retryAfter");
     }
 
     public Reason reason() {
@@ -61,5 +75,23 @@ public final class GeminiException extends RuntimeException implements ModelFail
     @Override
     public String code() {
         return reason.name();
+    }
+
+    /** Skeleton for the red tests of the model_error cause: the reason's name for now. */
+    @Override
+    public String cause() {
+        return reason.name();
+    }
+
+    /** Skeleton: never retryable yet. */
+    @Override
+    public boolean retryable() {
+        return false;
+    }
+
+    /** Skeleton: no Retry-After yet. */
+    @Override
+    public Optional<Duration> retryAfter() {
+        return Optional.empty();
     }
 }

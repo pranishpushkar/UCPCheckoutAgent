@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.google.genai.JsonSerializable;
 import com.google.genai.types.Content;
+import com.google.genai.types.FinishReason;
 import com.google.genai.types.GenerateContentConfig;
 import com.google.genai.types.GenerateContentResponse;
 import com.google.genai.types.Part;
@@ -165,6 +166,59 @@ class GeminiMappingTest {
         for (String json : List.of(noName, malformed)) {
             assertThatThrownBy(() -> turn(json)).isInstanceOfSatisfying(GeminiException.class,
                     e -> assertThat(e.reason()).isEqualTo(Reason.MALFORMED_RESPONSE));
+        }
+    }
+
+    private static String finished(String reason, String parts) {
+        return "{\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[" + parts + "]},\"finishReason\":\""
+                + reason + "\"}],\"usageMetadata\":" + USAGE + "}";
+    }
+
+    private void assertCause(String json, String cause) {
+        assertThatThrownBy(() -> turn(json)).as(json).isInstanceOfSatisfying(GeminiException.class, e -> {
+            assertThat(e.cause()).isEqualTo(cause);
+            assertThat(e.retryable()).isFalse();
+            assertThat(e.getMessage()).doesNotContain("SECRET");
+        });
+    }
+
+    // Covers: 6.5, 11, I8 (an answer ended by a finish reason has the cause finish_<reason>, the enum's name only,
+    // never the answer's text; an answer with nothing in it and no finish reason is no_content)
+    @Test
+    void turn_finishReasons_causeIsTheFinishReason() {
+        String text = "{\"text\":\"SECRET answer text\"}";
+        assertCause(finished("SAFETY", text), "finish_SAFETY");
+        assertCause(finished("RECITATION", text), "finish_RECITATION");
+        assertCause(finished("MALFORMED_FUNCTION_CALL", text), "finish_MALFORMED_FUNCTION_CALL");
+        assertCause(finished("UNEXPECTED_TOOL_CALL", text), "finish_UNEXPECTED_TOOL_CALL");
+        assertCause(finished("OTHER", ""), "finish_OTHER");
+        assertCause(finished("MAX_TOKENS", "{\"text\":\"SECRET thinking\",\"thought\":true}"), "finish_MAX_TOKENS");
+        assertCause(finished("STOP", ""), "no_content");
+        assertCause("{\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[]}}],\"usageMetadata\":" + USAGE
+                + "}", "no_content");
+    }
+
+    // Covers: 6.5, 11, I8 (no candidate, a blocked prompt, and an answer that cannot be read each have their cause)
+    @Test
+    void turn_unreadableAnswers_haveTheirCauses() {
+        assertCause("{\"usageMetadata\":" + USAGE + "}", "no_candidates");
+        assertCause("{\"candidates\":[],\"usageMetadata\":" + USAGE + "}", "no_candidates");
+        assertCause("{\"promptFeedback\":{\"blockReason\":\"SAFETY\",\"blockReasonMessage\":\"SECRET detail\"},"
+                + "\"usageMetadata\":" + USAGE + "}", "prompt_blocked_SAFETY");
+        assertCause(response("{\"functionCall\":{\"args\":{}}}", USAGE), "no_function_name");
+        assertCause(response("{\"text\":\"hi\"}", ""), "no_usage");
+        assertCause(response("{\"text\":\"hi\"}", "{\"promptTokenCount\":-5}"), "negative_usage");
+    }
+
+    // Covers: 6.5, 11 (a cause is from the closed vocabulary: identifier characters, at most 64)
+    @Test
+    void turn_everyCause_isAnIdentifier() {
+        for (FinishReason.Known known : FinishReason.Known.values()) {
+            try {
+                turn(finished(known.name(), ""));
+            } catch (GeminiException e) {
+                assertThat(e.cause()).as(known.name()).matches("[A-Za-z0-9_]{1,64}");
+            }
         }
     }
 

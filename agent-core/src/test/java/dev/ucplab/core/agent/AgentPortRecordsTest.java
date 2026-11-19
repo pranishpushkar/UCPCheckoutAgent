@@ -162,4 +162,23 @@ class AgentPortRecordsTest {
         args.put(null, 1);
         assertThatThrownBy(() -> new ToolCall("c1", "t", args)).isInstanceOf(IllegalArgumentException.class);
     }
+
+    // Covers: 6.5, 10 (V12), I8 (a run's cause goes only with model_error, and only as an identifier of at most 64
+    // characters, so no text can be stored as one)
+    @Test
+    void runRecord_cause_onlyWithModelError_andOnlyAnIdentifier() {
+        java.util.function.BiFunction<String, String, RunRecord> run = (reason, cause) -> new RunRecord(new RunId("r"),
+                new dev.ucplab.core.identity.UserId("u"), "m", java.time.Instant.EPOCH,
+                Optional.of(java.time.Instant.EPOCH), Optional.of("failed"), Optional.of(reason), 1, 0, 0, 0, List.of(),
+                List.of(), Optional.empty(), Optional.of(cause));
+
+        assertThat(run.apply("model_error", "http_429").cause()).contains("http_429");
+        assertThat(run.apply("model_error", "a".repeat(64)).cause()).isPresent();
+        for (String bad : List.of("", "a".repeat(65), "http 429", "finish-SAFETY", "SECRET: text")) {
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> run.apply("model_error", bad)).as(bad)
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> run.apply("tool_error", "http_429"))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }

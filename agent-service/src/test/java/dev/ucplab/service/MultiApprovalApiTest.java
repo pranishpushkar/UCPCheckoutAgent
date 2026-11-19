@@ -186,6 +186,8 @@ class MultiApprovalApiTest {
         assertThat(a.keySet()).doesNotContain("url", "lab_url", "token_ref");
         // 23.3, 24.3: what the header badge and the Developer tools need before an intent exists.
         assertThat(a).containsEntry("completion", "agent").containsEntry("live", false).doesNotContainKey("shop_domain");
+        // 23.3, 24.3: a lab merchant has its orders and faults; the console polls only these.
+        assertThat(a).containsEntry("lab", true);
         assertThat(b).containsEntry("completion", "agent").containsEntry("live", false).doesNotContainKey("shop_domain");
     }
 

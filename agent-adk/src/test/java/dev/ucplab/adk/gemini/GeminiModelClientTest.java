@@ -159,6 +159,63 @@ class GeminiModelClientTest {
         }
     }
 
+    // Covers: 6.5, 11, I8 (an HTTP failure's cause is its status, never the error body; only 429 and 503 may be tried
+    // again, and the client itself still sends one attempt)
+    @Test
+    void generate_httpErrors_causeIsTheStatus_retryableFor429And503Only() {
+        Map<Integer, Boolean> cases = Map.of(400, false, 403, false, 404, false, 429, true, 500, false, 503, true);
+        int sent = 0;
+        for (Map.Entry<Integer, Boolean> c : cases.entrySet()) {
+            stub.answer(c.getKey(), "{\"error\":{\"code\":" + c.getKey() + ",\"message\":\"SECRET-BODY\"}}");
+            GeminiModelClient client = client();
+            assertThatThrownBy(() -> client.generate(ask("hi"), TOOLS)).as("HTTP %d", c.getKey())
+                    .isInstanceOfSatisfying(GeminiException.class, e -> {
+                        assertThat(e.cause()).isEqualTo("http_" + c.getKey());
+                        assertThat(e.retryable()).as("retryable %d", c.getKey()).isEqualTo(c.getValue());
+                        assertThat(e.retryAfter()).isEmpty();
+                        assertThat(e.getMessage()).doesNotContain("SECRET");
+                    });
+            sent++;
+            assertThat(stub.received()).as("one attempt for HTTP %d", c.getKey()).hasSize(sent);
+        }
+    }
+
+    // Covers: 6.3, 6.5 (a 429's Retry-After in whole seconds is kept; a date or anything else is not)
+    @Test
+    void generate_rateLimitedWithRetryAfter_keepsTheSecondsOnly() {
+        stub.answer(429, "{\"error\":{\"code\":429,\"message\":\"slow down\"}}").retryAfter("7");
+        assertThatThrownBy(() -> client().generate(ask("hi"), TOOLS)).isInstanceOfSatisfying(GeminiException.class,
+                e -> assertThat(e.retryAfter()).contains(Duration.ofSeconds(7)));
+
+        for (String other : List.of("Wed, 21 Oct 2026 07:28:00 GMT", "-3", "1.5", "99999999999999999999", "")) {
+            stub.retryAfter(other);
+            assertThatThrownBy(() -> client().generate(ask("hi"), TOOLS)).as(other)
+                    .isInstanceOfSatisfying(GeminiException.class, e -> assertThat(e.retryAfter()).isEmpty());
+        }
+    }
+
+    // Covers: 6.5, 11 (a timeout and a dropped connection have their own causes, never retryable)
+    @Test
+    void generate_timeoutAndDroppedConnection_haveTheirCauses() throws Exception {
+        stub.holding();
+        GeminiModelClient slow = new GeminiModelClient(ModelKey.of(KEY), settings().withCallTimeout(Duration.ofMillis(300)),
+                name -> null);
+        assertThatThrownBy(() -> slow.generate(ask("hi"), TOOLS)).isInstanceOfSatisfying(GeminiException.class, e -> {
+            assertThat(e.cause()).isEqualTo("timeout");
+            assertThat(e.retryable()).isFalse();
+        });
+
+        try (GeminiStub.Dropping dropping = new GeminiStub.Dropping()) {
+            GeminiModelClient dropped = new GeminiModelClient(ModelKey.of(KEY), settings().withBaseUrl(dropping.url()),
+                    name -> null);
+            assertThatThrownBy(() -> dropped.generate(ask("hi"), TOOLS)).isInstanceOfSatisfying(GeminiException.class,
+                    e -> {
+                        assertThat(e.cause()).matches("network_[A-Za-z0-9_]{1,56}");
+                        assertThat(e.retryable()).isFalse();
+                    });
+        }
+    }
+
     // Covers: 11, m5-stage5b (every GeminiException is a ModelFailure whose code is its reason's name)
     @Test
     void geminiException_isAModelFailure_codeIsTheReasonName() {

@@ -14,6 +14,7 @@ import dev.ucplab.core.intent.Budget;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentNotFoundException;
 import dev.ucplab.core.intent.IntentState;
+import dev.ucplab.core.recovery.Sleeper;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -57,6 +58,7 @@ public final class AgentRuntime {
     private final AgentBudget budget;
     private final Duration askTimeout;
     private final Clock clock;
+    private final Sleeper sleeper;
 
     /**
      * @param modelName the model id for {@code RunRecord.model}, stored as {@code <modelName>/<prompt version>}
@@ -64,6 +66,13 @@ public final class AgentRuntime {
      */
     public AgentRuntime(ModelClient model, String modelName, ToolPorts ports, RunRepository runs, AgentBudget budget,
                         Duration askTimeout, Clock clock) {
+        this(model, modelName, ports, runs, budget, askTimeout, clock, d -> Thread.sleep(d));
+    }
+
+    /** @param sleeper where the run waits before it tries a failed model call again (6.3); tests move a clock */
+    public AgentRuntime(ModelClient model, String modelName, ToolPorts ports, RunRepository runs, AgentBudget budget,
+                        Duration askTimeout, Clock clock, Sleeper sleeper) {
+        this.sleeper = Objects.requireNonNull(sleeper, "sleeper");
         this.model = Objects.requireNonNull(model, "model");
         this.modelName = Objects.requireNonNull(modelName, "modelName");
         this.ports = Objects.requireNonNull(ports, "ports");

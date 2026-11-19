@@ -3,6 +3,7 @@ package dev.ucplab.runtime;
 import dev.ucplab.core.intent.IntentId;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
 /** How an agent run ended (m5-plan section 4; the 23.1 statuses). */
 public sealed interface RunOutcome {
@@ -31,12 +32,20 @@ public sealed interface RunOutcome {
     }
 
     /**
-     * The model call or a tool failed. Not retried. {@code reason} is ours: {@code model_error} or {@code tool_error}
-     * (and {@code script_drift} in the run record of a drifted scripted run), never an exception message.
+     * The model call or a tool failed. {@code reason} is ours: {@code model_error} or {@code tool_error} (and
+     * {@code script_drift} in the run record of a drifted scripted run), never an exception message. A
+     * {@code model_error} has its {@code cause} (6.5), from a closed vocabulary; a failed model call is tried again only
+     * as 6.3 says.
      */
-    record Failed(String reason) implements RunOutcome {
+    record Failed(String reason, Optional<String> cause) implements RunOutcome {
         public Failed {
             Objects.requireNonNull(reason, "reason");
+            Objects.requireNonNull(cause, "cause");
+        }
+
+        /** A failure with no cause: a tool's, or an internal one. */
+        public Failed(String reason) {
+            this(reason, Optional.empty());
         }
     }
 }

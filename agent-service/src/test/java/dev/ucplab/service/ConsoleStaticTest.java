@@ -812,6 +812,7 @@ class ConsoleStaticTest {
             "Stopped: too much to read.", "I had too much to read before choosing. Try a narrower request.",
             "Stopped: no answer from you.", "I stopped waiting for your answer. Send a new message to start again.",
             "Stopped: the model could not be reached.", "I couldn't reach the model, so I stopped. Try again in a moment.",
+            "Stopped: the model is busy.", "The model is busy right now; try again in a minute.",
             "Stopped: a step failed.", "A step failed, so I stopped. Try again in a moment.",
             "Stopped: something went wrong.", "Something went wrong on our side, so I stopped. Try again in a moment.",
             "Stopped: the service restarted.",
@@ -839,6 +840,37 @@ class ConsoleStaticTest {
                 .doesNotContain("run.reason ? \" (\"");
         assertThat(count(js, "run.reason")).as("the reason is read only by the table").isEqualTo(count(end, "run.reason"));
         assertThat(end).doesNotContain("innerHTML").doesNotContain("textContent");
+    }
+
+    // Covers: 24.3, 6.3, 6.5 (a model_error whose cause is http_429 or http_503 reads "the model is busy", in the
+    // status line and the chat; any other cause keeps the model_error row; the cause is read only by the table)
+    @Test
+    void runEnd_aBusyModel_saysSo_fromTheCause() throws IOException {
+        String js = read("console.js");
+        String end = block(js, "run-end");
+
+        assertThat(end).contains("const BUSY = [\"Stopped: the model is busy.\",")
+                .contains("\"The model is busy right now; try again in a minute.\"]")
+                .contains("const BUSY_CAUSES = new Set([\"http_429\", \"http_503\"]);")
+                .contains("if (run.status === \"failed\" && run.reason === \"model_error\" && BUSY_CAUSES.has(run.cause)) {");
+        assertThat(end.indexOf("BUSY_CAUSES.has(run.cause)")).as("before the table's own rows")
+                .isLessThan(end.indexOf("const ends = RUN_ENDS.get(run.status);"));
+        assertThat(count(js, "run.cause")).as("the cause is read only by the table").isEqualTo(count(end, "run.cause"));
+    }
+
+    // Covers: 24.3, 23.3 (the order counters and the fault lab's selector list only the merchants whose lab is true;
+    // with none, as in catalog mode, nothing polls GET /api/lab/orders, which is 422 for any other merchant)
+    @Test
+    void orderCounters_pollOnlyTheLabsMerchants_andNothingWithoutOne() throws IOException {
+        String js = read("console.js");
+        String start = js.substring(js.indexOf("async function startLab() {"), js.indexOf("async function refreshOrders() {"));
+
+        assertThat(start).contains("const lab = list.data.merchants.filter((m) => m.lab === true);")
+                .contains("lab.forEach((m) => {")
+                .doesNotContain("list.data.merchants.forEach(")
+                .contains("  if (lab.length > 0) {\n    refreshOrders();\n    window.setInterval(refreshOrders, 2000);\n  }");
+        assertThat(count(js, "/api/lab/orders")).as("only refreshOrders reads the orders").isEqualTo(1);
+        assertThat(count(js, "setInterval(refreshOrders")).isEqualTo(1);
     }
 
     // Covers: 24.3, 6.3 (a run that ended in budget_exceeded, user_timeout or failed gets the table's chat text as the

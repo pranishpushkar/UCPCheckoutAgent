@@ -31,6 +31,7 @@ final class GeminiStub implements AutoCloseable {
     private volatile String reply = "{}";
     private volatile boolean hold;
     private volatile boolean echoKey;
+    private volatile String retryAfter;
 
     GeminiStub() throws IOException {
         server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
@@ -49,6 +50,9 @@ final class GeminiStub implements AutoCloseable {
             String text = echoKey ? reply.replace("$KEY", String.valueOf(key)) : reply;
             byte[] out = text.getBytes(StandardCharsets.UTF_8);
             ex.getResponseHeaders().set("Content-Type", "application/json");
+            if (retryAfter != null) {
+                ex.getResponseHeaders().set("Retry-After", retryAfter);
+            }
             try {
                 ex.sendResponseHeaders(status, out.length);
                 ex.getResponseBody().write(out);
@@ -67,6 +71,12 @@ final class GeminiStub implements AutoCloseable {
     GeminiStub answer(int status, String body) {
         this.status = status;
         this.reply = body;
+        return this;
+    }
+
+    /** Every answer carries this {@code Retry-After} header ({@code null}: none). */
+    GeminiStub retryAfter(String value) {
+        this.retryAfter = value;
         return this;
     }
 
