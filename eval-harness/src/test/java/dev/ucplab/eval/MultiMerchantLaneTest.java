@@ -20,6 +20,7 @@ import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -27,6 +28,7 @@ import org.junit.jupiter.api.io.TempDir;
  * A lane of three merchants and an agent stack over them (m6a-plan C11, 13.1): each merchant has its own catalog,
  * breaker, limiter and order counter, and the real registry sits in front of them.
  */
+@Tag("sequential")
 class MultiMerchantLaneTest {
 
     private static final TimeScale SCALE = TimeScale.of(4);

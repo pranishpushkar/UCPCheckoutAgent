@@ -278,7 +278,9 @@ class LabApiTest {
         assertThat(service.merchant.price("item_789")).isEqualTo(12000);
 
         assertThat(approve(alice, newest, oldToken).statusCode()).isEqualTo(200);
-        Map<String, Object> requoted = awaitIntent(alice, newest, i -> quotePrice(i) == 1201);
+        // The new approval opens just before the move to AWAITING_APPROVAL (7.3), so wait for both, not the price alone.
+        Map<String, Object> requoted = awaitIntent(alice, newest,
+                i -> quotePrice(i) == 1201 && "AWAITING_APPROVAL".equals(i.get("state")));
         assertThat(quotePrice(requoted)).isEqualTo(1201);
         assertThat(requoted).containsEntry("state", "AWAITING_APPROVAL");
         assertThat(token(alice, newest)).as("a new approval").isNotEqualTo(oldToken);
