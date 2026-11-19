@@ -54,7 +54,7 @@ class RunBudgetTest {
 
     // Covers: P9, 6.2, 6.4, 23.1 (a run under a 10.00 USD budget: the model's context has the hint after the unchanged
     // prompt, the intent gets the run's budget, the quote above it ends FAILED_NOT_CHARGED with policy_P9, and the tool
-    // result names the budget and the quoted total so the agent can say none fits)
+    // result names the budget and the quoted total, as text and as numbers, so the agent can say none fits)
     @Test
     void aQuoteAboveTheRunsBudget_isRefused_andTheToolResultSaysWhy() throws Exception {
         try (RuntimeLab lab = new RuntimeLab()) {
@@ -81,6 +81,8 @@ class RunBudgetTest {
             assertThat(result.get("quoted")).isInstanceOfSatisfying(Map.class, q -> assertThat(q)
                     .containsEntry("currency", "USD").containsKey("total_minor"));
             assertThat(((Number) ((Map<?, ?>) result.get("quoted")).get("total_minor")).longValue()).isGreaterThan(1_000);
+            // 6.2: the budget as numbers too, so a model names both amounts without reading our text back.
+            assertThat(result).containsEntry("budget", Map.of("amount_minor", 1_000L, "currency", "USD"));
             assertThat(runs.find(auth.user(), new RunId("run-b")).orElseThrow().budget())
                     .contains(new Budget(1_000, "USD"));
             assertThat(lab.merchant.orders()).isEmpty();

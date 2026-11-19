@@ -43,6 +43,31 @@ class OrchestratorBudgetTest {
         assertThat(lab.merchant.orders()).isEmpty();
     }
 
+    // Covers: P9, 9.1, 23.2, 24.3 (the P9 denial's policy_decision event stores the quoted total and the budget as
+    // numbers, in their own currencies, so the console can explain the refusal from what was stored)
+    @Test
+    void aP9Denial_storesTheQuotedTotalAndTheBudget_asNumbers() {
+        IntentId over = lab.proposeWithin(w, TWO_SHIRTS, new Budget(5_399, "USD")).intentId();
+        IntentId currency = lab.proposeWithin(w, TWO_SHIRTS, new Budget(1_000_000, "EUR")).intentId();
+
+        assertThat(events(over, "policy_decision")).filteredOn(e -> e.contains("\"rule\":\"P9\"")).singleElement()
+                .satisfies(e -> assertThat(e).contains("\"quoted\":{\"currency\":\"USD\",\"total_minor\":5400}")
+                        .contains("\"budget\":{\"amount_minor\":5399,\"currency\":\"USD\"}"));
+        assertThat(events(currency, "policy_decision")).filteredOn(e -> e.contains("\"rule\":\"P9\"")).singleElement()
+                .satisfies(e -> assertThat(e).contains("\"quoted\":{\"currency\":\"USD\",\"total_minor\":5400}")
+                        .contains("\"budget\":{\"amount_minor\":1000000,\"currency\":\"EUR\"}"));
+    }
+
+    // Covers: P9, 9.1, 23.2 (only P9's event carries the amounts: an allowed quote's event and another rule's denial
+    // are as before)
+    @Test
+    void otherPolicyEvents_carryNoAmounts() {
+        IntentId allowed = lab.proposeWithin(w, TWO_SHIRTS, new Budget(5_400, "USD")).intentId();
+
+        assertThat(events(allowed, "policy_decision")).isNotEmpty()
+                .allSatisfy(e -> assertThat(e).doesNotContain("\"quoted\"").doesNotContain("\"budget\""));
+    }
+
     // Covers: P9, 9.1 (exact: a quote equal to the budget opens the approval as usual; the intent keeps the budget)
     @Test
     void aQuoteEqualToTheBudget_opensTheApproval_andTheIntentKeepsTheBudget() {

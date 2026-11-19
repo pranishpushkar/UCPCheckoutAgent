@@ -58,6 +58,77 @@ class RunsBudgetApiTest {
         return (String) ((List<?>) answered.get("intent_ids")).getFirst();
     }
 
+    /** As {@link #start}, under caps that leave P9 the only limit a quote of a few hundred dollars meets (9.1). */
+    private void startWithRoomUnderTheCaps() throws IOException {
+        Path policy = java.nio.file.Files.writeString(dir.resolve("policy.yaml"), """
+                per_purchase_cap_minor: 100000
+                daily_cap_minor: 200000
+                """);
+        service = TestService.start(dir, Map.of("POLICY_FILE", policy.toString()), Optional.empty(), List.of(),
+                Optional.empty(), Map.of());
+        api = new ApiClient(service.port());
+    }
+
+    /** Starts a run under {@code body}, answers the question with "a blue mug", and returns the answer. */
+    private Map<String, Object> answeredUnder(Session s, String body) {
+        HttpResponse<String> created = api.post(s, "/api/runs", body);
+        assertThat(created.statusCode()).as(created.body()).isEqualTo(201);
+        String run = (String) LenientJson.readObject(created.body()).get("run_id");
+        return LenientJson.readObject(api.post(s, "/api/runs/" + run + "/messages", message("a blue mug")).body());
+    }
+
+    private static String lastMessage(Map<String, Object> answer) {
+        List<?> messages = (List<?>) answer.get("messages");
+        return (String) ((Map<?, ?>) messages.getLast()).get("text");
+    }
+
+    // Covers: P9, 9.1, 23.1, 23.2, 24.3, S29 (units, end to end: the 750 a user types in the USD field is sent as
+    // budget_minor 75000; under it a quote of 699.95 opens the approval, and one of 785.95 is refused with policy_P9.
+    // The intent answer carries the budget and the refused total in minor units, and the agent's reply names both
+    // amounts and claims no approval. The lab merchant adds 8% tax, so the prices are chosen for those totals)
+    @Test
+    void a750UsdBudget_admitsA69995Quote_andRefusesA78595Quote() throws IOException {
+        startWithRoomUnderTheCaps();
+        Session alice = api.signIn("alice");
+        Session bob = api.signIn("bob");
+        Map<String, Object> budget = Map.of("amount_minor", 75_000L, "currency", "USD");
+
+        service.merchant.setPrice("item_456", 64_810);
+        Map<String, Object> fits = answeredUnder(alice, budgeted("hi", 75_000, "USD"));
+        String fitting = (String) ((List<?>) fits.get("intent_ids")).getFirst();
+        Map<String, Object> admitted = LenientJson.readObject(api.get(alice, "/api/intents/" + fitting).body());
+        assertThat(admitted).containsEntry("state", "AWAITING_APPROVAL").containsEntry("budget", budget)
+                .doesNotContainKey("refused_quote");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> quote = (Map<String, Object>) admitted.get("quote");
+        assertThat(quote).containsEntry("total_minor", 69_995L).containsEntry("currency", "USD");
+        assertThat(lastMessage(fits)).isEqualTo("I asked for your approval. Open the intent to review the quote.");
+
+        service.merchant.setPrice("item_456", 72_773);
+        Map<String, Object> over = answeredUnder(bob, budgeted("hi", 75_000, "USD"));
+        String refusedId = (String) ((List<?>) over.get("intent_ids")).getFirst();
+        Map<String, Object> refused = LenientJson.readObject(api.get(bob, "/api/intents/" + refusedId).body());
+        assertThat(refused).containsEntry("state", "FAILED_NOT_CHARGED").containsEntry("failure_reason", "policy_P9")
+                .containsEntry("budget", budget)
+                .containsEntry("refused_quote", Map.of("currency", "USD", "total_minor", 78_595L))
+                .doesNotContainKey("approval");
+        assertThat(lastMessage(over)).isEqualTo("Over your budget of $750.00; the closest I found was $785.95");
+        assertThat(service.merchant.orders()).isEmpty();
+    }
+
+    // Covers: 23.2, P9, I9 (an intent without a budget has no budget and no refused_quote; another user's intent is
+    // not shown at all)
+    @Test
+    void anIntentWithoutABudget_hasNeither_andAnotherUserSeesNothing() throws IOException {
+        start(Map.of());
+        Session alice = api.signIn("alice");
+        String id = proposedUnder(alice, message("hi"));
+
+        assertThat(LenientJson.readObject(api.get(alice, "/api/intents/" + id).body()))
+                .doesNotContainKey("budget").doesNotContainKey("refused_quote");
+        assertThat(api.get(api.signIn("bob"), "/api/intents/" + id).statusCode()).isEqualTo(404);
+    }
+
     // Covers: 23.1, P9 (a budget is both fields or neither, an integer from 1 to 10^12 and three upper-case letters;
     // anything else is 422 validation_failed, and the bounds themselves are accepted)
     @Test

@@ -57,14 +57,21 @@ class ConsoleStaticTest {
         assertThat(js).contains("textContent");
     }
 
-    // Covers: 24.3, 21 (no browser storage: the session is the cookie, and the approval token lives in a variable only)
+    // Covers: 24.3, 21 (the one value in browser storage is the theme, under localStorage key ucplab.theme: the session
+    // is the cookie, the approval token lives in a variable only, and nothing else is stored)
     @Test
-    void javascript_neverNamesBrowserStorage() throws IOException {
+    void javascript_storesOnlyTheTheme() throws IOException {
         String js = read("console.js");
+        String theme = block(js, "theme");
 
-        for (String storage : List.of("localStorage", "sessionStorage", "indexedDB", "document.cookie")) {
+        for (String storage : List.of("sessionStorage", "indexedDB", "document.cookie")) {
             assertThat(js).as("console.js uses " + storage).doesNotContain(storage);
         }
+        String outside = js.replace(theme, "");
+        assertThat(outside).as("localStorage outside the theme block").doesNotContain("localStorage");
+        assertThat(theme.split("localStorage", -1)).as("one read and one write").hasSize(3);
+        assertThat(theme).contains("localStorage.getItem(THEME_KEY)").contains("localStorage.setItem(THEME_KEY, ")
+                .contains("const THEME_KEY = \"ucplab.theme\";");
     }
 
     // Covers: 24.3, 7 CSP (the page has an aria-live region, no inline script and no inline handler or style, and links
@@ -98,12 +105,15 @@ class ConsoleStaticTest {
         assertThat(css).doesNotContainPattern("(?i)url\\(\\s*['\"]?https?:").doesNotContain("@import");
     }
 
-    // Covers: 24.3 (light by default with the restyle's colours, a dark variant of the same tokens under
-    // prefers-color-scheme: dark, system fonts only with no font file, and controls at least 44 px tall)
+    // Covers: 24.3 (light by default with the restyle's colours whatever the system setting: no prefers-color-scheme
+    // anywhere; a dark variant of the same tokens only under data-theme="dark"; system fonts only with no font file, and
+    // controls at least 44 px tall)
     @Test
     void css_isLightByDefault_withADarkVariant_systemFonts_and44pxControls() throws IOException {
         String css = read("console.css");
-        int dark = css.indexOf("@media (prefers-color-scheme: dark)");
+        assertThat(css).doesNotContain("prefers-color-scheme");
+        assertThat(read("console.js")).doesNotContain("prefers-color-scheme").doesNotContain("matchMedia");
+        int dark = css.indexOf(":root[data-theme=\"dark\"] {");
         String light = css.substring(0, dark);
 
         assertThat(dark).as("a dark variant").isPositive();
@@ -112,6 +122,7 @@ class ConsoleStaticTest {
             assertThat(light).as("the light default sets " + token).contains(token);
         }
         String darkBlock = css.substring(dark, css.indexOf("\n}\n", dark));
+        assertThat(light).doesNotContain("data-theme");
         for (String token : List.of("--bg:", "--surface:", "--border:", "--fg:", "--muted:", "--accent:", "--success:",
                 "--live-bg:", "--live-fg:")) {
             assertThat(darkBlock).as("the dark variant sets " + token).contains(token);
@@ -119,6 +130,81 @@ class ConsoleStaticTest {
         assertThat(css).contains("border-radius: 12px").contains("min-height: 44px")
                 .contains("font: 16px/1.45 system-ui, -apple-system, \"Segoe UI\", Roboto, sans-serif;")
                 .doesNotContain("@font-face");
+    }
+
+    // Covers: 24.3 (the theme toggle: a header button with aria-pressed and a fixed label; the page starts light and
+    // turns dark only on a stored "dark" or a press; anything else in storage, or storage that throws, is light)
+    @Test
+    void theThemeToggle_isAHeaderButton_rememberedPerBrowser_andLightUnlessChosen() throws IOException {
+        String html = read("index.html");
+        String theme = block(read("console.js"), "theme");
+        String header = html.substring(html.indexOf("<header>"), html.indexOf("</header>"));
+
+        assertThat(header).contains("<button type=\"button\" id=\"theme-toggle\" aria-pressed=\"false\">Dark theme</button>");
+        assertThat(theme).contains("function storedTheme() {")
+                .contains("return localStorage.getItem(THEME_KEY) === \"dark\" ? \"dark\" : \"light\";")
+                .contains("} catch (e) {\n    return \"light\";")
+                .contains("document.documentElement.setAttribute(\"data-theme\", theme);")
+                .contains("$(\"theme-toggle\").setAttribute(\"aria-pressed\", String(theme === \"dark\"));")
+                .contains("applyTheme(storedTheme());")
+                .contains("$(\"theme-toggle\").addEventListener(\"click\", toggleTheme);");
+        assertThat(theme.substring(theme.indexOf("function toggleTheme() {"))).contains("localStorage.setItem(THEME_KEY, ")
+                .contains("} catch (e) {");
+    }
+
+    // Covers: 24.3, 9.1 P9, 23.2 (the stepper's ending comes from the failure_reason in plain text, never the code: each
+    // row of 24.3's table; the two code families by prefix; P9 names the refused total and the budget from the intent
+    // answer, as text; any other reason falls back to the state's text)
+    @Test
+    void theEnding_isTheReasonInPlainText_neverTheCode() throws IOException {
+        String steps = block(read("console.js"), "milestones");
+        java.util.Map<String, String> rows = new java.util.LinkedHashMap<>();
+        rows.put("approval_rejected", "Rejected by you");
+        rows.put("approval_expired", "The approval expired: no order was placed");
+        rows.put("handoff_timeout", "The handoff to the store timed out: no order was placed");
+        rows.put("price_unstable", "The store's price kept changing: no order was placed");
+        rows.put("policy_P1", "This store is not allowed: no order was placed");
+        rows.put("policy_P2", "Above the limit for one purchase: no order was placed");
+        rows.put("policy_P3", "Above your limit for the last 24 hours: no order was placed");
+        rows.put("policy_P4", "Too many items or too large a quantity: no order was placed");
+        rows.put("policy_P5", "Too many proposals in the last hour: no order was placed");
+        rows.put("policy_I12", "The agent buys only at stores the operator owns: no order was placed");
+        rows.put("out_of_stock", "Out of stock at the store: no order was placed");
+        rows.put("item_unavailable", "The item is not available at the store: no order was placed");
+        rows.put("quantity_adjusted", "The store changed the quantity: no order was placed");
+        rows.put("quote_lines_differ", "The store's quote did not match the request: no order was placed");
+        rows.put("quote_unsupported", "The store's checkout needs something the agent cannot provide: no order was placed");
+        rows.put("fulfillment_unsupported", "The store offered no delivery the agent can choose: no order was placed");
+        rows.put("quote_retries_exhausted", "The store did not answer with a quote: no order was placed");
+        rows.put("create_rejected", "The store refused the checkout: no order was placed");
+        rows.put("update_rejected", "The store refused the checkout: no order was placed");
+        rows.put("payment_declined", "The payment was declined: no order was placed");
+        rows.put("payment_invalid", "The payment was not accepted: no order was placed");
+        rows.put("canceled_by_merchant", "The store cancelled the checkout: no order was placed");
+        rows.put("complete_unavailable", "This store does not take orders from the agent: no order was placed");
+        rows.put("session_gone", "The checkout is no longer available at the store: no order was placed");
+        rows.put("continue_url_not_allowed", "The store's checkout link was not allowed: no order was placed");
+        rows.put("outcome_unknown", "Stopped: the store did not confirm whether an order was placed; a person needs to check");
+        rows.put("approval_invalid", "Stopped: the approval could not be confirmed; a person needs to check");
+        rows.put("merchant_changed", "Stopped: the store's settings changed; a person needs to check");
+        rows.put("merchant_not_owned", "Stopped: the store's settings changed; a person needs to check");
+        rows.put("handoff_status_unexpected",
+                "Stopped: the store reported an unexpected checkout status; a person needs to check");
+
+        assertThat(steps).as("a table of reason texts").contains("const REASON_TEXT = new Map([");
+        String table = steps.substring(steps.indexOf("const REASON_TEXT = new Map(["), steps.indexOf("]);", steps.indexOf("const REASON_TEXT")));
+        rows.forEach((code, text) -> assertThat(table).as(code).contains("[\"" + code + "\", \"" + text + "\"]"));
+        assertThat(table.split("\\],", -1)).as("one entry per row, no other").hasSize(rows.size());
+        assertThat(steps).contains("[\"merchant_error_\", \"The store refused the checkout: no order was placed\"]")
+                .contains("[\"complete_error:\", \"The store refused the order: no order was placed\"]")
+                .contains("\"Over your budget: the store quoted \" + money(quoted.total_minor, quoted.currency)\n"
+                        + "      + \", your budget is \" + money(budget.amount_minor, budget.currency);")
+                .contains("return \"Over your budget: no order was placed\";")
+                .contains("if (reason === \"policy_P9\") {")
+                .contains("return prefixed ? prefixed[1] : ENDINGS.get(intent.state);")
+                .contains("const ending = ENDINGS.has(intent.state) ? endingText(intent) : \"\";");
+        assertThat(steps).as("the code itself is never a label").doesNotContain("label: intent.failure_reason")
+                .doesNotContain("label: reason");
     }
 
     // Covers: 24.3 (the header: the app name, the subtitle, the merchant-mode badge, the user chip and Sign out; the
@@ -440,7 +526,7 @@ class ConsoleStaticTest {
 
         for (String label : List.of("\"Proposed\"", "\"Quoted by the store\"", "\"Waiting for your approval\"",
                 "\"Approved by you\"", "\"Handed off to the store\"", "\"Sent to the store\"",
-                "\"Order placed at the store\"", "[\"REJECTED\", \"Rejected by you\"]",
+                "\"Order placed at the store\"", "[\"REJECTED\", \"Rejected: no order was placed\"]",
                 "[\"FAILED_NOT_CHARGED\", \"Stopped: no order was placed\"]",
                 "[\"ESCALATED\", \"Stopped: the outcome needs a person to check\"]")) {
             assertThat(steps).as("the stepper names " + label).contains(label);
