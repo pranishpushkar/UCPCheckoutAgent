@@ -11,8 +11,10 @@ import dev.ucplab.core.merchant.MerchantStatus;
 import dev.ucplab.ucp.UcpHttpGateway;
 import java.lang.reflect.Proxy;
 import java.net.URI;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -26,6 +28,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import org.junit.jupiter.api.Test;
 
@@ -288,6 +291,92 @@ class ConfiguredMerchantRegistryTest {
         release.countDown();
         eventually(() -> assertThat(r.active()).extracting(MerchantEntry::id).containsExactly(A, B));
         assertThat(stubs.get(A).asks.get() - before).isEqualTo(1);
+    }
+
+    /**
+     * The test's clock, with a hook run once inside the next {@code instant()} the test's own thread asks for. The
+     * registry reads the clock between reading a merchant's state and taking its check flag, so the hook can end a
+     * stalled check exactly there.
+     */
+    private static final class HookedClock extends Clock {
+        private final Clock inner;
+        private final Thread caller;
+        final AtomicReference<Runnable> hook = new AtomicReference<>();
+
+        HookedClock(Clock inner, Thread caller) {
+            this.inner = inner;
+            this.caller = caller;
+        }
+
+        @Override
+        public Instant instant() {
+            if (Thread.currentThread() == caller) {
+                Runnable h = hook.getAndSet(null);
+                if (h != null) {
+                    h.run();
+                }
+            }
+            return inner.instant();
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return inner.getZone();
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            throw new UnsupportedOperationException();
+        }
+    }
+
+    private static void pause(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    // Covers: 19, 7.8, decision 2 (the re-check stays single-flight across a check's end: a caller that read the SUSPENDED
+    // state just before the stalled check published ACTIVE and let go of its flag starts no second discovery; this is the
+    // interleaving behind the rare second ask in recheck_isSingleFlight_andNobodyWaitsForTheStalledCheck)
+    @Test
+    void recheck_aCallerThatReadTheStateBeforeTheCheckEnded_startsNoSecondCheck() throws Exception {
+        Map<MerchantId, Stub> stubs = stubs(A);
+        stubs.get(A).failing(UcpHttpGateway.UNREACHABLE);
+        HookedClock hooked = new HookedClock(clock, Thread.currentThread());
+        ConfiguredMerchantRegistry r = ConfiguredMerchantRegistry.start(List.of(settings(A, MerchantStatus.ACTIVE)),
+                id -> stubs.get(id).gateway(), hooked);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch entered = new CountDownLatch(1);
+        stubs.get(A).behaviour = id -> {
+            entered.countDown();
+            try {
+                release.await(20, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return profile(id);
+        };
+        clock.advance(Duration.ofSeconds(31));
+        int before = stubs.get(A).asks.get();
+        assertThat(r.active()).as("the due re-check starts, and stalls").isEmpty();
+        assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Inside the next call, after it has read the SUSPENDED state: the check ends, publishes ACTIVE and lets go of
+        // its flag (which follows the state at once; the pause is ample).
+        hooked.hook.set(() -> {
+            release.countDown();
+            eventually(() -> assertThat(r.reason(A)).isEmpty());
+            pause(200);
+        });
+        r.active();
+        assertThat(hooked.hook.get()).as("the hook ran inside the call").isNull();
+        pause(500);
+
+        assertThat(stubs.get(A).asks.get() - before).as("discovery requests: the stalled check's only").isEqualTo(1);
+        assertThat(r.active()).extracting(MerchantEntry::id).containsExactly(A);
     }
 
     // Covers: 19, 20 (in-flight intents: profile() of a SUSPENDED merchant still goes to its gateway, and the registry asks
