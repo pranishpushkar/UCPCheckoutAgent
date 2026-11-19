@@ -83,7 +83,8 @@ class UuidV7IdGeneratorTest {
         assertThat(millisOf(second)).isEqualTo(T0.toEpochMilli() + 1);
     }
 
-    // Covers: 7.4, 7.6 (two generators, as two processes would have, share no id)
+    // Covers: 7.4, 7.6 (two generators, as two processes would have, share no id). The check is one set intersection:
+    // AssertJ's doesNotContain scans the whole set, so one call per id of b was 10^10 comparisons.
     @Test
     void twoInstances_withTheSameClock_shareNoId() {
         IdGenerator a = new UuidV7IdGenerator(clock, new SplittableRandom(4));
@@ -92,10 +93,15 @@ class UuidV7IdGeneratorTest {
         for (int i = 0; i < 100_000; i++) {
             fromA.add(a.next());
         }
+        Set<String> fromB = new HashSet<>();
         for (int i = 0; i < 100_000; i++) {
-            assertThat(fromA).doesNotContain(b.next());
+            fromB.add(b.next());
         }
         assertThat(fromA).hasSize(100_000);
+        assertThat(fromB).hasSize(100_000);
+        Set<String> shared = new HashSet<>(fromA);
+        shared.retainAll(fromB);
+        assertThat(shared).as("ids both generators made").isEmpty();
     }
 
     // Covers: 7.8 (no lock: concurrent callers of one instance still get distinct ids)

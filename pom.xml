@@ -168,6 +168,29 @@
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-surefire-plugin</artifactId>
                     <version>${maven-surefire-plugin.version}</version>
+                    <!-- CI speed: test classes run across one forked JVM per core (each fork runs its classes one at a
+                         time). Classes tagged "sequential" (kills and child JVMs, crash matrices, hung-HTTP and
+                         wall-clock timing) run afterwards in one fork, as before. Tags, not include lists, because -Dtest
+                         overrides includes and excludes but is combined with groups: a test picked with -Dtest still
+                         runs once. -->
+                    <configuration>
+                        <forkCount>1C</forkCount>
+                        <reuseForks>true</reuseForks>
+                        <excludedGroups>sequential</excludedGroups>
+                    </configuration>
+                    <executions>
+                        <execution>
+                            <id>sequential-tests</id>
+                            <goals>
+                                <goal>test</goal>
+                            </goals>
+                            <configuration>
+                                <forkCount>1</forkCount>
+                                <groups>sequential</groups>
+                                <excludedGroups combine.self="override"/>
+                            </configuration>
+                        </execution>
+                    </executions>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>

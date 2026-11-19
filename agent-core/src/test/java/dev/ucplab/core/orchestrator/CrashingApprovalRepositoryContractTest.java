@@ -5,8 +5,10 @@ import dev.ucplab.core.approval.ApprovalRepositoryContract;
 import dev.ucplab.core.approval.InMemoryApprovalRepository;
 import dev.ucplab.core.identity.UserId;
 import dev.ucplab.core.intent.IntentId;
+import org.junit.jupiter.api.Tag;
 
 /** {@link CrashingApprovalRepository}, with no crash armed, runs the repository contract it wraps (H3 P4; 7.3, 9.2, I10). */
+@Tag("sequential")
 class CrashingApprovalRepositoryContractTest extends ApprovalRepositoryContract {
 
     @Override

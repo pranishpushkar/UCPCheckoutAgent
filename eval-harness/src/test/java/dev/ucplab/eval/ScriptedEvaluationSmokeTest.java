@@ -24,6 +24,7 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -33,6 +34,7 @@ import org.junit.jupiter.api.Test;
  * {@code target/eval-reduced/report.{json,md}}, whose first line says REDUCED, and {@code margins.txt}: the smallest
  * slack each real-time race had in this run (m4-plan risk 2).
  */
+@Tag("sequential")
 class ScriptedEvaluationSmokeTest {
 
     static final Path OUT = Path.of("target", "eval-reduced");

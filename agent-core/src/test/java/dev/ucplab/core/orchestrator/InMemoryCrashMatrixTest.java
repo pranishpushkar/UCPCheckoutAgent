@@ -4,8 +4,10 @@ import dev.ucplab.core.MutableClock;
 import dev.ucplab.core.approval.InMemoryApprovalRepository;
 import dev.ucplab.core.intent.InMemoryIntentRepository;
 import dev.ucplab.core.intent.InMemoryRecoveryScan;
+import org.junit.jupiter.api.Tag;
 
 /** The crash matrix over the in-memory adapters. */
+@Tag("sequential")
 class InMemoryCrashMatrixTest extends CrashMatrixContract {
 
     @Override

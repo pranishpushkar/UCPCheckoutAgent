@@ -14,6 +14,9 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    # About twice the job's run with tmpfs, -T 1C and forked tests (8 min 10 s of Maven in run 44419886579), so a hung
+    # test fails in minutes instead of GitHub's 6-hour default.
+    timeout-minutes: 18
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-java@v5
@@ -21,4 +24,20 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
-      - run: ./mvnw -B -ntp verify
+      # CI speed: the persistence and eval-harness tests keep their temp files, the SQLite databases among them, in
+      # /dev/shm (tmpfs) through -Dtest.tmpdir, so a commit's fsync costs nothing. Only where the files live changes.
+      # Stop here, clearly, if /dev/shm is missing or too small.
+      - name: Check /dev/shm
+        run: |
+          df -h /dev/shm
+          free_kb=$(df -Pk /dev/shm | awk 'NR==2 {print $4}')
+          if [ "${free_kb:-0}" -lt 2097152 ]; then
+            echo "::error::/dev/shm has $(( ${free_kb:-0} / 1024 )) MiB free; the tests' temp files need at least 2048 MiB (-Dtest.tmpdir=/dev/shm)"
+            exit 1
+          fi
+      # -T 1C: one build thread per core, so modules that do not depend on each other (merchant, fault-proxy, agent-ucp
+      # beside agent-core and agent-persistence) build and test at the same time.
+      - run: ./mvnw -B -ntp -T 1C -Dtest.tmpdir=/dev/shm verify
+      - name: /dev/shm after the tests
+        if: always()
+        run: df -h /dev/shm

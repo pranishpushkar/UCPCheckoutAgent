@@ -26,6 +26,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.UnaryOperator;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -33,6 +34,7 @@ import org.junit.jupiter.api.Test;
  * boundary (its repository throws there), its lease runs out, and a new worker takes the intent over; the outcome is
  * the one a single uninterrupted step would have reached, and nothing is done twice.
  */
+@Tag("sequential")
 class HandoffCrashTest {
 
     private final Lab lab = new Lab();

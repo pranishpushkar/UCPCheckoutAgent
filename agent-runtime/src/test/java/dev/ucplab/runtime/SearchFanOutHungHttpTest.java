@@ -18,6 +18,10 @@ import dev.ucplab.ucp.Sleeper;
 import dev.ucplab.ucp.UcpConfig;
 import dev.ucplab.ucp.UcpHttpGateway;
 import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -30,6 +34,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.SplittableRandom;
 import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -38,6 +43,7 @@ import org.junit.jupiter.api.Test;
  * its catalog reply for a minute, and a limit of 50 ms. The interrupt must end the call once, count once against the
  * merchant's breaker, and leave no thread behind.
  */
+@Tag("sequential")
 class SearchFanOutHungHttpTest {
 
     private static final MerchantId HUNG = new MerchantId("shop-hung");
@@ -71,6 +77,34 @@ class SearchFanOutHungHttpTest {
 
     private static void settle(long millis) throws InterruptedException {
         Thread.sleep(millis);
+    }
+
+    /**
+     * The JDK starts its virtual-thread I/O pollers (Read-Poller, Write-Poller and their updaters) once per JVM, when a
+     * virtual thread first parks on a socket. Whether that happens before the baseline used to depend on which tests ran
+     * earlier in the same JVM; a fresh fork (15) made it timing-dependent. Parking one virtual thread on a local read here
+     * starts them before the baseline, so the check still counts every thread the cancelled call leaves, and only those.
+     */
+    private static void startVirtualThreadPollers() throws Exception {
+        InetAddress loopback = InetAddress.getLoopbackAddress();
+        try (ServerSocket server = new ServerSocket(0, 1, loopback)) {
+            Thread reader = Thread.ofVirtual().start(() -> {
+                try (Socket socket = new Socket(loopback, server.getLocalPort())) {
+                    socket.getInputStream().read();
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            });
+            try (Socket accepted = server.accept()) {
+                long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+                while (reader.getState() != Thread.State.WAITING && System.nanoTime() < deadline) {
+                    settle(5);
+                }
+                assertThat(reader.getState()).as("the reader parked on its read").isEqualTo(Thread.State.WAITING);
+                accepted.getOutputStream().write(1);
+            }
+            reader.join();
+        }
     }
 
     // Covers: 6.2, 8.2, 8.3, 19, I6 (a merchant that never answers is left out after the limit: the call returns at about the
@@ -119,6 +153,7 @@ class SearchFanOutHungHttpTest {
                 ToolOutcome.Result warm = search.apply(ports);
                 assertThat(warm.json()).doesNotContain("unavailable");
                 install(hungProxy, "{\"seed\":0,\"rules\":[]}");
+                startVirtualThreadPollers();
                 settle(200);
                 List<String> before = platformThreadNames();
                 install(hungProxy, hold(product ? "/ucp/v1/catalog/product" : "/ucp/v1/catalog/search"));
