@@ -1,6 +1,7 @@
 package dev.ucplab.core.agent;
 
 import dev.ucplab.core.identity.UserId;
+import dev.ucplab.core.intent.Budget;
 import dev.ucplab.core.intent.IntentId;
 import java.time.Instant;
 import java.util.List;
@@ -14,7 +15,8 @@ import java.util.Optional;
  * {@code budget_exceeded}, {@code user_timeout}) or {@code failed}. {@code reason} is our own code for why the run
  * ended that way ({@code model_error}, {@code tool_error}, {@code script_drift}, {@code internal_error}, or the budget
  * limit's name), empty for {@code done} and {@code waiting_for_approval}, and never set while the run is in progress.
- * The record holds no prompt, model text, tool output or exception message.
+ * The record holds no prompt, model text, tool output or exception message. {@code budget} is the user's budget for the
+ * run (23.1, P9), set when the run starts and never changed by an update.
  */
 public record RunRecord(
         RunId id,
@@ -29,7 +31,8 @@ public record RunRecord(
         long inputTokens,
         long outputTokens,
         List<IntentId> intentIds,
-        List<ToolEvent> toolEvents) {
+        List<ToolEvent> toolEvents,
+        Optional<Budget> budget) {
 
     public RunRecord {
         Objects.requireNonNull(id, "id");
@@ -41,6 +44,7 @@ public record RunRecord(
         Objects.requireNonNull(reason, "reason");
         intentIds = List.copyOf(Objects.requireNonNull(intentIds, "intentIds"));
         toolEvents = List.copyOf(Objects.requireNonNull(toolEvents, "toolEvents"));
+        Objects.requireNonNull(budget, "budget");
         if (modelCalls < 0 || toolCalls < 0 || inputTokens < 0 || outputTokens < 0) {
             throw new IllegalArgumentException("counts must not be negative");
         }
@@ -53,6 +57,25 @@ public record RunRecord(
         if (reason.isPresent() && endedAt.isEmpty()) {
             throw new IllegalArgumentException("a run has a reason only once it has ended");
         }
+    }
+
+    /** A run record with no budget: the fields before V11. An update with it never clears a stored budget. */
+    public RunRecord(RunId id, UserId owner, String model, Instant startedAt, Optional<Instant> endedAt,
+            Optional<String> outcome, Optional<String> reason, int modelCalls, int toolCalls, long inputTokens,
+            long outputTokens, List<IntentId> intentIds, List<ToolEvent> toolEvents) {
+        this(id, owner, model, startedAt, endedAt, outcome, reason, modelCalls, toolCalls, inputTokens, outputTokens,
+                intentIds, toolEvents, Optional.empty());
+    }
+
+    /** A run that has just started under the user's {@code budget}. */
+    public static RunRecord started(RunId id, UserId owner, String model, Instant at, Optional<Budget> budget) {
+        return started(id, owner, model, at).withBudget(budget);
+    }
+
+    /** This record with {@code runBudget}: a store keeps the budget written at insert whatever an update carries. */
+    public RunRecord withBudget(Optional<Budget> runBudget) {
+        return new RunRecord(id, owner, model, startedAt, endedAt, outcome, reason, modelCalls, toolCalls, inputTokens,
+                outputTokens, intentIds, toolEvents, runBudget);
     }
 
     /** A run that has just started: no calls, no intents, no outcome, no reason. */

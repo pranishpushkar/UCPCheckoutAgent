@@ -80,9 +80,44 @@ function errorText(result) {
   return result.data && result.data.message ? result.data.message : "Request failed (" + result.status + ").";
 }
 
+// <theme>
+// 24.3: light by default, whatever the system's setting; dark only after the header's toggle. The choice is the one
+// value the console keeps in browser storage, under one key; empty, blocked or anything else is light.
+const THEME_KEY = "ucplab.theme";
+
+function storedTheme() {
+  try {
+    return localStorage.getItem(THEME_KEY) === "dark" ? "dark" : "light";
+  } catch (e) {
+    return "light";
+  }
+}
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme);
+  $("theme-toggle").setAttribute("aria-pressed", String(theme === "dark"));
+}
+
+function toggleTheme() {
+  const theme = document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";
+  applyTheme(theme);
+  try {
+    localStorage.setItem(THEME_KEY, theme);
+  } catch (e) {
+    // Storage is blocked: the choice lasts for this page only.
+  }
+}
+
+function startTheme() {
+  applyTheme(storedTheme());
+  $("theme-toggle").addEventListener("click", toggleTheme);
+}
+// </theme>
+
 // ---- boot ----------------------------------------------------------------------------------------------------
 
 async function boot() {
+  startTheme();
   const me = await api("GET", "/api/me");
   if (!me.ok) {
     return;
@@ -92,6 +127,13 @@ async function boot() {
   $("sign-out").hidden = false;
   $("sign-out").addEventListener("click", signOut);
   $("send").addEventListener("submit", send);
+  $("message").addEventListener("input", onMessageInput);
+  $("budget").addEventListener("input", () => {
+    budgetTouched = true;
+  });
+  $("budget-currency").addEventListener("change", () => {
+    budgetTouched = true;
+  });
   document.querySelectorAll("[data-preset]").forEach((button) => {
     button.addEventListener("click", () => preset(button.getAttribute("data-preset")));
   });
@@ -116,6 +158,71 @@ async function signOut() {
 
 // ---- the agent panel --------------------------------------------------------------------------------------------
 
+// <budget>
+// 24.3: the optional Budget field. As the user types a first message, the console fills the field, visibly, from an
+// amount with a limit word, until the user edits or clears the field or changes its currency. Only what the field holds
+// when the user presses Send is sent (23.1); the server never parses the message, and neither does send().
+let budgetTouched = false;
+
+const BUDGET_AMOUNT = "([$€£]|USD|EUR|GBP)?\\s*((?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d{1,2})?)\\s*(USD|EUR|GBP)?";
+const BUDGET_LIMIT = new RegExp(
+    "\\b(?:under|below|maximum|max|no more than|at most|less than)\\s+" + BUDGET_AMOUNT
+    + "|" + BUDGET_AMOUNT + "\\s+or less\\b", "i");
+const BUDGET_SIGNS = {"$": "USD", "€": "EUR", "£": "GBP"};
+
+// An amount with a limit word and a sign or code ("under $500", "max 80 EUR", "£40 or less"), or null.
+function budgetFromMessage(text) {
+  const m = BUDGET_LIMIT.exec(text);
+  if (!m) {
+    return null;
+  }
+  const sign = m[1] || m[3] || m[4] || m[6];
+  const amount = m[2] || m[5];
+  if (!sign) {
+    return null;
+  }
+  return {amount: amount.replace(/,/g, ""), currency: BUDGET_SIGNS[sign] || sign.toUpperCase()};
+}
+
+function continuingRun() {
+  return Boolean(currentRun && RUN_WAITING.includes(currentRun.status));
+}
+
+function onMessageInput() {
+  if (budgetTouched || continuingRun()) {
+    return;
+  }
+  const found = budgetFromMessage($("message").value);
+  $("budget").value = found ? found.amount : "";
+  if (found) {
+    $("budget-currency").value = found.currency;
+  }
+}
+
+// The field as budget_minor and currency: {} when it is empty, null when it is not an amount of at least 0.01.
+function budgetToSend() {
+  const raw = $("budget").value.trim().replace(/,/g, "");
+  if (raw === "") {
+    return {};
+  }
+  const m = /^(\d{1,10})(?:\.(\d{1,2}))?$/.exec(raw);
+  if (!m) {
+    return null;
+  }
+  const minor = Number(m[1]) * 100 + Number((m[2] || "0").padEnd(2, "0"));
+  if (minor < 1) {
+    return null;
+  }
+  return {budget_minor: minor, currency: $("budget-currency").value};
+}
+
+// While a run continues, the field keeps the run's budget and cannot change: the budget is fixed for the run.
+function showBudgetField() {
+  $("budget").disabled = continuingRun();
+  $("budget-currency").disabled = continuingRun();
+}
+// </budget>
+
 async function send(event) {
   event.preventDefault();
   const input = $("message");
@@ -123,11 +230,16 @@ async function send(event) {
   if (!text) {
     return;
   }
+  const continuing = continuingRun();
+  const budget = continuing ? {} : budgetToSend();
+  if (budget === null) {
+    setStatus("Enter the budget as an amount such as 500 or 499.99, or leave it empty.", true);
+    return;
+  }
   input.value = "";
-  const continuing = currentRun && RUN_WAITING.includes(currentRun.status);
   const result = continuing
       ? await api("POST", "/api/runs/" + currentRun.id + "/messages", {message: text})
-      : await api("POST", "/api/runs", {message: text});
+      : await api("POST", "/api/runs", Object.assign({message: text}, budget));
   if (!result.ok) {
     setStatus(errorText(result), true);
     return;
@@ -161,6 +273,7 @@ function showRun(run) {
     }
   }
   showOtherIntents(intents);
+  showBudgetField();
 }
 
 async function pollRun() {
@@ -288,6 +401,10 @@ function showApprovalCard(id, approvalResponse) {
   table.appendChild(body);
   table.appendChild(foot);
   card.appendChild(table);
+  if (approval.budget) {
+    card.appendChild(el("p", "Your budget: " + money(approval.budget.amount_minor, approval.budget.currency)
+        + (approval.completion === "handoff" ? " (before the store's shipping and tax)" : ""), "budget-line"));
+  }
   const info = el("div", null, "info");
   info.appendChild(el("p", "Price and stock are not held."));
   if (approval.completion === "handoff") {
@@ -499,11 +616,75 @@ function showSuccess(text, quote) {
 // <milestones>
 // 24.3: the stepper, made from the intent's state, its merchant's completion, its approval and the store's follow-up;
 // never from the name of anything the timeline records. Each step is {label, mark}: done, current, pending or ended.
+// The state's text, for a reason REASON_TEXT does not name or no reason.
 const ENDINGS = new Map([
-  ["REJECTED", "Rejected by you"],
+  ["REJECTED", "Rejected: no order was placed"],
   ["FAILED_NOT_CHARGED", "Stopped: no order was placed"],
   ["ESCALATED", "Stopped: the outcome needs a person to check"],
 ]);
+
+// 24.3: the text of each failure_reason. A Map, so no other key can match; the code itself is never shown.
+const REASON_TEXT = new Map([
+  ["approval_rejected", "Rejected by you"],
+  ["approval_expired", "The approval expired: no order was placed"],
+  ["handoff_timeout", "The handoff to the store timed out: no order was placed"],
+  ["price_unstable", "The store's price kept changing: no order was placed"],
+  ["policy_P1", "This store is not allowed: no order was placed"],
+  ["policy_P2", "Above the limit for one purchase: no order was placed"],
+  ["policy_P3", "Above your limit for the last 24 hours: no order was placed"],
+  ["policy_P4", "Too many items or too large a quantity: no order was placed"],
+  ["policy_P5", "Too many proposals in the last hour: no order was placed"],
+  ["policy_I12", "The agent buys only at stores the operator owns: no order was placed"],
+  ["out_of_stock", "Out of stock at the store: no order was placed"],
+  ["item_unavailable", "The item is not available at the store: no order was placed"],
+  ["quantity_adjusted", "The store changed the quantity: no order was placed"],
+  ["quote_lines_differ", "The store's quote did not match the request: no order was placed"],
+  ["quote_unsupported", "The store's checkout needs something the agent cannot provide: no order was placed"],
+  ["fulfillment_unsupported", "The store offered no delivery the agent can choose: no order was placed"],
+  ["quote_retries_exhausted", "The store did not answer with a quote: no order was placed"],
+  ["create_rejected", "The store refused the checkout: no order was placed"],
+  ["update_rejected", "The store refused the checkout: no order was placed"],
+  ["payment_declined", "The payment was declined: no order was placed"],
+  ["payment_invalid", "The payment was not accepted: no order was placed"],
+  ["canceled_by_merchant", "The store cancelled the checkout: no order was placed"],
+  ["complete_unavailable", "This store does not take orders from the agent: no order was placed"],
+  ["session_gone", "The checkout is no longer available at the store: no order was placed"],
+  ["continue_url_not_allowed", "The store's checkout link was not allowed: no order was placed"],
+  ["outcome_unknown", "Stopped: the store did not confirm whether an order was placed; a person needs to check"],
+  ["approval_invalid", "Stopped: the approval could not be confirmed; a person needs to check"],
+  ["merchant_changed", "Stopped: the store's settings changed; a person needs to check"],
+  ["merchant_not_owned", "Stopped: the store's settings changed; a person needs to check"],
+  ["handoff_status_unexpected", "Stopped: the store reported an unexpected checkout status; a person needs to check"]
+]);
+
+// The two families of merchant codes, by prefix: the code after it is the store's, never shown.
+const REASON_PREFIXES = [
+  ["merchant_error_", "The store refused the checkout: no order was placed"],
+  ["complete_error:", "The store refused the order: no order was placed"],
+];
+
+// P9: the total the store quoted and the user's budget, both from the intent answer (23.2), set as text.
+function overBudgetText(intent) {
+  const quoted = intent.refused_quote;
+  const budget = intent.budget;
+  if (!quoted || !budget) {
+    return "Over your budget: no order was placed";
+  }
+  return "Over your budget: the store quoted " + money(quoted.total_minor, quoted.currency)
+      + ", your budget is " + money(budget.amount_minor, budget.currency);
+}
+
+function endingText(intent) {
+  const reason = typeof intent.failure_reason === "string" ? intent.failure_reason : "";
+  if (reason === "policy_P9") {
+    return overBudgetText(intent);
+  }
+  if (REASON_TEXT.has(reason)) {
+    return REASON_TEXT.get(reason);
+  }
+  const prefixed = REASON_PREFIXES.find((p) => reason.startsWith(p[0]));
+  return prefixed ? prefixed[1] : ENDINGS.get(intent.state);
+}
 
 // How far the intent got: 0 Proposed, 1 Quoted, 2 approval, 3 sent or handed off, 4 the store's order.
 function reached(intent) {
@@ -527,7 +708,7 @@ function milestones(intent) {
   const labels = ["Proposed", "Quoted by the store", at > 2 ? "Approved by you" : "Waiting for your approval",
       handoff ? "Handed off to the store" : "Sent to the store", "Order placed at the store"];
   const steps = labels.map((label, i) => ({label: label, mark: i < at ? "done" : i === at ? "current" : "pending"}));
-  const ending = ENDINGS.get(intent.state);
+  const ending = ENDINGS.has(intent.state) ? endingText(intent) : "";
   if (ending) {
     return steps.slice(0, at).concat([{label: ending, mark: "ended"}]);
   }

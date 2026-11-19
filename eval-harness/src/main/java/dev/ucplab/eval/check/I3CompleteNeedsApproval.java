@@ -4,6 +4,7 @@ import dev.ucplab.core.approval.ApprovalRecord;
 import dev.ucplab.core.approval.ApprovalSnapshot;
 import dev.ucplab.core.approval.ApprovalStatus;
 import dev.ucplab.core.identity.UserId;
+import dev.ucplab.core.intent.Budget;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.merchant.MutatingOp;
 import dev.ucplab.eval.AutoApprover;
@@ -41,13 +42,13 @@ public final class I3CompleteNeedsApproval implements InvariantCheck {
     @Override
     public String description() {
         return "every complete follows an unexpired approval of the same session by the owner, matched by revision,"
-                + " with no decline in between";
+                + " with no decline in between, and no intent is approved above its budget";
     }
 
     @Override
     public String evidence() {
         return "L (every complete, its key and arrival) and A (the decisions); D only for the stored approval row's"
-                + " status and decided_by, which I3 is about";
+                + " status and decided_by and the intent's budget, which I3 is about";
     }
 
     @Override
@@ -118,6 +119,22 @@ public final class I3CompleteNeedsApproval implements InvariantCheck {
                             + ", not the run's user " + e.owner().value() + " (intent owner " + owns.value() + ")");
                 }
             }, () -> v.add(where + ": D holds no approval row for decision #" + d.seq() + " of " + intent.value()));
+        }
+        // I3's budget clause (P9, 14): no intent is approved above its budget, in the budget's own currency. The budget is
+        // the one stored on the intent in D; the approvals are A's decisions.
+        for (RunEvidence.Persisted p : e.intents()) {
+            if (p.intent().budget().isEmpty()) {
+                continue;
+            }
+            Budget budget = p.intent().budget().get();
+            for (AutoApprover.Decision d : Wire.decisions(e, p.intent().id())) {
+                ApprovalSnapshot snap = d.snapshot();
+                if (d.approved() && (!snap.currency().equals(budget.currency()) || snap.totalMinor() > budget.amountMinor())) {
+                    v.add(p.intent().id().value() + ": decision #" + d.seq() + " approved " + snap.totalMinor() + " "
+                            + snap.currency() + ", approved above its budget of " + budget.amountMinor() + " "
+                            + budget.currency());
+                }
+            }
         }
         List<Violation> out = new ArrayList<>();
         v.forEach(s -> out.add(new Violation(id(), s)));

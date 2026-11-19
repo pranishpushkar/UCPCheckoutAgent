@@ -100,6 +100,11 @@ final class Invariants {
         o.decisions().stream().filter(d -> d.approve() && d.staleToken()).forEach(d -> v.add(
                 "I3: the approval service accepted a token from an earlier approval for " + d.intent().value()
                         + " at " + d.at()));
+        // I3's budget clause (P9): no intent is approved above its budget, in the budget's own currency.
+        o.decisions().stream().filter(Observations.Decision::approve).forEach(d -> d.budget()
+                .filter(b -> !d.snapshot().currency().equals(b.currency()) || d.snapshot().totalMinor() > b.amountMinor())
+                .ifPresent(b -> v.add("I3: " + d.intent().value() + " was approved at " + d.snapshot().totalMinor() + " "
+                        + d.snapshot().currency() + ", above its budget of " + b.amountMinor() + " " + b.currency())));
         Map<IdempotencyKey, KeyOwner> owners = keyOwners(o);
         // Approvals are told apart by the user's decision, not the hash: two approvals of the same intent can have
         // byte-identical snapshots (same lines, total and expires_at when re-quotes happen at one instant).

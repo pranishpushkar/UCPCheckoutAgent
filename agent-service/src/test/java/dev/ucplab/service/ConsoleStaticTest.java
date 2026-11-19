@@ -57,14 +57,21 @@ class ConsoleStaticTest {
         assertThat(js).contains("textContent");
     }
 
-    // Covers: 24.3, 21 (no browser storage: the session is the cookie, and the approval token lives in a variable only)
+    // Covers: 24.3, 21 (the one value in browser storage is the theme, under localStorage key ucplab.theme: the session
+    // is the cookie, the approval token lives in a variable only, and nothing else is stored)
     @Test
-    void javascript_neverNamesBrowserStorage() throws IOException {
+    void javascript_storesOnlyTheTheme() throws IOException {
         String js = read("console.js");
+        String theme = block(js, "theme");
 
-        for (String storage : List.of("localStorage", "sessionStorage", "indexedDB", "document.cookie")) {
+        for (String storage : List.of("sessionStorage", "indexedDB", "document.cookie")) {
             assertThat(js).as("console.js uses " + storage).doesNotContain(storage);
         }
+        String outside = js.replace(theme, "");
+        assertThat(outside).as("localStorage outside the theme block").doesNotContain("localStorage");
+        assertThat(theme.split("localStorage", -1)).as("one read and one write").hasSize(3);
+        assertThat(theme).contains("localStorage.getItem(THEME_KEY)").contains("localStorage.setItem(THEME_KEY, ")
+                .contains("const THEME_KEY = \"ucplab.theme\";");
     }
 
     // Covers: 24.3, 7 CSP (the page has an aria-live region, no inline script and no inline handler or style, and links
@@ -98,12 +105,15 @@ class ConsoleStaticTest {
         assertThat(css).doesNotContainPattern("(?i)url\\(\\s*['\"]?https?:").doesNotContain("@import");
     }
 
-    // Covers: 24.3 (light by default with the restyle's colours, a dark variant of the same tokens under
-    // prefers-color-scheme: dark, system fonts only with no font file, and controls at least 44 px tall)
+    // Covers: 24.3 (light by default with the restyle's colours whatever the system setting: no prefers-color-scheme
+    // anywhere; a dark variant of the same tokens only under data-theme="dark"; system fonts only with no font file, and
+    // controls at least 44 px tall)
     @Test
     void css_isLightByDefault_withADarkVariant_systemFonts_and44pxControls() throws IOException {
         String css = read("console.css");
-        int dark = css.indexOf("@media (prefers-color-scheme: dark)");
+        assertThat(css).doesNotContain("prefers-color-scheme");
+        assertThat(read("console.js")).doesNotContain("prefers-color-scheme").doesNotContain("matchMedia");
+        int dark = css.indexOf(":root[data-theme=\"dark\"] {");
         String light = css.substring(0, dark);
 
         assertThat(dark).as("a dark variant").isPositive();
@@ -112,6 +122,7 @@ class ConsoleStaticTest {
             assertThat(light).as("the light default sets " + token).contains(token);
         }
         String darkBlock = css.substring(dark, css.indexOf("\n}\n", dark));
+        assertThat(light).doesNotContain("data-theme");
         for (String token : List.of("--bg:", "--surface:", "--border:", "--fg:", "--muted:", "--accent:", "--success:",
                 "--live-bg:", "--live-fg:")) {
             assertThat(darkBlock).as("the dark variant sets " + token).contains(token);
@@ -119,6 +130,81 @@ class ConsoleStaticTest {
         assertThat(css).contains("border-radius: 12px").contains("min-height: 44px")
                 .contains("font: 16px/1.45 system-ui, -apple-system, \"Segoe UI\", Roboto, sans-serif;")
                 .doesNotContain("@font-face");
+    }
+
+    // Covers: 24.3 (the theme toggle: a header button with aria-pressed and a fixed label; the page starts light and
+    // turns dark only on a stored "dark" or a press; anything else in storage, or storage that throws, is light)
+    @Test
+    void theThemeToggle_isAHeaderButton_rememberedPerBrowser_andLightUnlessChosen() throws IOException {
+        String html = read("index.html");
+        String theme = block(read("console.js"), "theme");
+        String header = html.substring(html.indexOf("<header>"), html.indexOf("</header>"));
+
+        assertThat(header).contains("<button type=\"button\" id=\"theme-toggle\" aria-pressed=\"false\">Dark theme</button>");
+        assertThat(theme).contains("function storedTheme() {")
+                .contains("return localStorage.getItem(THEME_KEY) === \"dark\" ? \"dark\" : \"light\";")
+                .contains("} catch (e) {\n    return \"light\";")
+                .contains("document.documentElement.setAttribute(\"data-theme\", theme);")
+                .contains("$(\"theme-toggle\").setAttribute(\"aria-pressed\", String(theme === \"dark\"));")
+                .contains("applyTheme(storedTheme());")
+                .contains("$(\"theme-toggle\").addEventListener(\"click\", toggleTheme);");
+        assertThat(theme.substring(theme.indexOf("function toggleTheme() {"))).contains("localStorage.setItem(THEME_KEY, ")
+                .contains("} catch (e) {");
+    }
+
+    // Covers: 24.3, 9.1 P9, 23.2 (the stepper's ending comes from the failure_reason in plain text, never the code: each
+    // row of 24.3's table; the two code families by prefix; P9 names the refused total and the budget from the intent
+    // answer, as text; any other reason falls back to the state's text)
+    @Test
+    void theEnding_isTheReasonInPlainText_neverTheCode() throws IOException {
+        String steps = block(read("console.js"), "milestones");
+        java.util.Map<String, String> rows = new java.util.LinkedHashMap<>();
+        rows.put("approval_rejected", "Rejected by you");
+        rows.put("approval_expired", "The approval expired: no order was placed");
+        rows.put("handoff_timeout", "The handoff to the store timed out: no order was placed");
+        rows.put("price_unstable", "The store's price kept changing: no order was placed");
+        rows.put("policy_P1", "This store is not allowed: no order was placed");
+        rows.put("policy_P2", "Above the limit for one purchase: no order was placed");
+        rows.put("policy_P3", "Above your limit for the last 24 hours: no order was placed");
+        rows.put("policy_P4", "Too many items or too large a quantity: no order was placed");
+        rows.put("policy_P5", "Too many proposals in the last hour: no order was placed");
+        rows.put("policy_I12", "The agent buys only at stores the operator owns: no order was placed");
+        rows.put("out_of_stock", "Out of stock at the store: no order was placed");
+        rows.put("item_unavailable", "The item is not available at the store: no order was placed");
+        rows.put("quantity_adjusted", "The store changed the quantity: no order was placed");
+        rows.put("quote_lines_differ", "The store's quote did not match the request: no order was placed");
+        rows.put("quote_unsupported", "The store's checkout needs something the agent cannot provide: no order was placed");
+        rows.put("fulfillment_unsupported", "The store offered no delivery the agent can choose: no order was placed");
+        rows.put("quote_retries_exhausted", "The store did not answer with a quote: no order was placed");
+        rows.put("create_rejected", "The store refused the checkout: no order was placed");
+        rows.put("update_rejected", "The store refused the checkout: no order was placed");
+        rows.put("payment_declined", "The payment was declined: no order was placed");
+        rows.put("payment_invalid", "The payment was not accepted: no order was placed");
+        rows.put("canceled_by_merchant", "The store cancelled the checkout: no order was placed");
+        rows.put("complete_unavailable", "This store does not take orders from the agent: no order was placed");
+        rows.put("session_gone", "The checkout is no longer available at the store: no order was placed");
+        rows.put("continue_url_not_allowed", "The store's checkout link was not allowed: no order was placed");
+        rows.put("outcome_unknown", "Stopped: the store did not confirm whether an order was placed; a person needs to check");
+        rows.put("approval_invalid", "Stopped: the approval could not be confirmed; a person needs to check");
+        rows.put("merchant_changed", "Stopped: the store's settings changed; a person needs to check");
+        rows.put("merchant_not_owned", "Stopped: the store's settings changed; a person needs to check");
+        rows.put("handoff_status_unexpected",
+                "Stopped: the store reported an unexpected checkout status; a person needs to check");
+
+        assertThat(steps).as("a table of reason texts").contains("const REASON_TEXT = new Map([");
+        String table = steps.substring(steps.indexOf("const REASON_TEXT = new Map(["), steps.indexOf("]);", steps.indexOf("const REASON_TEXT")));
+        rows.forEach((code, text) -> assertThat(table).as(code).contains("[\"" + code + "\", \"" + text + "\"]"));
+        assertThat(table.split("\\],", -1)).as("one entry per row, no other").hasSize(rows.size());
+        assertThat(steps).contains("[\"merchant_error_\", \"The store refused the checkout: no order was placed\"]")
+                .contains("[\"complete_error:\", \"The store refused the order: no order was placed\"]")
+                .contains("\"Over your budget: the store quoted \" + money(quoted.total_minor, quoted.currency)\n"
+                        + "      + \", your budget is \" + money(budget.amount_minor, budget.currency);")
+                .contains("return \"Over your budget: no order was placed\";")
+                .contains("if (reason === \"policy_P9\") {")
+                .contains("return prefixed ? prefixed[1] : ENDINGS.get(intent.state);")
+                .contains("const ending = ENDINGS.has(intent.state) ? endingText(intent) : \"\";");
+        assertThat(steps).as("the code itself is never a label").doesNotContain("label: intent.failure_reason")
+                .doesNotContain("label: reason");
     }
 
     // Covers: 24.3 (the header: the app name, the subtitle, the merchant-mode badge, the user chip and Sign out; the
@@ -185,7 +271,7 @@ class ConsoleStaticTest {
         String card = card(js);
 
         Set<String> allowed = Set.of("snapshot", "lines", "item_id", "title", "quantity", "unit_price_minor", "currency",
-                "total_minor", "expires_at", "token", "merchant_id", "completion", "note");
+                "total_minor", "expires_at", "token", "merchant_id", "completion", "note", "budget");
         Set<String> read = new LinkedHashSet<>();
         Matcher fields = Pattern.compile("\\b(?:approval|snapshot|line)\\.([A-Za-z_]+)").matcher(card);
         while (fields.find()) {
@@ -440,7 +526,7 @@ class ConsoleStaticTest {
 
         for (String label : List.of("\"Proposed\"", "\"Quoted by the store\"", "\"Waiting for your approval\"",
                 "\"Approved by you\"", "\"Handed off to the store\"", "\"Sent to the store\"",
-                "\"Order placed at the store\"", "[\"REJECTED\", \"Rejected by you\"]",
+                "\"Order placed at the store\"", "[\"REJECTED\", \"Rejected: no order was placed\"]",
                 "[\"FAILED_NOT_CHARGED\", \"Stopped: no order was placed\"]",
                 "[\"ESCALATED\", \"Stopped: the outcome needs a person to check\"]")) {
             assertThat(steps).as("the stepper names " + label).contains(label);
@@ -557,5 +643,94 @@ class ConsoleStaticTest {
         assertThat(js).contains("PRICE_CHANGED").contains("Price changed: re-quoting")
                 .contains("Approved by you").contains("Rejected by you")
                 .doesNotContain("\"Approval \" + (p.decision");
+    }
+
+    // Covers: 24.3, 23.1, P9 (the send form has an optional Budget field, an amount and a currency, each with a label;
+    // a 44 px target like every control)
+    @Test
+    void sendForm_hasALabelledBudgetField_withACurrency() throws IOException {
+        String html = read("index.html");
+        String form = html.substring(html.indexOf("<form id=\"send\""), html.indexOf("</form>"));
+
+        assertThat(form).contains("<label for=\"budget\">Budget (optional)</label>")
+                .contains("<input id=\"budget\" name=\"budget\" type=\"text\" inputmode=\"decimal\" maxlength=\"16\">")
+                .contains("<label for=\"budget-currency\" class=\"sr-only\">Budget currency</label>")
+                .contains("<select id=\"budget-currency\" name=\"budget-currency\">"
+                        + "<option>USD</option><option>EUR</option><option>GBP</option></select>");
+        assertThat(form.indexOf("id=\"budget\"")).as("the field follows the message box")
+                .isGreaterThan(form.indexOf("id=\"message\""));
+    }
+
+    // Covers: 24.3, P9 (the pre-fill reads an amount with a limit word from the message, with a $, € or £ sign or a code)
+    @Test
+    void budgetPrefill_knowsTheLimitWords_andTheCurrencySigns() throws IOException {
+        String budget = block(read("console.js"), "budget");
+
+        assertThat(budget).contains("function budgetFromMessage(text) {");
+        for (String word : List.of("under", "below", "max", "maximum", "no more than", "at most", "less than",
+                "or less", "$", "€", "£", "USD", "EUR", "GBP")) {
+            assertThat(budget).as("the pre-fill knows " + word).contains(word);
+        }
+    }
+
+    // Covers: 24.3, P9 (the pre-fill only fills the field, visibly, while the user has not touched it; once the user edits
+    // or clears the field, or changes its currency, typing never fills it again; during a continuation it never runs)
+    @Test
+    void budgetPrefill_onlyFillsAnUntouchedField_andAnEditedFieldWins() throws IOException {
+        String js = read("console.js");
+        String budget = block(js, "budget");
+
+        assertThat(budget).contains("let budgetTouched = false;")
+                .contains("function onMessageInput() {\n"
+                        + "  if (budgetTouched || continuingRun()) {\n"
+                        + "    return;\n"
+                        + "  }\n"
+                        + "  const found = budgetFromMessage($(\"message\").value);\n"
+                        + "  $(\"budget\").value = found ? found.amount : \"\";\n"
+                        + "  if (found) {\n"
+                        + "    $(\"budget-currency\").value = found.currency;\n"
+                        + "  }\n"
+                        + "}");
+        assertThat(js).contains("$(\"message\").addEventListener(\"input\", onMessageInput);")
+                .contains("$(\"budget\").addEventListener(\"input\", () => {\n    budgetTouched = true;\n  });")
+                .contains("$(\"budget-currency\").addEventListener(\"change\", () => {\n    budgetTouched = true;\n  });");
+        assertThat(js.replace("let budgetTouched = false;", "").replace("budgetTouched = true;", ""))
+                .as("nothing else sets the flag, so a pre-fill never counts as the user's edit")
+                .doesNotContain("budgetTouched = ");
+    }
+
+    // Covers: 24.3, 23.1, P9 (only the field is sent, on a new run only: the send handler never parses the message, a
+    // continuation sends the message alone, and the field is disabled while a run continues)
+    @Test
+    void send_sendsOnlyTheField_onANewRunOnly() throws IOException {
+        String js = read("console.js");
+        String send = js.substring(js.indexOf("async function send(event) {"), js.indexOf("function showRun(run) {"));
+        String budget = block(js, "budget");
+
+        assertThat(send).doesNotContain("budgetFromMessage")
+                .contains("const budget = continuing ? {} : budgetToSend();")
+                .contains("? await api(\"POST\", \"/api/runs/\" + currentRun.id + \"/messages\", {message: text})")
+                .contains(": await api(\"POST\", \"/api/runs\", Object.assign({message: text}, budget));");
+        String toSend = budget.substring(budget.indexOf("function budgetToSend() {"));
+        toSend = toSend.substring(0, toSend.indexOf("\n}\n") + 2);
+        assertThat(toSend).contains("$(\"budget\").value").contains("$(\"budget-currency\").value")
+                .contains("budget_minor").contains("currency").doesNotContain("message");
+        assertThat(budget).contains("$(\"budget\").disabled = continuingRun();")
+                .contains("$(\"budget-currency\").disabled = continuingRun();");
+    }
+
+    // Covers: 24.3, 23.2, P9, I2 (the card shows the user's budget from the approval answer's budget field only, under
+    // the total; at a handoff merchant it says the budget is before the store's shipping and tax)
+    @Test
+    void approvalCard_showsTheBudget_fromTheAnswerOnly() throws IOException {
+        String card = card(read("console.js"));
+
+        assertThat(card).contains("if (approval.budget) {\n"
+                + "    card.appendChild(el(\"p\", \"Your budget: \" + money(approval.budget.amount_minor, approval.budget.currency)\n"
+                + "        + (approval.completion === \"handoff\" ? \" (before the store's shipping and tax)\" : \"\"), \"budget-line\"));\n"
+                + "  }");
+        assertThat(card.indexOf("if (approval.budget) {")).as("under the total row")
+                .isGreaterThan(card.indexOf("card.appendChild(table);"))
+                .isLessThan(card.indexOf("const info = el(\"div\", null, \"info\");"));
     }
 }

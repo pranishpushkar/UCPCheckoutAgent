@@ -19,6 +19,7 @@ import dev.ucplab.core.identity.UserId;
 import dev.ucplab.core.intent.AttemptId;
 import dev.ucplab.core.intent.AttemptOp;
 import dev.ucplab.core.intent.AttemptStatus;
+import dev.ucplab.core.intent.Budget;
 import dev.ucplab.core.intent.DuplicateIntentException;
 import dev.ucplab.core.intent.HandoffWatch;
 import dev.ucplab.core.intent.IntentEvent;
@@ -70,6 +71,7 @@ import dev.ucplab.core.merchant.Transport;
 import dev.ucplab.core.merchant.UpdateCheckout;
 import dev.ucplab.core.policy.PolicyDecision;
 import dev.ucplab.core.policy.PolicyEngine;
+import dev.ucplab.core.policy.PolicyRule;
 import dev.ucplab.core.policy.RequoteOutcome;
 import dev.ucplab.core.policy.RequotePolicy;
 import java.net.URI;
@@ -323,15 +325,17 @@ public final class DefaultOrchestrator implements Orchestrator {
      * An identical active proposal returns the existing intent (7.7).
      */
     @Override
-    public ProposalResult propose(AuthContext auth, MerchantId merchantId, List<ProposedLine> lines, String rationale) {
+    public ProposalResult propose(AuthContext auth, MerchantId merchantId, List<ProposedLine> lines, String rationale,
+            Optional<Budget> budget) {
         Objects.requireNonNull(auth, "auth");
         Objects.requireNonNull(merchantId, "merchantId");
         Objects.requireNonNull(lines, "lines");
         Objects.requireNonNull(rationale, "rationale");
+        Objects.requireNonNull(budget, "budget");
         if (lines.isEmpty()) {
             throw new IllegalArgumentException("a proposal needs at least one line");
         }
-        String dedupeKey = dedupeKey(auth.user(), merchantId, lines);
+        String dedupeKey = dedupeKey(auth.user(), merchantId, lines, budget);
         Optional<ProposalResult> existing = existingProposal(auth.user(), dedupeKey);
         if (existing.isPresent()) {
             return existing.get();
@@ -350,6 +354,7 @@ public final class DefaultOrchestrator implements Orchestrator {
         PurchaseIntent intent = PurchaseIntent.proposed(new IntentId(ids.next()), auth.user(), merchantId,
                         entry.map(MerchantEntry::fingerprint).orElse(OwnStoreGuard.NO_ENTRY), dedupeKey, lines,
                         auth.email(), now)
+                .withBudget(budget)
                 .withState(t.to(), now)
                 .withLease(Optional.of(workerId), Optional.of(now.plus(config.lease())));
         if (!allowed) {
@@ -378,8 +383,8 @@ public final class DefaultOrchestrator implements Orchestrator {
 
         // Quote now: one create call. Retries live in the gateway (7.2, 8.2); this never loops.
         Step last = step(intent.id());
-        return new ProposalResult(intent.id(), last.after(),
-                last.after() == AWAITING_APPROVAL ? last.quote() : Optional.empty());
+        // The quote of a step that opened the approval, or of one whose quote policy refused; no other step has one.
+        return new ProposalResult(intent.id(), last.after(), last.quote());
     }
 
     @Override
@@ -431,9 +436,16 @@ public final class DefaultOrchestrator implements Orchestrator {
 
     /** {@code dedupe_key = sha256(userId + '|' + merchantId + '|' + sorted(itemId:quantity))} (7.7), comma-joined. */
     public static String dedupeKey(UserId user, MerchantId merchantId, List<ProposedLine> lines) {
+        return dedupeKey(user, merchantId, lines, Optional.empty());
+    }
+
+    /** 7.7: with the run's budget appended when it has one, so proposals under different budgets never share an intent. */
+    public static String dedupeKey(UserId user, MerchantId merchantId, List<ProposedLine> lines, Optional<Budget> budget) {
         String items = lines.stream().map(l -> l.itemId() + ':' + l.quantity()).sorted()
                 .collect(Collectors.joining(","));
-        return Sha256.hex(user.value() + '|' + merchantId.value() + '|' + items);
+        // No lambda: a new one here would renumber those the mutation equivalents name.
+        String limit = budget.isPresent() ? "|" + budget.get().currency() + ':' + budget.get().amountMinor() : "";
+        return Sha256.hex(user.value() + '|' + merchantId.value() + '|' + items + limit);
     }
 
     // ---------------------------------------------------------------- the step function (7.3)
@@ -818,13 +830,15 @@ public final class DefaultOrchestrator implements Orchestrator {
     private Step quoteReady(
             PurchaseIntent base, MerchantAttempt attempt, Optional<Integer> http, Optional<String> summary,
             CheckoutView view, TransitionEvent event) {
-        PolicyDecision decision = policy.evaluateQuote(base.owner(), view);
+        PolicyDecision decision = policy.evaluateQuote(base.owner(), view, base.budget());
         if (!decision.allowed()) {
             // DESIGN GAP: table 7.2 has no QUOTING row for a quote that policy denies (P2, P3, P4). This uses the
             // QUOTING -> FAILED_NOT_CHARGED row with a best-effort cancel; failure_reason names the rule.
-            policyEvent(base.id(), "quote", decision);
-            return finish(base, attempt, AttemptStatus.RESPONDED, http, summary,
+            quoteDeniedEvent(base.id(), decision, view, base.budget());
+            Step denied = finish(base, attempt, AttemptStatus.RESPONDED, http, summary,
                     move(base, TransitionEvent.ITEM_UNAVAILABLE), policyReason(decision));
+            // The refused quote goes back with the result, so propose_purchase can name the total P9 refused (6.2).
+            return new Step(denied.before(), denied.after(), denied.idle(), Optional.of(view));
         }
         Optional<RequoteOutcome> p7 = Optional.empty();
         if (base.requoteCount() > 0) {
@@ -2016,5 +2030,25 @@ public final class DefaultOrchestrator implements Orchestrator {
                 "status", a.status().name(), "sent_at", a.sentAt().toString())).toList()));
         transitionEvent(intent.id(), m.transition());
         return moved(intent, next);
+    }
+
+    /**
+     * A quote's policy denial, as {@link #policyEvent} records one; a P9 denial also stores the quoted total and the
+     * budget, numbers only, so the refusal can be explained from what was stored (9.1, 23.2 refused_quote). No lambda:
+     * the mutation equivalents name lambdas by number.
+     */
+    private void quoteDeniedEvent(IntentId id, PolicyDecision decision, CheckoutView view, Optional<Budget> budget) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("stage", "quote");
+        payload.put("allowed", false);
+        PolicyRule rule = decision.ruleId().orElseThrow();
+        payload.put("rule", rule.name());
+        payload.put("reason", decision.reason());
+        if (rule == PolicyRule.P9) {
+            payload.put("quoted", Map.of("currency", view.currency(), "total_minor", view.totalMinor()));
+            payload.put("budget", Map.of("amount_minor", budget.orElseThrow().amountMinor(),
+                    "currency", budget.orElseThrow().currency()));
+        }
+        event(id, "policy_decision", payload);
     }
 }

@@ -7,6 +7,7 @@ import dev.ucplab.core.agent.RunRepository;
 import dev.ucplab.core.id.IdGenerator;
 import dev.ucplab.core.identity.AuthContext;
 import dev.ucplab.core.identity.UserId;
+import dev.ucplab.core.intent.Budget;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentRepository;
 import dev.ucplab.core.intent.IntentState;
@@ -172,8 +173,16 @@ public final class RunSupervisor implements AutoCloseable {
         }
     }
 
-    /** Starts a run for the caller and waits for its first settle point (23.1 {@code POST /api/runs}). */
+    /** Starts a run with no budget. */
     public RunView start(AuthContext auth, String message) {
+        return start(auth, message, Optional.empty());
+    }
+
+    /**
+     * Starts a run for the caller and waits for its first settle point (23.1 {@code POST /api/runs}). {@code budget} is
+     * the user's own budget for the run, from the request body only (P9).
+     */
+    public RunView start(AuthContext auth, String message, Optional<Budget> budget) {
         Objects.requireNonNull(auth, "auth");
         Objects.requireNonNull(message, "message");
         refuseWhenClosing();
@@ -192,7 +201,8 @@ public final class RunSupervisor implements AutoCloseable {
         live.put(id, run);
         CompletableFuture<Phase> first = run.settled.get();
         RunTrace trace = new RunTrace(id);
-        launch(run, trace, () -> runtime.start(auth, id, message, run.channel(), trace));
+        Objects.requireNonNull(budget, "budget");
+        launch(run, trace, () -> runtime.start(auth, id, message, run.channel(), trace, budget));
         return await(run, first);
     }
 

@@ -6,6 +6,7 @@ import dev.ucplab.core.MutableClock;
 import dev.ucplab.core.approval.InMemoryApprovalRepository;
 import dev.ucplab.core.identity.AuthContext;
 import dev.ucplab.core.identity.UserId;
+import dev.ucplab.core.intent.Budget;
 import dev.ucplab.core.intent.InMemoryIntentRepository;
 import dev.ucplab.core.intent.InMemoryRecoveryScan;
 import dev.ucplab.core.intent.IntentId;
@@ -36,7 +37,7 @@ class RecoveryWorkerParkingTest {
     /** Every advance asks to be called again in 20 s: longer than half the 30 s lease, so the worker parks the intent. */
     private static final class LongWait implements Orchestrator {
         @Override
-        public ProposalResult propose(AuthContext auth, MerchantId merchant, List<ProposedLine> lines, String why) {
+        public ProposalResult propose(AuthContext auth, MerchantId merchant, List<ProposedLine> lines, String why, Optional<Budget> budget) {
             throw new UnsupportedOperationException();
         }
 

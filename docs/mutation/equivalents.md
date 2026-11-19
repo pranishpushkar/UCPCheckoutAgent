@@ -4,7 +4,7 @@ An entry counts only with the owner's `approved:` line, which a session adds onl
 A mutant is matched by class, method, mutator and description, never by line, so a refactor does not silently invalidate an entry.
 A mutant on a star path that is listed here is the only kind of survivor allowed there; "unreachable code" is a finding, not an equivalent.
 
-Format, one block per mutant. **An entry without an `approved:` line is only a proposal and still counts as a survivor.** The owner's decisions of 2026-11-15 on entries 1 to 22 are recorded below (entry 2 was refused and killed by a test, so it is gone; the numbers of the others are kept). Entry 21 is "justified", not equivalent. Entries 66 and 67 (P8) were refused and are gone: `CircuitBreaker.tryAcquire` is an exhaustive switch with no `default`. Entries 63 to 65 (the constant returns of the old switch) went with it: the rewritten switch has no such mutant (PIT, run `ucpE`). Entries 24 and 30 (P7) were refused and killed by tests, so they are gone too. Entries 8, 9, 11 and 12 are about the text of an IllegalArgumentException, which is deliberately not asserted.
+Format, one block per mutant. **An entry without an `approved:` line is only a proposal and still counts as a survivor.** The owner's decisions of 2026-11-15 on entries 1 to 22 are recorded below (entry 2 was refused and killed by a test, so it is gone; the numbers of the others are kept). Entry 21 is "justified", not equivalent. Entries 66 and 67 (P8) were refused and are gone: `CircuitBreaker.tryAcquire` is an exhaustive switch with no `default`. Entries 63 to 65 (the constant returns of the old switch) went with it: the rewritten switch has no such mutant (PIT, run `ucpE`). Entries 24 and 30 (P7) were refused and killed by tests, so they are gone too. Entries 8, 9, 11 and 12 are about the text of an IllegalArgumentException, which is deliberately not asserted. Entry 27 went with the code it was about (2026-11-19, the budget work, #26): `propose` now returns the step's quote, which a P9 refusal also carries (7.7), so the `last.after() == AWAITING_APPROVAL` choice is gone and PIT has no such mutant.
 
 ```
 ### <fully qualified class>.<method> <mutator name>
@@ -164,12 +164,6 @@ Format, one block per mutant. **An entry without an `approved:` line is only a p
 - the test that shows it: `OrchestratorQuoteMutationTest.aDeniedProposal_isRejectedWithNoQuoteAndNoCall_andAnAllowedOneCarriesItsQuote` passes with and without the mutation; `OrchestratorOwnStoreTest.propose_atAnUnownedEntry_isDeniedWithI12_beforeThePolicyEngine` likewise
 - approved: owner 2026-11-15
 - wording extended for the I12 denial: owner 2026-11-16
-
-### 27. dev.ucplab.core.orchestrator.DefaultOrchestrator.propose RemoveConditionalMutator_EQUAL_IF (the `last.after() == AWAITING_APPROVAL` choice of quote)
-- description: removed conditional - replaced equality check with true (the step's quote is always returned)
-- why it is equivalent: a `Step` carries a quote only from `quoteReady`, which is the step that ends in AWAITING_APPROVAL; every other step's quote is already empty
-- the test that shows it: the same test
-- approved: owner 2026-11-15
 
 ### 28. dev.ucplab.core.orchestrator.DefaultOrchestrator.nextAttemptAt ConditionalsBoundaryMutator (`elapsed < pollInitial`)
 - description: changed conditional boundary
@@ -475,13 +469,15 @@ Format, one block per mutant. **An entry without an `approved:` line is only a p
 - description: removed call to java/sql/PreparedStatement::setNull
 - why it is equivalent: justified: SQLite binds an unbound parameter as NULL (every statement is opened fresh in a try-with-resources). PIT removes the call and keeps the evaluation of its argument `n++`, so the placeholder stays unbound and is bound as NULL (the same value `setNull` writes). Checked by hand: removing the call and its `n++` is red, removing the call alone is green
 - the test that shows it: `IntentRepositoryContract.recordAttempt_keepsEveryFieldOfTheAttempt` (an attempt with no http status) passes with and without the mutation
-- approved: owner 2026-11-15
+- condition: equivalent only while every PreparedStatement is fresh and the driver is sqlite-jdbc. A statement cache, or a driver that refuses an unset parameter (pgjdbc, M7), makes it a survivor: revisit and kill 83, 84, 90 and 91 before either lands (the SQL statement cache item of `docs/follow-ups.md`)
+- approved: owner 2026-11-15; the condition added by the owner 2026-11-19
 
 ### 84. dev.ucplab.persistence.SqlIntentRepository.updateAttempt VoidMethodCallMutator (the `setNull` of an absent http status)
 - description: removed call to java/sql/PreparedStatement::setNull
 - why it is equivalent: as 83: justified: SQLite binds an unbound parameter as NULL (every statement is opened fresh in a try-with-resources)
 - the test that shows it: `IntentRepositoryContract.resolveAttempt*` (a resolve with no http status) pass with and without the mutation
-- approved: owner 2026-11-15
+- condition: equivalent only while every PreparedStatement is fresh and the driver is sqlite-jdbc. A statement cache, or a driver that refuses an unset parameter (pgjdbc, M7), makes it a survivor: revisit and kill 83, 84, 90 and 91 before either lands (the SQL statement cache item of `docs/follow-ups.md`)
+- approved: owner 2026-11-15; the condition added by the owner 2026-11-19
 
 ### 85. dev.ucplab.persistence.SqlIntentRepository.lambda$claimRecoverable$14 RemoveConditionalMutator_EQUAL_ELSE (the `excluded.isEmpty()` test)
 - description: removed conditional - replaced equality check with false
@@ -514,3 +510,21 @@ Format, one block per mutant. **An entry without an `approved:` line is only a p
 - why it is equivalent: as 43 for send_complete, whose order 7.2 hand_off mirrors: `approvals.transition(APPROVED, CONSUMED)` is a compare-and-set on the expected status, so for an approval that is already CONSUMED it changes nothing and returns false
 - the test that shows it: `HandoffTest.handOff_storesTheUrl_consumesTheApproval_andNeverCompletes` and `aPendingApprovalUnderAnApprovedIntent_isRecovered_thenConsumed_atHandOff` pass with and without the mutation
 - approved: owner 2026-11-16
+
+## From the user's budget (P9, #26)
+
+SqlIntentRepository runs only on SQLite today: sqlite-jdbc is the only driver, `Database` opens only `jdbc:sqlite:` URLs and the service refuses any other DATABASE_URL (25.4). Postgres is M7.
+
+### 90. dev.ucplab.persistence.SqlIntentRepository.setBudget VoidMethodCallMutator (the `setNull` of an absent budget's `budget_minor`)
+- description: removed call to java/sql/PreparedStatement::setNull
+- why it is equivalent: as 83: SQLite binds an unbound parameter as NULL, and the insert's statement is opened fresh in a try-with-resources, so the placeholder stays unbound and is stored as NULL, the value `setNull` writes. The other mutant of the same line, `setString(n - 1, null)` over the store order label, is killed by `IntentRepositoryContract.insert_withoutABudget_keepsTheHandoffWatchBesideIt`
+- the test that shows it: `IntentRepositoryContract.insert_storesTheBudget_andEveryReadReturnsIt` (`i2`, no budget) and `insert_withoutABudget_keepsTheHandoffWatchBesideIt` pass with and without the mutation
+- condition: equivalent only while every PreparedStatement is fresh and the driver is sqlite-jdbc. A statement cache, or a driver that refuses an unset parameter (pgjdbc, M7), makes it a survivor: revisit and kill 83, 84, 90 and 91 before either lands (the SQL statement cache item of `docs/follow-ups.md`)
+- approved: owner 2026-11-19, on the condition above
+
+### 91. dev.ucplab.persistence.SqlIntentRepository.setBudget VoidMethodCallMutator (the `setString(n + 1, null)` of an absent budget's `budget_currency`)
+- description: removed call to java/sql/PreparedStatement::setString
+- why it is equivalent: as 90, for the second column of the pair: unbound is NULL, the value the call writes. V11's CHECK (both set or both null) holds either way
+- the test that shows it: as 90
+- condition: equivalent only while every PreparedStatement is fresh and the driver is sqlite-jdbc. A statement cache, or a driver that refuses an unset parameter (pgjdbc, M7), makes it a survivor: revisit and kill 83, 84, 90 and 91 before either lands (the SQL statement cache item of `docs/follow-ups.md`)
+- approved: owner 2026-11-19, on the condition above

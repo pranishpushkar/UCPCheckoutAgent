@@ -1,5 +1,6 @@
 package dev.ucplab.eval;
 
+import dev.ucplab.core.intent.Budget;
 import dev.ucplab.runtime.BudgetLimit;
 import java.util.List;
 import java.util.Objects;
@@ -21,9 +22,11 @@ import java.util.Set;
  *     first called
  * @param noSideEffects the row's claim is section 8's: no intent, no approval, only discovery and catalog reads on the
  *     wire, and no new order
+ * @param budget the user's budget for the run (23.1, P9), as the Budget field would send it; none for most rows
  */
 public record AgentSpec(String userMessage, Plan plan, List<String> userAnswers, Set<String> runOutcomes,
-                        int minIntents, int maxIntents, boolean askFirst, boolean noSideEffects) {
+                        int minIntents, int maxIntents, boolean askFirst, boolean noSideEffects,
+                        Optional<Budget> budget) {
 
     /** The script of one run. */
     @FunctionalInterface
@@ -61,6 +64,20 @@ public record AgentSpec(String userMessage, Plan plan, List<String> userAnswers,
         if (noSideEffects && maxIntents != 0) {
             throw new IllegalArgumentException("a row with no side effects leaves no intent");
         }
+        Objects.requireNonNull(budget, "budget");
+    }
+
+    /** A row whose run has no budget. */
+    public AgentSpec(String userMessage, Plan plan, List<String> userAnswers, Set<String> runOutcomes, int minIntents,
+                     int maxIntents, boolean askFirst, boolean noSideEffects) {
+        this(userMessage, plan, userAnswers, runOutcomes, minIntents, maxIntents, askFirst, noSideEffects,
+                Optional.empty());
+    }
+
+    /** This row with the user's budget for its run. */
+    public AgentSpec withBudget(Budget runBudget) {
+        return new AgentSpec(userMessage, plan, userAnswers, runOutcomes, minIntents, maxIntents, askFirst,
+                noSideEffects, Optional.of(runBudget));
     }
 
     /** A row with one script for every run. */

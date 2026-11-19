@@ -6,6 +6,7 @@ import static dev.ucplab.core.orchestrator.Lab.TWO_SHIRTS;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import dev.ucplab.core.identity.UserId;
+import dev.ucplab.core.intent.Budget;
 import dev.ucplab.core.intent.IntentEvent;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentState;
@@ -58,7 +59,7 @@ class OrchestratorOwnStoreTest {
         }
 
         @Override
-        public PolicyDecision evaluateQuote(UserId user, CheckoutView quote) {
+        public PolicyDecision evaluateQuote(UserId user, CheckoutView quote, Optional<Budget> budget) {
             throw new AssertionError("the PolicyEngine was asked");
         }
     };

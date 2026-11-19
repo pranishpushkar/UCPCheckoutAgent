@@ -13,6 +13,7 @@ import dev.ucplab.core.approval.PendingApproval;
 import dev.ucplab.core.id.SequentialIdGenerator;
 import dev.ucplab.core.identity.AuthContext;
 import dev.ucplab.core.identity.UserId;
+import dev.ucplab.core.intent.Budget;
 import dev.ucplab.core.intent.InMemoryIntentRepository;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentRepository;
@@ -214,6 +215,11 @@ final class Lab {
 
     ProposalResult propose(Worker w, List<ProposedLine> lines) {
         return w.orchestrator().propose(alice(), SHOP, lines, "two red t-shirts");
+    }
+
+    /** A proposal under the run's budget (P9), as the propose tool makes from its run. */
+    ProposalResult proposeWithin(Worker w, List<ProposedLine> lines, Budget budget) {
+        return w.orchestrator().propose(alice(), SHOP, lines, "two red t-shirts", Optional.of(budget));
     }
 
     ProposalResult proposeAt(Worker w, MerchantId merchantId, List<ProposedLine> lines) {

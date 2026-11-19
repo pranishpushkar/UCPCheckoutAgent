@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.ucplab.core.identity.UserId;
+import dev.ucplab.core.intent.Budget;
 import dev.ucplab.core.intent.ProposedLine;
 import dev.ucplab.core.merchant.CheckoutStatus;
 import dev.ucplab.core.merchant.CheckoutView;
@@ -146,14 +147,45 @@ class RuleBasedPolicyEngineTest {
     // Covers: P2, P3, P4, FR7 (a quote within every limit is allowed)
     @Test
     void evaluateQuote_allows_whenEveryRulePasses() {
-        assertThat(engine.evaluateQuote(ALICE, quote(20_000)).allowed()).isTrue();
+        assertThat(engine.evaluateQuote(ALICE, quote(20_000), Optional.empty()).allowed()).isTrue();
     }
 
     // Covers: P2, FR7 (a total of exactly the cap is allowed; one minor unit more is denied)
     @Test
     void evaluateQuote_deniesWithP2_aboveCap() {
-        assertThat(engine.evaluateQuote(ALICE, quote(20_000)).allowed()).isTrue();
-        assertThat(engine.evaluateQuote(ALICE, quote(20_001)).ruleId()).contains(PolicyRule.P2);
+        assertThat(engine.evaluateQuote(ALICE, quote(20_000), Optional.empty()).allowed()).isTrue();
+        assertThat(engine.evaluateQuote(ALICE, quote(20_001), Optional.empty()).ruleId()).contains(PolicyRule.P2);
+    }
+
+    // Covers: P9, 9.1 (exact: a total equal to the user's budget is allowed; one minor unit more is denied with P9)
+    @Test
+    void evaluateQuote_deniesWithP9_aboveTheBudget_andAllowsTheBudgetExactly() {
+        Optional<Budget> budget = Optional.of(new Budget(5_000, "USD"));
+
+        assertThat(engine.evaluateQuote(ALICE, quote(5_000), budget).allowed()).isTrue();
+        PolicyDecision over = engine.evaluateQuote(ALICE, quote(5_001), budget);
+        assertThat(over.allowed()).isFalse();
+        assertThat(over.ruleId()).contains(PolicyRule.P9);
+        assertThat(over.reason()).contains("5001").contains("5000");
+    }
+
+    // Covers: P9, 9.1 (a quote in another currency than the budget's is denied with P9, even when the number fits)
+    @Test
+    void evaluateQuote_deniesWithP9_whenTheCurrencyDiffers() {
+        PolicyDecision d = engine.evaluateQuote(ALICE, quote(100), Optional.of(new Budget(5_000, "EUR")));
+
+        assertThat(d.ruleId()).contains(PolicyRule.P9);
+        assertThat(d.reason()).contains("USD").contains("EUR");
+    }
+
+    // Covers: P9, 9.1 (an intent without a budget skips P9; P2 still names the first failing rule before P9)
+    @Test
+    void evaluateQuote_skipsP9_withoutABudget_andP2ComesFirst() {
+        assertThat(engine.evaluateQuote(ALICE, quote(19_999), Optional.empty()).allowed()).isTrue();
+        assertThat(engine.evaluateQuote(ALICE, quote(20_001), Optional.of(new Budget(10, "USD"))).ruleId())
+                .contains(PolicyRule.P2);
+        assertThat(engine.evaluateQuote(ALICE, quote(15), Optional.of(new Budget(10, "USD"))).ruleId())
+                .contains(PolicyRule.P9);
     }
 
     // Covers: P3, T5 (spent over the last 24 hours + quote may reach the cap but not exceed it)
@@ -161,8 +193,8 @@ class RuleBasedPolicyEngineTest {
     void evaluateQuote_deniesWithP3_when24HourTotalWouldExceedCap() {
         usage.spend.put(ALICE, 35_000L);
 
-        assertThat(engine.evaluateQuote(ALICE, quote(15_000)).allowed()).isTrue();
-        assertThat(engine.evaluateQuote(ALICE, quote(15_001)).ruleId()).contains(PolicyRule.P3);
+        assertThat(engine.evaluateQuote(ALICE, quote(15_000), Optional.empty()).allowed()).isTrue();
+        assertThat(engine.evaluateQuote(ALICE, quote(15_001), Optional.empty()).ruleId()).contains(PolicyRule.P3);
     }
 
     // Covers: P3, T5 (spend is per user: another user's spend does not count)
@@ -170,7 +202,7 @@ class RuleBasedPolicyEngineTest {
     void evaluateQuote_countsOnlyTheUsersOwnSpend_forP3() {
         usage.spend.put(BOB, 50_000L);
 
-        assertThat(engine.evaluateQuote(ALICE, quote(10_000)).allowed()).isTrue();
+        assertThat(engine.evaluateQuote(ALICE, quote(10_000), Optional.empty()).allowed()).isTrue();
     }
 
     // Covers: P3 (spend already above the cap denies without overflow)
@@ -178,13 +210,13 @@ class RuleBasedPolicyEngineTest {
     void evaluateQuote_deniesWithP3_whenSpendAlreadyHuge() {
         usage.spend.put(ALICE, Long.MAX_VALUE);
 
-        assertThat(engine.evaluateQuote(ALICE, quote(1)).ruleId()).contains(PolicyRule.P3);
+        assertThat(engine.evaluateQuote(ALICE, quote(1), Optional.empty()).ruleId()).contains(PolicyRule.P3);
     }
 
     // Covers: P3, section 20 (the window is the rolling last 24 hours, read live from the clock, not a calendar day)
     @Test
     void evaluateQuote_asksForTheLast24Hours_forP3() {
-        engine.evaluateQuote(ALICE, quote(100));
+        engine.evaluateQuote(ALICE, quote(100), Optional.empty());
 
         assertThat(usage.windows).containsExactly(new Window(ALICE, Instant.parse("2026-11-07T15:30:00Z"), NOW));
     }
@@ -196,7 +228,7 @@ class RuleBasedPolicyEngineTest {
         PolicyEngine late = new RuleBasedPolicyEngine(PolicyConfig.defaults(),
                 RuleBasedPolicyEngineTest::registry, usage, Clock.fixed(justAfterMidnight, ZoneOffset.UTC));
 
-        late.evaluateQuote(ALICE, quote(100));
+        late.evaluateQuote(ALICE, quote(100), Optional.empty());
 
         assertThat(usage.windows).containsExactly(
                 new Window(ALICE, Instant.parse("2026-11-08T00:05:00Z"), justAfterMidnight));
@@ -208,8 +240,8 @@ class RuleBasedPolicyEngineTest {
         List<LineView> sixLines = IntStream.range(0, 6).mapToObj(i -> new LineView("item_" + i, 1, 10)).toList();
         List<LineView> bigLine = List.of(new LineView("item_123", 6, 10));
 
-        assertThat(engine.evaluateQuote(ALICE, quote(60, sixLines)).ruleId()).contains(PolicyRule.P4);
-        assertThat(engine.evaluateQuote(ALICE, quote(60, bigLine)).ruleId()).contains(PolicyRule.P4);
+        assertThat(engine.evaluateQuote(ALICE, quote(60, sixLines), Optional.empty()).ruleId()).contains(PolicyRule.P4);
+        assertThat(engine.evaluateQuote(ALICE, quote(60, bigLine), Optional.empty()).ruleId()).contains(PolicyRule.P4);
     }
 
     // Covers: P2, P3 (P2 is reported before P3 when both fail)
@@ -217,7 +249,7 @@ class RuleBasedPolicyEngineTest {
     void evaluateQuote_reportsP2BeforeP3_whenBothFail() {
         usage.spend.put(ALICE, 50_000L);
 
-        assertThat(engine.evaluateQuote(ALICE, quote(30_000)).ruleId()).contains(PolicyRule.P2);
+        assertThat(engine.evaluateQuote(ALICE, quote(30_000), Optional.empty()).ruleId()).contains(PolicyRule.P2);
     }
 
     private record Window(UserId user, Instant from, Instant to) {
@@ -238,9 +270,9 @@ class RuleBasedPolicyEngineTest {
                 dev.ucplab.core.merchant.CheckoutStatus.READY_FOR_COMPLETE, "USD", List.of(line), 5000, 400, 5400 + 1500,
                 Optional.empty(), Optional.empty(), List.of(), Optional.empty(), 1500);
 
-        assertThat(engine.evaluateQuote(ALICE, free).allowed()).isTrue();
-        assertThat(engine.evaluateQuote(ALICE, shipped).allowed()).isFalse();
-        assertThat(engine.evaluateQuote(ALICE, shipped).ruleId().orElseThrow().name()).isEqualTo("P3");
+        assertThat(engine.evaluateQuote(ALICE, free, Optional.empty()).allowed()).isTrue();
+        assertThat(engine.evaluateQuote(ALICE, shipped, Optional.empty()).allowed()).isFalse();
+        assertThat(engine.evaluateQuote(ALICE, shipped, Optional.empty()).ruleId().orElseThrow().name()).isEqualTo("P3");
     }
 
     private static final class FakeUsage implements PolicyUsage {

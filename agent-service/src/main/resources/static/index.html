@@ -14,6 +14,7 @@
     </div>
     <div class="who">
       <span id="merchant-mode" class="badge" hidden></span>
+      <button type="button" id="theme-toggle" aria-pressed="false">Dark theme</button>
       <span id="who" class="user-chip">Not signed in</span>
       <button type="button" id="sign-out" hidden>Sign out</button>
     </div>
@@ -32,6 +33,12 @@
       <form id="send" autocomplete="off">
         <label for="message">Message</label>
         <input id="message" name="message" type="text" maxlength="2000" required>
+        <div class="budget">
+          <label for="budget">Budget (optional)</label>
+          <input id="budget" name="budget" type="text" inputmode="decimal" maxlength="16">
+          <label for="budget-currency" class="sr-only">Budget currency</label>
+          <select id="budget-currency" name="budget-currency"><option>USD</option><option>EUR</option><option>GBP</option></select>
+        </div>
         <button type="submit" class="primary">Send</button>
       </form>
     </section>

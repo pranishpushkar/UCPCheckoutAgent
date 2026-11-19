@@ -38,6 +38,8 @@ final class IntentController {
     static final String BAD_LIMIT = "limit must be a number from 1 to " + IntentQueries.MAX_LIMIT;
     static final String BAD_STATE = "state is not a known intent state";
     static final String BAD_CURSOR = "cursor is not valid";
+    /** The failure_reason of a quote P9 refused (9.1). */
+    private static final String OVER_BUDGET = "policy_P9";
 
     private final IntentRepository intents;
     private final ApprovalRepository approvals;
@@ -100,8 +102,29 @@ final class IntentController {
             approval.put("expires_at", a.expiresAt().toString());
             body.put("approval", approval);
         });
+        // 23.2, P9: the intent's own budget, and for a P9 refusal the total it refused, from the stored event (9.1).
+        intent.budget().ifPresent(b -> body.put("budget", Map.of("amount_minor", b.amountMinor(), "currency", b.currency())));
+        if (intent.failureReason().filter(OVER_BUDGET::equals).isPresent()) {
+            refusedQuote(auth, intent).ifPresent(q -> body.put("refused_quote", q));
+        }
         body.put("created_at", intent.createdAt().toString());
         return body;
+    }
+
+    /** The quoted total of the intent's latest P9 denial event, as numbers; empty when no such event names one. */
+    private Optional<Map<String, Object>> refusedQuote(AuthContext auth, PurchaseIntent intent) {
+        Optional<Map<String, Object>> quote = Optional.empty();
+        for (IntentEvent e : queries.events(auth.user(), intent.id())) {
+            if (!e.type().equals("policy_decision")) {
+                continue;
+            }
+            Map<String, Object> payload = LenientJson.readObject(e.payloadJson());
+            if ("P9".equals(payload.get("rule")) && payload.get("quoted") instanceof Map<?, ?> q
+                    && q.get("currency") instanceof String currency && q.get("total_minor") instanceof Number total) {
+                quote = Optional.of(Map.of("currency", currency, "total_minor", total.longValue()));
+            }
+        }
+        return quote;
     }
 
     /**

@@ -197,6 +197,27 @@ class ChecksTest {
 
     // ------------------------------------------------------------------ I3
 
+    // Covers: I3, P9, 14 (an approval of a 5000 USD snapshot for an intent whose budget is 4999 USD, or in EUR, fires I3)
+    @Test
+    void i3_anApprovalAboveTheIntentsBudget_fires() {
+        CheckFixture below = new CheckFixture();
+        below.budget = Optional.of(new dev.ucplab.core.intent.Budget(4_999, "USD"));
+        CheckFixture euros = new CheckFixture();
+        euros.budget = Optional.of(new dev.ucplab.core.intent.Budget(1_000_000, "EUR"));
+
+        assertFires("I3", below, "approved above its budget");
+        assertFires("I3", euros, "approved above its budget");
+    }
+
+    // Covers: I3, P9, 14 (an approval at exactly the intent's budget is clean)
+    @Test
+    void i3_anApprovalAtTheBudget_isClean() {
+        CheckFixture f = new CheckFixture();
+        f.budget = Optional.of(new dev.ucplab.core.intent.Budget(5_000, "USD"));
+
+        assertThat(fire("I3", f)).isEmpty();
+    }
+
     // Covers: I3 (a complete that arrived before its approval)
     @Test
     void i3_completeBeforeItsApproval_fires() {

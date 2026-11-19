@@ -6,6 +6,7 @@ import dev.ucplab.core.MutableClock;
 import dev.ucplab.core.approval.InMemoryApprovalRepository;
 import dev.ucplab.core.identity.AuthContext;
 import dev.ucplab.core.identity.UserId;
+import dev.ucplab.core.intent.Budget;
 import dev.ucplab.core.intent.InMemoryIntentRepository;
 import dev.ucplab.core.intent.InMemoryRecoveryScan;
 import dev.ucplab.core.intent.IntentId;
@@ -23,6 +24,7 @@ import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.storage.StorageException;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Supplier;
 import java.util.logging.Handler;
@@ -102,7 +104,7 @@ class RecoveryLoopReasonTest {
     private static Orchestrator throwingAdvance(Supplier<RuntimeException> failure) {
         return new Orchestrator() {
             @Override
-            public ProposalResult propose(AuthContext auth, MerchantId merchant, List<ProposedLine> lines, String why) {
+            public ProposalResult propose(AuthContext auth, MerchantId merchant, List<ProposedLine> lines, String why, Optional<Budget> budget) {
                 throw new UnsupportedOperationException();
             }
 

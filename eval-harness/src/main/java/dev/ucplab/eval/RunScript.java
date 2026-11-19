@@ -598,7 +598,8 @@ public final class RunScript {
         Optional<RunOutcome> outcome = Optional.empty();
         Optional<String> abort = Optional.empty();
         try {
-            outcome = Optional.of(runtime.run(signedIn, runId, spec.userMessage(), user, trace));
+            outcome = Optional.of(runtime.start(signedIn, runId, spec.userMessage(), user, trace, spec.budget())
+                    .outcome());
             scripted.ifPresent(ScriptedModel::checkToolSequence);
         } catch (ScriptDriftException e) {
             abort = Optional.of("agent run: the script drifted");

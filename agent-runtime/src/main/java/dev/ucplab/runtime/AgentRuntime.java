@@ -10,6 +10,7 @@ import dev.ucplab.core.agent.RunRepository;
 import dev.ucplab.core.agent.ToolCall;
 import dev.ucplab.core.agent.ToolEvent;
 import dev.ucplab.core.identity.AuthContext;
+import dev.ucplab.core.intent.Budget;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentNotFoundException;
 import dev.ucplab.core.intent.IntentState;
@@ -81,12 +82,22 @@ public final class AgentRuntime {
         return start(auth, id, userMessage, user, trace).outcome();
     }
 
-    /** Starts a run, as {@link #run(AuthContext, RunId, String, UserChannel, RunTrace)}, and returns its conversation too. */
+    /** Starts a run with no budget. */
     public RunSession start(AuthContext auth, RunId id, String userMessage, UserChannel user, RunTrace trace) {
+        return start(auth, id, userMessage, user, trace, Optional.empty());
+    }
+
+    /**
+     * Starts a run, as {@link #run(AuthContext, RunId, String, UserChannel, RunTrace)}, and returns its conversation too.
+     * {@code userBudget} is the user's own budget for the run (23.1, P9), never anything the model said.
+     */
+    public RunSession start(AuthContext auth, RunId id, String userMessage, UserChannel user, RunTrace trace,
+                            Optional<Budget> userBudget) {
         check(auth, id, userMessage, user, trace);
-        Run run = new Run(auth, id, user, trace, Optional.empty());
-        runs.insert(auth.user(), RunRecord.started(id, auth.user(), run.modelId, run.start));
-        return run.execute(new Conversation(SystemPrompt.text(), List.of()), userMessage);
+        Objects.requireNonNull(userBudget, "userBudget");
+        Run run = new Run(auth, id, user, trace, Optional.empty(), userBudget);
+        runs.insert(auth.user(), RunRecord.started(id, auth.user(), run.modelId, run.start, userBudget));
+        return run.execute(new Conversation(SystemPrompt.text(userBudget), List.of()), userMessage);
     }
 
     /**
@@ -103,9 +114,10 @@ public final class AgentRuntime {
         Objects.requireNonNull(history, "history");
         RunRecord stored = runs.find(auth.user(), id)
                 .orElseThrow(() -> new IllegalArgumentException("no such run for this user"));
-        Run run = new Run(auth, id, user, trace, Optional.of(stored));
+        Run run = new Run(auth, id, user, trace, Optional.of(stored), stored.budget());
         run.snapshot();
-        return run.execute(history, userMessage);
+        // The hint is rebuilt from the stored budget, never carried over from the history (6.4).
+        return run.execute(new Conversation(SystemPrompt.text(stored.budget()), history.messages()), userMessage);
     }
 
     private static void check(AuthContext auth, RunId id, String userMessage, UserChannel user, RunTrace trace) {
@@ -136,9 +148,10 @@ public final class AgentRuntime {
         private final long baseOutputTokens;
         private Conversation conversation;
 
-        Run(AuthContext auth, RunId id, UserChannel user, RunTrace trace, Optional<RunRecord> earlier) {
+        Run(AuthContext auth, RunId id, UserChannel user, RunTrace trace, Optional<RunRecord> earlier,
+            Optional<Budget> userBudget) {
             this.auth = auth;
-            this.context = new ToolContext(auth, id);
+            this.context = new ToolContext(auth, id, userBudget);
             this.trace = trace;
             this.meter = new BudgetMeter(budget, clock);
             this.tools = ToolRegistry.of(ports, (q, t) -> meter.waitingForUser(() -> user.ask(q, t)), askTimeout);

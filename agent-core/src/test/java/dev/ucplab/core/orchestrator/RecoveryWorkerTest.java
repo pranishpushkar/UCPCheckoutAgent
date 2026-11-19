@@ -17,6 +17,7 @@ import dev.ucplab.core.id.SequentialIdGenerator;
 import dev.ucplab.core.identity.AuthContext;
 import dev.ucplab.core.intent.AttemptOp;
 import dev.ucplab.core.intent.AttemptStatus;
+import dev.ucplab.core.intent.Budget;
 import dev.ucplab.core.intent.InMemoryRecoveryScan;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentStatus;
@@ -40,6 +41,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -71,8 +73,8 @@ class RecoveryWorkerTest {
 
     private record Counting(Orchestrator delegate, Tracker tracker) implements Orchestrator {
         @Override
-        public ProposalResult propose(AuthContext auth, MerchantId merchant, List<ProposedLine> lines, String rationale) {
-            return delegate.propose(auth, merchant, lines, rationale);
+        public ProposalResult propose(AuthContext auth, MerchantId merchant, List<ProposedLine> lines, String rationale, Optional<Budget> budget) {
+            return delegate.propose(auth, merchant, lines, rationale, budget);
         }
 
         @Override

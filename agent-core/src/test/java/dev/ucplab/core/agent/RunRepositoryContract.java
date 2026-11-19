@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.ucplab.core.identity.UserId;
+import dev.ucplab.core.intent.Budget;
 import dev.ucplab.core.intent.IntentId;
 import java.time.Duration;
 import java.time.Instant;
@@ -59,6 +60,26 @@ public abstract class RunRepositoryContract {
         repo.insert(ALICE, run);
 
         assertThat(repo.find(ALICE, new RunId("r1"))).contains(run);
+    }
+
+    // Covers: P9, 23.1, 10 (V11) (a run started under the user's budget reads back with it; an update, which carries no
+    // budget, neither clears nor changes it)
+    @Test
+    void theRunsBudget_isStoredAtInsert_andKeptByUpdates() {
+        Budget budget = new Budget(50_000, "USD");
+        RunRecord started = RunRecord.started(new RunId("r1"), ALICE, "scripted", T0, Optional.of(budget));
+        repo.insert(ALICE, started);
+
+        assertThat(repo.find(ALICE, new RunId("r1"))).hasValueSatisfying(r -> assertThat(r.budget()).contains(budget));
+        assertThat(repo.update(ALICE, ended("r1", ALICE, List.of(I1)))).isTrue();
+        assertThat(repo.find(ALICE, new RunId("r1"))).hasValueSatisfying(r -> {
+            assertThat(r.budget()).contains(budget);
+            assertThat(r.outcome()).isPresent();
+        });
+        assertThat(repo.findForSystem(new RunId("r1"))).hasValueSatisfying(r -> assertThat(r.budget()).contains(budget));
+
+        repo.insert(ALICE, RunRecord.started(new RunId("r2"), ALICE, "scripted", T0));
+        assertThat(repo.find(ALICE, new RunId("r2"))).hasValueSatisfying(r -> assertThat(r.budget()).isEmpty());
     }
 
     // Covers: T6, I9 (another user's run reads as empty, exactly like a missing one)

@@ -57,7 +57,7 @@ public final class InMemoryRunRepository implements RunRepository {
             if (stored == null || !stored.owner().equals(owner)) {
                 return false;
             }
-            runs.put(run.id(), run);
+            runs.put(run.id(), run.withBudget(stored.budget()));
             updated.put(run.id(), clock.instant());
             return true;
         } finally {

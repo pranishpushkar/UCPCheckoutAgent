@@ -10,6 +10,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.ucplab.core.approval.ApprovalStatus;
 import dev.ucplab.core.intent.AttemptOp;
+import dev.ucplab.core.intent.Budget;
 import dev.ucplab.core.intent.IntentEvent;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentState;
@@ -281,6 +282,30 @@ class HandoffTest {
         IntentId id = worker.orchestrator().propose(lab.alice(), SHOP, TWO_SHIRTS, "buy").intentId();
 
         assertThat(lab.drive(worker, id)).isEqualTo(IntentState.AWAITING_APPROVAL);
+    }
+
+    // Covers: 9.1 P9, 7.2, 7.6, I3 (at a handoff store, a quote above the run's budget takes P2-P4's path: the intent ends
+    // FAILED_NOT_CHARGED with policy_P9, no approval opens, the cancel is owed in the same write, and the next step sends
+    // it once, so the store's checkout ends canceled; nothing is handed off or completed)
+    @Test
+    void aQuoteAboveTheBudget_atAHandoffMerchant_failsNotCharged_andCancelsTheStoresCheckout() {
+        Lab.Worker worker = lab.worker("w", new RewritingGateway(lab.merchant).rewrite(MerchantCall.CREATE,
+                as(CheckoutStatus.READY_FOR_COMPLETE, false)));
+        IntentId id = worker.orchestrator().propose(lab.alice(), SHOP, TWO_SHIRTS, "buy",
+                Optional.of(new Budget(5_399, "USD"))).intentId();
+
+        assertThat(lab.intent(id).state()).isEqualTo(IntentState.FAILED_NOT_CHARGED);
+        assertThat(lab.intent(id).failureReason()).contains("policy_P9");
+        assertThat(lab.intent(id).cancelPending()).isTrue();
+        assertThat(lab.approvals.findLatestForSystem(id)).isEmpty();
+
+        assertThat(lab.drive(worker, id)).isEqualTo(IntentState.FAILED_NOT_CHARGED);
+        assertThat(lab.intents.attempts(id)).filteredOn(a -> a.op() == AttemptOp.CANCEL).hasSize(1);
+        assertThat(lab.merchant.session(lab.intent(id).sessionId().orElseThrow()).orElseThrow().status())
+                .isEqualTo(CheckoutStatus.CANCELED);
+        assertThat(lab.intent(id).cancelPending()).isFalse();
+        assertThat(lab.intent(id).handoffUrl()).isEmpty();
+        neverCompleted(id);
     }
 
     // Covers: 7.2 quote_ready (handoff) (a ready_for_complete answer is held to the same message rule: one with a

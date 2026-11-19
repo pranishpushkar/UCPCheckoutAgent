@@ -3,6 +3,7 @@ package dev.ucplab.runtime;
 import dev.ucplab.core.agent.RunId;
 import dev.ucplab.core.identity.AuthContext;
 import dev.ucplab.core.identity.UserId;
+import dev.ucplab.core.intent.Budget;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentNotFoundException;
 import dev.ucplab.core.intent.IntentState;
@@ -85,6 +86,7 @@ final class Stubs {
     static class RecordingOrchestrator implements Orchestrator {
         final List<String> calls = new CopyOnWriteArrayList<>();
         final List<UserId> users = new CopyOnWriteArrayList<>();
+        final List<Optional<Budget>> budgets = new CopyOnWriteArrayList<>();
         ProposalResult proposal = new ProposalResult(new IntentId("intent-1"), IntentState.REJECTED, Optional.empty());
         Map<IntentId, IntentStatus> statuses = Map.of(new IntentId("intent-1"), new IntentStatus(
                 new IntentId("intent-1"), IntentState.REJECTED, Optional.empty(), Optional.of("policy_p4")));
@@ -92,9 +94,10 @@ final class Stubs {
 
         @Override
         public ProposalResult propose(AuthContext auth, MerchantId merchant, List<ProposedLine> lines,
-                                      String rationale) {
+                                      String rationale, Optional<Budget> budget) {
             calls.add("propose " + merchant + " " + new ArrayList<>(lines) + " " + rationale);
             users.add(auth.user());
+            budgets.add(budget);
             return proposal;
         }
 
