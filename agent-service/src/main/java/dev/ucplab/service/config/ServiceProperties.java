@@ -61,6 +61,8 @@ public final class ServiceProperties {
     static final String AGENT_VERSION_UNSUPPORTED = "UCP_AGENT_VERSION is not a version the agent supports";
     static final String AGENT_PROFILE_DEFAULT =
             "UCP_AGENT_PROFILE must be set, and not to its default, for an MCP merchant or one off loopback";
+    /** 19, 26.7: the Global Catalog answers at the version of Shopify's sample profile. */
+    static final String CATALOG_VERSION = "UCP_AGENT_VERSION must be 2026-04-08 for a transport: catalog merchant";
     static final String AGENT_PROFILE_INVALID = "UCP_AGENT_PROFILE must be an https URL with a host, and no user info";
     /** The agent profile's URL (26.2, 8.4) unless UCP_AGENT_PROFILE says otherwise. */
     static final URI DEFAULT_AGENT_PROFILE = URI.create("https://ucplab.dev/agent");

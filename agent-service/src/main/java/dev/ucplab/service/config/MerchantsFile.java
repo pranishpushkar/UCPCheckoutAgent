@@ -61,6 +61,14 @@ final class MerchantsFile {
     static final String MCP_AGENT_COMPLETION =
             "MERCHANTS_FILE has a transport: mcp merchant with completion: agent; MCP offers no complete (8.4, N1)";
     static final String NOT_OWNED = "MERCHANTS_FILE has a merchant off loopback without owned: true (I12)";
+    /** 19, 26.7: a catalog source and a link completion are one thing. */
+    static final String CATALOG_LINK_PAIR =
+            "MERCHANTS_FILE has transport: catalog without completion: link, or completion: link without transport: catalog";
+    /** 19, I12: a catalog source is not a store. */
+    static final String CATALOG_STORE_KEY = "MERCHANTS_FILE has a transport: catalog entry with owned, shop_domain,"
+            + " requires_buyer_ip, payment_handler, endpoint_hosts or ucp_versions";
+    static final String CATALOG_URL_NOT_SHOPIFYS =
+            "MERCHANTS_FILE has a transport: catalog url that is neither loopback nor https://catalog.shopify.com/api/ucp/mcp";
     static final String BUYER_IP_NOT_LOCAL = "MERCHANTS_FILE requires_buyer_ip is only allowed in the local profile";
 
     static final int MAX_MERCHANTS = 20;

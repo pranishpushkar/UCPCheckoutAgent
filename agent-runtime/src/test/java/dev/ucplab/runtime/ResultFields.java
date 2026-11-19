@@ -16,7 +16,7 @@ import java.util.regex.Pattern;
 final class ResultFields {
 
     /** Always merchant or user text: wrapped, whatever it holds. */
-    static final Set<String> WRAPPED = Set.of("title", "description", "answer");
+    static final Set<String> WRAPPED = Set.of("title", "description", "answer", "seller");
     /** Merchant-sent ids and codes: as they are when they look like ids, else wrapped. */
     static final Set<String> WRAPPED_UNLESS_ID = Set.of("item_id", "order_id", "failure_reason");
     /** Our own fields: ids, codes, states and the currency. */
@@ -55,7 +55,8 @@ final class ResultFields {
         } else if (WRAPPED.contains(key)) {
             assertWrapped(key, s);
         } else if (WRAPPED_UNLESS_ID.contains(key)) {
-            if (!ID.matcher(s).matches()) {
+            // An id a tool accepts back (Args.ITEM_ID: the lab's, and a Shopify gid, H5, 26.7) passes as it is.
+            if (!ID.matcher(s).matches() && !Args.ITEM_ID.matcher(s).matches()) {
                 assertWrapped(key, s);
             }
         } else {
