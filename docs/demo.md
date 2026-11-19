@@ -211,3 +211,50 @@ Without the flag nothing is sent to the store on exit.
 - [ ] Write down what the store said of the paid checkout: its status (`completed`?), whether it names an order
   (`order.id`, `permalink_url`), and whether the checkout id still resolved. That answers VERIFY 7, and decides part 2 of
   `notes/h5/after-handoff-order-proposal.md`.
+
+## 8b. With a real model (Gemini, the owner only)
+
+The same console at your store, with the live model instead of the scripted one (DESIGN 26.6,
+[shopify-live.md](interop/shopify-live.md#what-reaches-gemini)). It costs money: each message is one run, capped at 6
+model calls and 20,000 tokens, and there is no daily cap on the model.
+
+**Start.** Export `GEMINI_API_KEY` in your shell (never as an argument), then:
+
+```sh
+scripts/shopify-console.sh --dry-run --i-own-this-store --with-buyer-ip --model gemini   # "GEMINI_API_KEY": "<redacted>"
+scripts/shopify-console.sh --i-own-this-store --with-buyer-ip --model gemini
+```
+
+- [ ] Without `GEMINI_API_KEY`, the script refuses in one line and starts nothing.
+- [ ] The header shows a small **Model: Gemini** label next to the **Live store · <store>.myshopify.com** badge. Without
+  `--model gemini` there is no label.
+
+**Natural requests.** Unlike the scripted model, the model reads what you write. The Budget field fills from the message
+as you type (section 5c), and it alone is enforced. The words in the message only guide the model.
+
+- [ ] `a snowboard under $700 for a beginner`: the Budget field reads **700 USD**. The model searches for the product's
+  words (`snowboard`, not `snowboard under $700`) and proposes one that fits. The card's line has **Your budget:
+  $700.00 (before the store's shipping and tax)**.
+- [ ] `the cheapest one`: the model proposes the lowest-priced match it found, and the card shows the store's price for
+  it.
+- [ ] `I want the Liquid one`: the model proposes the variant you named, not the cheapest. If more than one matches, it
+  asks you first.
+
+**A budget refusal, then a retry.** Send `a snowboard` with the field at a budget below the board the model picks (say
+**600 USD**, under The Complete Snowboard's $699.95):
+
+- [ ] P9 refuses the quote. The timeline reads **Over your budget: the store quoted $<its total>, your budget is
+  $600.00**, and that intent opens no approval card.
+- [ ] The model tries at most one cheaper item, or says none fits and names the closest price it found. It never says it
+  asked for your approval unless a card actually opened.
+- [ ] Typing a larger budget into the message of the same run ("fine, go up to $900") changes nothing: the run keeps
+  its budget. Only a new run with the field changed has a new budget.
+
+**What to check on every card.**
+
+- [ ] The card only ever shows the store's title, lines and total, with the store's own numbers. It never shows the
+  model's words: no rationale, no summary and no price the model wrote.
+- [ ] What you approve is the store's quote, not anything the model said (I2, I3). If the model's reply and the card
+  disagree, the card is right.
+- [ ] On Ctrl-C, keep `GEMINI_API_KEY` exported and run
+  `scripts/h5-leak-scan.sh --evidence notes/h5/console/evidence`. It reports nothing.

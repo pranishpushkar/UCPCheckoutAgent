@@ -65,6 +65,7 @@ header { display: flex; flex-wrap: wrap; align-items: center; justify-content: s
   overflow-wrap: anywhere;
 }
 .badge.live { background: var(--live-bg); color: var(--live-fg); border-color: var(--live-border); font-weight: 600; }
+.badge.model { font-size: 0.8rem; padding: 2px 8px; }
 .user-chip { padding: 4px 10px; border-radius: 999px; background: var(--accent-soft); font-size: 0.9rem; overflow-wrap: anywhere; }
 .status { min-height: 1.5em; margin-bottom: 8px; color: var(--muted); }
 .status.error { color: var(--bad); }

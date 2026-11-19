@@ -124,6 +124,7 @@ async function boot() {
   }
   csrf = me.headers.get("X-CSRF-Token") || "";
   $("who").textContent = me.data.email;
+  showModel(me.data);
   $("sign-out").hidden = false;
   $("sign-out").addEventListener("click", signOut);
   $("send").addEventListener("submit", send);
@@ -839,6 +840,13 @@ function showMerchantMode() {
   }
 }
 // </merchant-mode>
+
+// <model-label>
+// 24.3, 26.6: the header's "Model: Gemini" label, its text fixed in the page; shown only when the service says so.
+function showModel(me) {
+  $("model-label").hidden = me.agent_model !== "gemini";
+}
+// </model-label>
 
 // ---- the fault lab and the order counter ---------------------------------------------------------------------------
 

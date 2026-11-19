@@ -10,6 +10,7 @@ a payment object or an address. Every printed or recorded line goes through the 
 printed once, to the terminal, for the buyer only. Never run in CI."""
 import json
 import os
+import re
 import secrets as random_bytes
 import shutil
 import signal
@@ -22,6 +23,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import shopify_spike as spike  # noqa: E402  (the spike's redaction, sanitizing and call, reused as they are)
@@ -34,6 +36,11 @@ QUOTE_TIMEOUT = 120
 SETTLE_TIMEOUT = 600             # 7.2: the 5-minute handoff deadline, a worker pass and the GET retries, with room
 TERMINAL = ("HANDED_OFF", "COMPLETED", "REJECTED", "FAILED_NOT_CHARGED", "ESCALATED")
 PROBE_GAP = 60
+MODELS = ("scripted", "gemini")  # DESIGN 26.6: scripted unless the owner asks for the live model in --console
+KEY_REFUSED = "refused: --model gemini needs GEMINI_API_KEY in your environment (it is never taken as an argument)"
+JAR_REFUSED = ("refused: the jar has no agent-adk on its runtime classpath, so it cannot run Gemini; rebuild it: "
+               "./mvnw -B -ntp -DskipTests package")
+REDACTED_ENV = ("SHOPIFY_CLIENT", "BUYER_IP", "APPROVAL_SECRET", "GEMINI_API_KEY")
 
 
 def remember(value):
@@ -65,6 +72,26 @@ def option(argv, name, default):
     return argv[argv.index(name) + 1] if name in argv else default
 
 
+def model_choice(argv, env, dry):
+    """--model (DESIGN 26.6): scripted unless the owner asks for gemini, whose key comes from the environment only."""
+    model = option(argv, "--model", "scripted")
+    if model not in MODELS:
+        raise SystemExit("refused: --model must be scripted or gemini")
+    if model == "gemini" and not dry and not (env.get("GEMINI_API_KEY") or "").strip():
+        raise SystemExit(KEY_REFUSED)
+    return model
+
+
+def jar_has_live_model(jar):
+    """Whether the service jar carries agent-adk, the live Gemini client, on its runtime classpath (Boot's index)."""
+    try:
+        with zipfile.ZipFile(jar) as z:
+            index = z.read("BOOT-INF/classpath.idx").decode("utf-8", "replace")
+    except (OSError, KeyError, zipfile.BadZipFile):
+        return False
+    return any(re.search(r'BOOT-INF/lib/agent-adk-[^/"]*\.jar', line) for line in index.splitlines())
+
+
 def merchants_yaml(domain):
     return "\n".join([
         "merchants:",
@@ -84,14 +111,15 @@ def merchants_yaml(domain):
 POLICY_YAML = "per_purchase_cap_minor: 200000\ndaily_cap_minor: 400000\n"
 
 
-def service_env(env, tmp, port):
-    """The service's whole environment: built from nothing, so no other variable of the owner's shell reaches it."""
+def service_env(env, tmp, port, model="scripted"):
+    """The service's whole environment: built from nothing, so no other variable of the owner's shell reaches it. With
+    gemini the key goes in here and nowhere else, never on the command line (DESIGN 26.6)."""
     out = {k: env[k] for k in ("PATH", "HOME", "LANG", "TMPDIR", "JAVA_HOME") if env.get(k)}
     approval_secret = random_bytes.token_hex(32)
     remember(approval_secret)
     out.update({
         "AGENT_PROFILE": "local",
-        "AGENT_MODEL": "scripted",
+        "AGENT_MODEL": model,
         "SERVER_PORT": str(port),
         "SERVER_ADDRESS": "127.0.0.1",   # loopback only: the dev sign-in must not be reachable from the network
         "PUBLIC_ORIGIN": "http://localhost:%d" % port,
@@ -104,6 +132,10 @@ def service_env(env, tmp, port):
         "UCP_AGENT_PROFILE": env.get("AGENT_PROFILE_URL", ""),
         "UCP_AGENT_VERSION": AGENT_VERSION,
     })
+    if model == "gemini":
+        key = (env.get("GEMINI_API_KEY") or "").strip()
+        remember(key)
+        out["GEMINI_API_KEY"] = key
     return out
 
 
@@ -559,11 +591,20 @@ def after_payment_for(argv, store_factory, db, api, evidence):
     return lambda: after_payment_reads(store_factory(), db, api, evidence)
 
 
-def console_dry_run(domain, port, evidence, jar, after_payment=False):
+def shown_env(port, model="scripted"):
+    """The service's environment as a dry run prints it: every secret replaced, an unset Gemini key named as unset."""
+    env = service_env(os.environ, "<tmp>", port, model)
+    return {k: ("<redacted>" if k in REDACTED_ENV and v else "<unset: the real run refuses>" if k in REDACTED_ENV else v)
+            for k, v in env.items() if k not in ("PATH", "HOME", "LANG", "TMPDIR")}
+
+
+def console_dry_run(domain, port, evidence, jar, after_payment=False, model="scripted"):
     say("DRY-RUN --console: merchants.yaml (temporary, deleted on exit):\n" + merchants_yaml(domain))
     say("DRY-RUN policy.yaml (temporary): " + POLICY_YAML.strip().replace("\n", ", "))
-    shown = {k: ("<redacted>" if k in ("SHOPIFY_CLIENT", "BUYER_IP", "APPROVAL_SECRET") else v)
-             for k, v in service_env(os.environ, "<tmp>", port).items() if k not in ("PATH", "HOME", "LANG", "TMPDIR")}
+    shown = shown_env(port, model)
+    if model == "gemini":
+        say("DRY-RUN model: gemini, GEMINI_API_KEY from your environment into the service's environment only; the jar "
+            + ("carries agent-adk" if jar_has_live_model(jar) else "is missing or has no agent-adk: the real run refuses"))
     say("DRY-RUN service: java -jar %s, environment %s, log to %s/service.log" % (jar, json.dumps(shown, sort_keys=True),
                                                                                   evidence))
     say("DRY-RUN wait for http://localhost:%d/readyz; then leave it running: open it, sign in as %s, ask for a product; "
@@ -585,14 +626,14 @@ def console_dry_run(domain, port, evidence, jar, after_payment=False):
     return 0
 
 
-def start_service(jar, tmp, domain, evidence, port):
+def start_service(jar, tmp, domain, evidence, port, model="scripted"):
     """Writes the temporary merchants and policy files and starts the service; returns the process and its log."""
     with open(os.path.join(tmp, "merchants.yaml"), "w") as f:
         f.write(merchants_yaml(domain))
     with open(os.path.join(tmp, "policy.yaml"), "w") as f:
         f.write(POLICY_YAML)
     log = open(os.path.join(evidence, "service.log"), "w")
-    return spawn(["java", "-jar", jar], service_env(os.environ, tmp, port), log, tmp), log
+    return spawn(["java", "-jar", jar], service_env(os.environ, tmp, port, model), log, tmp), log
 
 
 def spawn(command, env, log, cwd):
@@ -618,12 +659,15 @@ def stop_service(proc, log, tmp):
 def console_main(argv, domain, root, port, jar):
     """--console: the service and the owner's store, for the browser, until Ctrl-C (docs/demo.md)."""
     console_options(argv)
+    model = model_choice(argv, os.environ, "--dry-run" in argv)
     evidence = os.path.abspath(option(argv, "--evidence", os.path.join(root, "notes/h5/console/evidence")))
     base = "http://localhost:%d" % port
     if "--dry-run" in argv:
-        return console_dry_run(domain, port, evidence, jar, "--after-payment" in argv)
+        return console_dry_run(domain, port, evidence, jar, "--after-payment" in argv, model)
     if not os.path.isfile(jar):
         raise SystemExit("build first: ./mvnw -B -ntp -DskipTests package")
+    if model == "gemini" and not jar_has_live_model(jar):
+        raise SystemExit(JAR_REFUSED)
     os.makedirs(evidence, exist_ok=True)
     remember(os.environ["BUYER_IP"])
     stop_on_signals()
@@ -631,7 +675,7 @@ def console_main(argv, domain, root, port, jar):
     db = os.path.join(tmp, "ucplab.db")
     proc = log = api = None
     try:
-        proc, log = start_service(jar, tmp, domain, evidence, port)
+        proc, log = start_service(jar, tmp, domain, evidence, port, model)
         wait_ready(base, proc)
         api = Api(base)
         api.sign_in(USER)          # the script's own session, to read each intent's evidence on the way out
@@ -653,8 +697,11 @@ def main(argv):
     domain = configuration(os.environ, argv, dry)
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     port = int(option(argv, "--port", "8080"))
+    remember((os.environ.get("GEMINI_API_KEY") or "").strip())   # whatever the model, never printed or recorded
     if "--after-payment" in argv and "--console" not in argv:
         raise SystemExit("refused: --after-payment belongs to --console (scripts/shopify-console.sh)")
+    if "--model" in argv and "--console" not in argv:
+        raise SystemExit("refused: --model belongs to --console (scripts/shopify-console.sh)")
     if "--console" in argv:
         return console_main(argv, domain, root, port,
                             os.path.join(root, "agent-service/target/agent-service-0.1.0-SNAPSHOT.jar"))
@@ -669,8 +716,7 @@ def main(argv):
     if dry:
         say("DRY-RUN merchants.yaml (temporary, deleted on exit):\n" + merchants_yaml(domain))
         say("DRY-RUN policy.yaml (temporary): " + POLICY_YAML.strip().replace("\n", ", "))
-        shown = {k: ("<redacted>" if k in ("SHOPIFY_CLIENT", "BUYER_IP", "APPROVAL_SECRET") else v)
-                 for k, v in service_env(os.environ, "<tmp>", port).items() if k not in ("PATH", "HOME", "LANG", "TMPDIR")}
+        shown = shown_env(port)
         say("DRY-RUN service: java -jar %s, environment %s, log to %s/service.log" % (jar, json.dumps(shown, sort_keys=True), evidence))
         say("DRY-RUN wait for %s/readyz; sign in as %s; POST /api/runs {\"message\": %s}" % (base, USER, json.dumps(query)))
         say("DRY-RUN wait for AWAITING_APPROVAL; read the agent's checkout id from the temporary database (memory only)")

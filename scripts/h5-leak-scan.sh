@@ -5,8 +5,8 @@
 #   scripts/h5-leak-scan.sh --self-test                                             plant canaries and confirm each is found
 #
 # The values come from the environment, as for the live run: SHOPIFY_CLIENT_ID and SHOPIFY_CLIENT_SECRET (read from the
-# Keychain, under the spike's names, when unset), BUYER_IP, SHOPIFY_STORE_DOMAIN and, if you give one, TOKEN_PREFIX (the
-# access token's first characters). A value reaches grep only through a pattern file on a pipe, never as an argument
+# Keychain, under the spike's names, when unset), BUYER_IP, SHOPIFY_STORE_DOMAIN, GEMINI_API_KEY when set (a console run
+# with --model gemini, DESIGN 26.6) and, if you give one, TOKEN_PREFIX (the access token's first characters). A value reaches grep only through a pattern file on a pipe, never as an argument
 # (ps shows those). It prints pattern names and counts only, never a matched value or the file that holds it, and exits
 # non-zero on any hit. Over the branch only the values fail it: its tests and docs hold fakes of every shape. --with-images also runs scripts/image-secret-scan.sh (Docker), unchanged.
 set -euo pipefail
@@ -33,14 +33,15 @@ fixed_patterns() {
   [ -n "${TOKEN_PREFIX:-}" ] && printf 'the access token prefix\t%s\n' "$TOKEN_PREFIX"
   [ -n "${BUYER_IP:-}" ] && printf 'the buyer IP\t%s\n' "$BUYER_IP"
   [ -n "${SHOPIFY_STORE_DOMAIN:-}" ] && printf 'the store domain with /cart/c/\t%s/cart/c/\n' "$SHOPIFY_STORE_DOMAIN"
+  [ -n "${GEMINI_API_KEY:-}" ] && printf 'the Gemini API key\t%s\n' "$GEMINI_API_KEY"
   return 0
 }
 
 # The shape patterns (extended regular expressions, case-insensitive); no value of ours is in them.
 REGEX_NAMES=("a ?key= that is not ?key=<redacted>" "Shopify-Buyer-IP with a value" "Authorization: Bearer with a value"
-             "a session_token with a value")
+             "a session_token with a value" "a Gemini API key shape")
 REGEXES=('\?key=([^<]|$)' 'shopify-buyer-ip"?[[:space:]]*[:=][[:space:]]*"?[0-9a-f:.]{3,}' 'bearer[[:space:]]+[a-z0-9_.-]{8,}'
-         'session_token=([^<]|$)')
+         'session_token=([^<]|$)' 'AIza[0-9A-Za-z_-]{35}')
 
 hits=0
 report() {   # $1 name  $2 count
@@ -95,7 +96,8 @@ if [ "$DRY" = 1 ]; then
   echo "DRY-RUN evidence directories: ${DIRS[*]}"
   echo "DRY-RUN branch: every commit of $BASE..HEAD (git grep) and git log -p $BASE..HEAD"
   echo "DRY-RUN values: the client secret, the client id, the access token prefix (if TOKEN_PREFIX is set), the buyer IP," \
-       "the store domain with /cart/c/; the client id and secret from the Keychain when unset (not read in a dry run)"
+       "the store domain with /cart/c/, the Gemini API key (if GEMINI_API_KEY is set); the client id and secret from the" \
+       "Keychain when unset (not read in a dry run)"
   for name in "${REGEX_NAMES[@]}"; do echo "DRY-RUN shape: $name"; done
   [ "$IMAGES" = 1 ] && echo "DRY-RUN images: scripts/image-secret-scan.sh"
   exit 0
@@ -106,12 +108,14 @@ if [ "$SELF" = 1 ]; then
   SHOPIFY_CLIENT_SECRET="canary-secret-$(openssl rand -hex 8)"; SHOPIFY_CLIENT_ID="canary-id-$(openssl rand -hex 8)"
   TOKEN_PREFIX="canarytok_$(openssl rand -hex 4)"; BUYER_IP="198.51.100.$((RANDOM % 200 + 20))"
   SHOPIFY_STORE_DOMAIN="canary-$(openssl rand -hex 4).myshopify.com"
+  GEMINI_API_KEY="AIza$(openssl rand -hex 16)abc"
   printf '%s\n' "secret $SHOPIFY_CLIENT_SECRET" > "$WORK/a.log"
   printf '%s\n' "id $SHOPIFY_CLIENT_ID" "token ${TOKEN_PREFIX}rest" > "$WORK/b.log"
   printf '%s\n' "{\"Shopify-Buyer-IP\": \"$BUYER_IP\"}" > "$WORK/c.json"
   printf '%s\n' "https://$SHOPIFY_STORE_DOMAIN/cart/c/abc" "gid://shopify/Checkout/x?key=realkey123" \
     "Authorization: Bearer canarytokenvalue123" > "$WORK/d.txt"
   printf '%s\n' "https://shop.example/checkouts/cn/x/thank_you?session_token=canarysession123" > "$WORK/e.json"
+  printf '%s\n' "model key $GEMINI_API_KEY" > "$WORK/f.log"
   # The clean shapes must not count.
   printf '%s\n' "?key=<redacted>" "Bearer <redacted>" "Shopify-Buyer-IP: <redacted>" "session_token=<redacted>" > "$WORK/clean.txt"
   out=$(scan 0 "$WORK")
