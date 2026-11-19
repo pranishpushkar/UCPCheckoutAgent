@@ -58,3 +58,36 @@ The script calls **no store**. It never builds or follows a `checkout_url`, and 
    `Authorization` header reads `<redacted>`.
 2. After the real run, `scripts/h5-leak-scan.sh --evidence notes/catalog/recordings` finds nothing.
 3. Tests, against a local fake: `python3 -I scripts/shopify_catalog_spike_test.py`.
+
+## Results (the owner's run, 2026-11-19)
+
+Every call answered HTTP 200. The query was `snowboard`.
+
+**Search, by context:**
+
+- **US/USD, `ships_to` US:** 760 results, all priced in USD. Sellers included Burton, evo, Wiredsport, THE SKI
+  MONSTER, Ski Pro AZ, Surface2Air and shopnomads.
+- **IN/INR, `ships_to` IN:** 789 results, priced in a mix of AUD, CAD and INR, from foreign shops. The currency in
+  `context` does not convert the prices.
+
+**VERIFY, answered:**
+
+| VERIFY | Answer | What follows |
+| --- | --- | --- |
+| C1 quantity | No tool takes a quantity. Every buy link is `/buy/<id>:1` | A link intent is quantity 1 only. The link is never built or edited |
+| C2 `native_checkout` | `false` on all 34 offers seen | It plays no part. The agent never completes at these stores (N1) |
+| C3 link host | 0 of 34 `checkout_url`s were on `seller.domain`. All were on the shop's own domain (`www.evo.com`, `www.burton.com`, …) | A `checkout_url` is accepted only if its host equals the host of the offer's `seller.url` or `seller.domain`. Otherwise the offer is refused |
+| C4 anonymous | It works | Authenticated calls are used anyway, as Shopify asks |
+| C5 the key | The H5 Dev Dashboard key works for the Global Catalog | The same Keychain items |
+| C6 profile | Shopify's sample profile declares all three catalog capabilities | We don't need a profile of our own |
+
+**The owner's choices:**
+
+- Search context: `US`/`USD`, `ships_to` US, available only.
+- The run's budget currency is USD.
+
+**Leak scan:** `scripts/h5-leak-scan.sh --evidence notes/catalog/recordings` passed. Every evidence pattern counted 0:
+the client secret, the client id, the buyer IP, the store with `/cart/c/`, an unredacted `?key=`, `Shopify-Buyer-IP`,
+a bearer token, `session_token` and the Gemini key shape. The scan of the branch matched only the fakes in tests and
+docs. The scan now also looks for the catalog's tracking parameters (`_gsid=`, `click_id_value=`, `click_id_tag=`), so
+it shows that no full buy link was recorded.
