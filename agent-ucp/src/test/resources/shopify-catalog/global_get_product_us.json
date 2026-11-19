@@ -1,0 +1,176 @@
+{
+  "jsonrpc": "2.0",
+  "id": 7,
+  "result": {
+    "structuredContent": {
+      "product": {
+        "description": {
+          "plain": "<p>Our own test text for board 1.</p>"
+        },
+        "handle": "example-snowboard-1",
+        "id": "gid://shopify/p/FAKEUPID000001",
+        "metadata": {
+          "top_features": [
+            "Our own feature line for board 1."
+          ],
+          "unique_selling_points": [
+            "Our own selling point for board 1."
+          ]
+        },
+        "options": [
+          {
+            "name": "Size",
+            "values": [
+              {
+                "available": true,
+                "exists": true,
+                "label": "149 cm"
+              },
+              {
+                "available": true,
+                "exists": true,
+                "label": "152 cm"
+              },
+              {
+                "available": true,
+                "exists": true,
+                "label": "156 cm"
+              },
+              {
+                "available": true,
+                "exists": true,
+                "label": "160 cm"
+              },
+              {
+                "available": true,
+                "exists": true,
+                "label": "163 cm"
+              }
+            ]
+          }
+        ],
+        "price_range": {
+          "max": {
+            "amount": 30495,
+            "currency": "USD"
+          },
+          "min": {
+            "amount": 30495,
+            "currency": "USD"
+          }
+        },
+        "rating": {
+          "count": 8,
+          "scale_max": 5,
+          "scale_min": 1,
+          "value": 4.8
+        },
+        "selected": [
+          {
+            "label": "149 cm",
+            "name": "Size"
+          }
+        ],
+        "title": "Example Snowboard 1",
+        "variants": [
+          {
+            "availability": {
+              "available": true
+            },
+            "checkout_url": "https://www.shop-a.example/buy/1000001:1?_gsid=FAKEGSID0001&attribution%2Fclick_id_tag=FAKETAG&attribution%2Fclick_id_value=FAKECLICK0001&attribution%2Futm_medium=fake&attribution%2Futm_source=fake&ucp%2Fversion=2026-04-08",
+            "condition": [
+              "new"
+            ],
+            "description": {
+              "plain": "<p>Our own test text for board 1.</p>"
+            },
+            "eligible": {
+              "native_checkout": false
+            },
+            "handle": "example-snowboard-1",
+            "id": "gid://shopify/ProductVariant/1000001",
+            "options": [
+              {
+                "label": "149 cm",
+                "name": "Size"
+              }
+            ],
+            "price": {
+              "amount": 30495,
+              "currency": "USD"
+            },
+            "rating": {
+              "count": 4,
+              "scale_max": 5,
+              "scale_min": 1,
+              "value": 4.8
+            },
+            "seller": {
+              "domain": "shop-a.myshopify.example",
+              "id": "gid://shopify/Shop/1000000001",
+              "links": [
+                {
+                  "type": "privacy_policy",
+                  "url": "https://checkout.shopify.com/..."
+                },
+                {
+                  "type": "terms_of_service",
+                  "url": "https://checkout.shopify.com/..."
+                },
+                {
+                  "type": "refund_policy",
+                  "url": "https://checkout.shopify.com/..."
+                },
+                {
+                  "type": "shipping_policy",
+                  "url": "https://checkout.shopify.com/..."
+                }
+              ],
+              "name": "Example Shop A",
+              "url": "https://www.shop-a.example/"
+            },
+            "seller_product_id": "gid://shopify/Product/2000001",
+            "title": "Example Snowboard 1",
+            "url": "https://www.shop-a.example/products/example-snowboard-1?variant=1000001"
+          }
+        ]
+      },
+      "ucp": {
+        "capabilities": {
+          "dev.shopify.catalog.global": [
+            {
+              "extends": [
+                "dev.ucp.shopping.catalog.search",
+                "dev.ucp.shopping.catalog.lookup"
+              ],
+              "requires": {
+                "protocol": {
+                  "min": "2026-04-08"
+                }
+              },
+              "schema": "https://shopify.dev/ucp/schemas/2026-04-08/shopify_catalog_global.json",
+              "spec": "https://shopify.dev/docs/agents/catalog/global-catalog",
+              "version": "2026-04-08"
+            }
+          ],
+          "dev.ucp.shopping.catalog.lookup": [
+            {
+              "schema": "https://ucp.dev/2026-04-08/schemas/shopping/catalog_lookup.json",
+              "spec": "https://ucp.dev/2026-04-08/specification/catalog",
+              "version": "2026-04-08"
+            }
+          ],
+          "dev.ucp.shopping.catalog.search": [
+            {
+              "schema": "https://ucp.dev/2026-04-08/schemas/shopping/catalog_search.json",
+              "spec": "https://ucp.dev/2026-04-08/specification/catalog",
+              "version": "2026-04-08"
+            }
+          ]
+        },
+        "status": "success",
+        "version": "2026-04-08"
+      }
+    }
+  }
+}

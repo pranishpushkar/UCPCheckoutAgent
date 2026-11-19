@@ -1,0 +1,401 @@
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "result": {
+    "structuredContent": {
+      "messages": [],
+      "pagination": {
+        "cursor": "FAKECURSOR0001",
+        "has_next_page": true,
+        "total_count": 761
+      },
+      "products": [
+        {
+          "description": {
+            "plain": "<p>Our own test text for board 1.</p>"
+          },
+          "handle": "example-snowboard-1",
+          "id": "gid://shopify/p/FAKEUPID000001",
+          "metadata": {
+            "top_features": [
+              "Our own feature line for board 1."
+            ],
+            "unique_selling_points": [
+              "Our own selling point for board 1."
+            ]
+          },
+          "options": [
+            {
+              "name": "Size",
+              "values": [
+                {
+                  "label": "149 cm"
+                },
+                {
+                  "label": "152 cm"
+                },
+                {
+                  "label": "156 cm"
+                },
+                {
+                  "label": "160 cm"
+                },
+                {
+                  "label": "163 cm"
+                }
+              ]
+            }
+          ],
+          "price_range": {
+            "max": {
+              "amount": 30495,
+              "currency": "USD"
+            },
+            "min": {
+              "amount": 30495,
+              "currency": "USD"
+            }
+          },
+          "rating": {
+            "count": 8,
+            "scale_max": 5,
+            "scale_min": 1,
+            "value": 4.8
+          },
+          "title": "Example Snowboard 1",
+          "variants": [
+            {
+              "availability": {
+                "available": true
+              },
+              "checkout_url": "https://www.shop-a.example/buy/1000001:1?_gsid=FAKEGSID0001&attribution%2Fclick_id_tag=FAKETAG&attribution%2Fclick_id_value=FAKECLICK0001&attribution%2Futm_medium=fake&attribution%2Futm_source=fake&ucp%2Fversion=2026-04-08",
+              "condition": [
+                "new"
+              ],
+              "description": {
+                "plain": "<p>Our own test text for board 1.</p>"
+              },
+              "eligible": {
+                "native_checkout": false
+              },
+              "handle": "example-snowboard-1",
+              "id": "gid://shopify/ProductVariant/1000001",
+              "options": [
+                {
+                  "label": "149 cm",
+                  "name": "Size"
+                }
+              ],
+              "price": {
+                "amount": 30495,
+                "currency": "USD"
+              },
+              "rating": {
+                "count": 4,
+                "scale_max": 5,
+                "scale_min": 1,
+                "value": 4.8
+              },
+              "seller": {
+                "domain": "shop-a.myshopify.example",
+                "id": "gid://shopify/Shop/1000000001",
+                "links": [
+                  {
+                    "type": "privacy_policy",
+                    "url": "https://checkout.shopify.com/..."
+                  },
+                  {
+                    "type": "terms_of_service",
+                    "url": "https://checkout.shopify.com/..."
+                  },
+                  {
+                    "type": "refund_policy",
+                    "url": "https://checkout.shopify.com/..."
+                  },
+                  {
+                    "type": "shipping_policy",
+                    "url": "https://checkout.shopify.com/..."
+                  }
+                ],
+                "name": "Example Shop A",
+                "url": "https://www.shop-a.example/"
+              },
+              "seller_product_id": "gid://shopify/Product/2000001",
+              "title": "Example Snowboard 1",
+              "url": "https://www.shop-a.example/products/example-snowboard-1?variant=1000001"
+            }
+          ]
+        },
+        {
+          "description": {
+            "plain": "<p>Our own test text for board 2.</p>"
+          },
+          "handle": "example-snowboard-2",
+          "id": "gid://shopify/p/FAKEUPID000002",
+          "metadata": {
+            "top_features": [
+              "Our own feature line for board 2."
+            ],
+            "unique_selling_points": [
+              "Our own selling point for board 2."
+            ]
+          },
+          "options": [
+            {
+              "name": "Size",
+              "values": [
+                {
+                  "label": "138 cm"
+                },
+                {
+                  "label": "144 cm"
+                },
+                {
+                  "label": "147 cm"
+                },
+                {
+                  "label": "153 cm"
+                },
+                {
+                  "label": "156 cm"
+                },
+                {
+                  "label": "159 cm"
+                },
+                {
+                  "label": "158 cm Wide"
+                },
+                {
+                  "label": "163 cm Wide"
+                }
+              ]
+            }
+          ],
+          "price_range": {
+            "max": {
+              "amount": 26995,
+              "currency": "USD"
+            },
+            "min": {
+              "amount": 26995,
+              "currency": "USD"
+            }
+          },
+          "title": "Example Snowboard 2",
+          "variants": [
+            {
+              "availability": {
+                "available": true
+              },
+              "checkout_url": "https://www.shop-b.example/buy/1000002:1?_gsid=FAKEGSID0002&attribution%2Fclick_id_tag=FAKETAG&attribution%2Fclick_id_value=FAKECLICK0002&attribution%2Futm_medium=fake&attribution%2Futm_source=fake&ucp%2Fversion=2026-04-08",
+              "condition": [
+                "new"
+              ],
+              "description": {
+                "plain": "<p>Our own test text for board 2.</p>"
+              },
+              "eligible": {
+                "native_checkout": false
+              },
+              "handle": "example-snowboard-2",
+              "id": "gid://shopify/ProductVariant/1000002",
+              "options": [
+                {
+                  "label": "138 cm",
+                  "name": "Size"
+                }
+              ],
+              "price": {
+                "amount": 26995,
+                "currency": "USD"
+              },
+              "rating": {
+                "count": 6,
+                "scale_max": 5,
+                "scale_min": 1,
+                "value": 5.0
+              },
+              "seller": {
+                "domain": "shop-b.myshopify.example",
+                "id": "gid://shopify/Shop/1000000002",
+                "links": [
+                  {
+                    "type": "privacy_policy",
+                    "url": "https://checkout.shopify.com/..."
+                  },
+                  {
+                    "type": "terms_of_service",
+                    "url": "https://checkout.shopify.com/..."
+                  },
+                  {
+                    "type": "refund_policy",
+                    "url": "https://checkout.shopify.com/..."
+                  },
+                  {
+                    "type": "shipping_policy",
+                    "url": "https://checkout.shopify.com/..."
+                  }
+                ],
+                "name": "Example Shop B",
+                "url": "https://www.shop-b.example/"
+              },
+              "seller_product_id": "gid://shopify/Product/2000002",
+              "title": "Example Snowboard 2",
+              "url": "https://www.shop-b.example/products/example-snowboard-2?variant=1000002"
+            }
+          ]
+        },
+        {
+          "description": {
+            "plain": "<p>Our own test text for board 3.</p>"
+          },
+          "handle": "example-snowboard-3",
+          "id": "gid://shopify/p/FAKEUPID000003",
+          "metadata": {
+            "top_features": [
+              "Our own feature line for board 3."
+            ],
+            "unique_selling_points": [
+              "Our own selling point for board 3."
+            ]
+          },
+          "options": [
+            {
+              "name": "Size",
+              "values": [
+                {
+                  "label": "144cm"
+                },
+                {
+                  "label": "148cm"
+                },
+                {
+                  "label": "151cm"
+                }
+              ]
+            }
+          ],
+          "price_range": {
+            "max": {
+              "amount": 24500,
+              "currency": "USD"
+            },
+            "min": {
+              "amount": 24500,
+              "currency": "USD"
+            }
+          },
+          "rating": {
+            "count": 9,
+            "scale_max": 5,
+            "scale_min": 1,
+            "value": 5.0
+          },
+          "title": "Example Snowboard 3",
+          "variants": [
+            {
+              "availability": {
+                "available": true
+              },
+              "checkout_url": "https://www.shop-c.example/buy/1000003:1?_gsid=FAKEGSID0003&attribution%2Fclick_id_tag=FAKETAG&attribution%2Fclick_id_value=FAKECLICK0003&attribution%2Futm_medium=fake&attribution%2Futm_source=fake&ucp%2Fversion=2026-04-08",
+              "condition": [
+                "new"
+              ],
+              "description": {
+                "plain": "<p>Our own test text for board 3.</p>"
+              },
+              "eligible": {
+                "native_checkout": false
+              },
+              "handle": "example-snowboard-3",
+              "id": "gid://shopify/ProductVariant/1000003",
+              "list_price": {
+                "amount": 59200,
+                "currency": "USD"
+              },
+              "options": [
+                {
+                  "label": "144cm",
+                  "name": "Size"
+                }
+              ],
+              "price": {
+                "amount": 24500,
+                "currency": "USD"
+              },
+              "rating": {
+                "count": 4,
+                "scale_max": 5,
+                "scale_min": 1,
+                "value": 5.0
+              },
+              "seller": {
+                "domain": "shop-c.myshopify.example",
+                "id": "gid://shopify/Shop/1000000003",
+                "links": [
+                  {
+                    "type": "privacy_policy",
+                    "url": "https://checkout.shopify.com/..."
+                  },
+                  {
+                    "type": "terms_of_service",
+                    "url": "https://checkout.shopify.com/..."
+                  },
+                  {
+                    "type": "refund_policy",
+                    "url": "https://checkout.shopify.com/..."
+                  },
+                  {
+                    "type": "shipping_policy",
+                    "url": "https://checkout.shopify.com/..."
+                  }
+                ],
+                "name": "Example Shop C",
+                "url": "https://www.shop-c.example/"
+              },
+              "seller_product_id": "gid://shopify/Product/2000003",
+              "title": "Example Snowboard 3",
+              "url": "https://www.shop-c.example/products/example-snowboard-3?variant=1000003"
+            }
+          ]
+        }
+      ],
+      "ucp": {
+        "capabilities": {
+          "dev.shopify.catalog.global": [
+            {
+              "extends": [
+                "dev.ucp.shopping.catalog.search",
+                "dev.ucp.shopping.catalog.lookup"
+              ],
+              "requires": {
+                "protocol": {
+                  "min": "2026-04-08"
+                }
+              },
+              "schema": "https://shopify.dev/ucp/schemas/2026-04-08/shopify_catalog_global.json",
+              "spec": "https://shopify.dev/docs/agents/catalog/global-catalog",
+              "version": "2026-04-08"
+            }
+          ],
+          "dev.ucp.shopping.catalog.lookup": [
+            {
+              "schema": "https://ucp.dev/2026-04-08/schemas/shopping/catalog_lookup.json",
+              "spec": "https://ucp.dev/2026-04-08/specification/catalog",
+              "version": "2026-04-08"
+            }
+          ],
+          "dev.ucp.shopping.catalog.search": [
+            {
+              "schema": "https://ucp.dev/2026-04-08/schemas/shopping/catalog_search.json",
+              "spec": "https://ucp.dev/2026-04-08/specification/catalog",
+              "version": "2026-04-08"
+            }
+          ]
+        },
+        "status": "success",
+        "version": "2026-04-08"
+      }
+    }
+  }
+}
