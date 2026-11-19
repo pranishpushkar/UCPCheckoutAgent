@@ -11,6 +11,8 @@ import dev.ucplab.core.merchant.CheckoutView;
 import dev.ucplab.core.merchant.CreateCheckout;
 import dev.ucplab.core.merchant.FrozenBody;
 import dev.ucplab.core.merchant.IdempotencyKey;
+import dev.ucplab.core.merchant.LinkOffer;
+import dev.ucplab.core.merchant.LinkOffers;
 import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantGateway;
 import dev.ucplab.core.merchant.MerchantId;
@@ -49,7 +51,7 @@ import java.util.regex.Pattern;
  * {@code NotSent} (I12, 26.5, N1), and discovery reads nothing (19: the catalog serves no {@code /.well-known/ucp}).
  * Nothing is cached (20). The gateway logs nothing.
  */
-public final class GlobalCatalogGateway implements MerchantGateway, CatalogGateway {
+public final class GlobalCatalogGateway implements MerchantGateway, CatalogGateway, LinkOffers {
 
     /** The Global Catalog's endpoint (26.7); off loopback, a catalog entry's url is exactly this (19). */
     public static final URI SHOPIFY_CATALOG = URI.create("https://catalog.shopify.com/api/ucp/mcp");
@@ -125,6 +127,12 @@ public final class GlobalCatalogGateway implements MerchantGateway, CatalogGatew
     public CallOutcome<CatalogProduct> product(String id) {
         Objects.requireNonNull(id, "id");
         return call("get_product", Map.of("id", id, "context", CONTEXT), GlobalCatalogParser::product);
+    }
+
+    /** Skeleton for the red tests of real catalog stage 2. */
+    @Override
+    public CallOutcome<LinkOffer> offer(MerchantId merchant, String itemId) {
+        return new CallOutcome.NotSent<>("not built yet");
     }
 
     /** One read tool call, its answer read by {@code parser}. */

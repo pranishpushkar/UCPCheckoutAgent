@@ -7,6 +7,7 @@ import dev.ucplab.core.approval.ApprovalRecord;
 import dev.ucplab.core.approval.ApprovalRepository;
 import dev.ucplab.core.approval.ApprovalSnapshot;
 import dev.ucplab.core.approval.ApprovalStatus;
+import dev.ucplab.core.approval.LinkSnapshot;
 import dev.ucplab.core.approval.SnapshotLine;
 import dev.ucplab.core.merchant.SessionId;
 import java.util.Optional;
@@ -15,6 +16,7 @@ import dev.ucplab.core.identity.UserId;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.ProposedLine;
 import dev.ucplab.core.intent.PurchaseIntent;
+import dev.ucplab.core.merchant.ContinueUrl;
 import dev.ucplab.core.merchant.MerchantId;
 import java.time.Instant;
 import java.util.List;
@@ -86,6 +88,29 @@ class SqlApprovalRepositoryTest extends ApprovalRepositoryContract {
         ApprovalRecord read = repo.findLatest(new UserId("alice"), id).orElseThrow();
 
         assertThat(read.snapshot().lines()).containsExactly(new SnapshotLine("item_123", 1, 100, ""));
+        assertThat(read.snapshot().hash()).isEqualTo(read.snapshotHash());
+    }
+
+    // Covers: 9.2, 10, I2, I3, 26.7 (a link intent's snapshot keeps its link through the database: the seller's name,
+    // domain and site, and the checkout_url exactly, so the read-back snapshot equals the stored one and its hash)
+    @Test
+    void aLinkSnapshot_readsBackWithItsLinkExactly() {
+        IntentId id = new IntentId("i-link");
+        storeIntent(id, new UserId("alice"));
+        String url = "https://www.shop-a.example/buy/1000001:1?_gsid=FAKEGSID0001&attribution%2Fclick_id_tag=FAKETAG";
+        ApprovalSnapshot snapshot = new ApprovalSnapshot(id, new MerchantId("shopify-catalog"),
+                new SessionId("link:gid://shopify/ProductVariant/1000001"),
+                List.of(new SnapshotLine("gid://shopify/ProductVariant/1000001", 1, 30495, "Example Snowboard 1")),
+                "USD", 30495, 30495, Instant.parse("2026-01-01T00:10:00Z"), Optional.empty(),
+                Optional.of(new LinkSnapshot("Example Shop A", "shop-a.myshopify.example",
+                        Optional.of("www.shop-a.example"), ContinueUrl.parse(url).orElseThrow())));
+        repo.insert(new ApprovalRecord("a-link", id, new UserId("alice"), snapshot, snapshot.hash(), "th",
+                snapshot.expiresAt(), ApprovalStatus.PENDING, Optional.empty(), Optional.empty()));
+
+        ApprovalRecord read = repo.findLatest(new UserId("alice"), id).orElseThrow();
+
+        assertThat(read.snapshot()).isEqualTo(snapshot);
+        assertThat(read.snapshot().link().orElseThrow().url().value().toString()).isEqualTo(url);
         assertThat(read.snapshot().hash()).isEqualTo(read.snapshotHash());
     }
 

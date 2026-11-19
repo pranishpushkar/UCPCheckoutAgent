@@ -101,6 +101,12 @@ public final class DefaultApprovalService implements ApprovalService {
         return new PendingApproval(snapshot, hash, token);
     }
 
+    /** Skeleton for the red tests of real catalog stage 2: the link is not kept yet. */
+    @Override
+    public PendingApproval openLink(PurchaseIntent intent, CheckoutView quote, LinkSnapshot link) {
+        return open(intent, quote);
+    }
+
     /** The chosen shipping option of the quote, with the destination's country, if the merchant needed a selection. */
     private static Optional<FulfillmentSnapshot> shipping(CheckoutView quote) {
         return quote.fulfillment().flatMap(f -> f.methods().stream().findFirst().flatMap(method ->

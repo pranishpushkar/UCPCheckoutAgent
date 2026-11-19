@@ -77,6 +77,8 @@ final class Lab {
      * steps; when null, workers use the constructor without entries (every merchant an owned lab entry).
      */
     java.util.function.Function<MerchantId, Optional<MerchantEntry>> entries;
+    /** The catalog sources' offer reads the workers' orchestrators see (7.2 link rows, 26.7); used with {@link #entries}. */
+    dev.ucplab.core.merchant.LinkOffers links = dev.ucplab.core.merchant.LinkOffers.NONE;
     /** When set, the PolicyEngine of the workers built after this, instead of the rule-based one. */
     dev.ucplab.core.policy.PolicyEngine policyOverride;
     /** When true, policy reads the lab's own intents (P3, P5) instead of seeing no usage. */
@@ -198,7 +200,7 @@ final class Lab {
                 ? new DefaultOrchestrator(intentRepository, approvalRepository, approvalService, gateways, engine,
                         new RequotePolicy(policyConfig), instruments, config, at, ids, workerId, new SplittableRandom(42))
                 : new DefaultOrchestrator(intentRepository, approvalRepository, approvalService, gateways,
-                        id -> entries.apply(id), engine, new RequotePolicy(policyConfig), instruments,
+                        id -> entries.apply(id), links, engine, new RequotePolicy(policyConfig), instruments,
                         dev.ucplab.core.merchant.FulfillmentPolicy.cheapest(), config, at, ids, workerId,
                         new SplittableRandom(42));
         return new Worker(workerId, orchestrator, approvalService);

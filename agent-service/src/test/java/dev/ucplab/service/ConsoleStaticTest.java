@@ -462,6 +462,35 @@ class ConsoleStaticTest {
                 .contains("anchor.referrerPolicy = \"no-referrer\";");
     }
 
+    // Covers: 24.3, 23.2, 26.7 (a link merchant's card: "From <seller.name>" with a Shopify catalog badge, the total
+    // row Listed price, no Other charges line, the answer's note, and the button Approve and get the link; all as text)
+    @Test
+    void approvalCard_atALinkMerchant_readsAsTheDesignSays() throws IOException {
+        String card = card(read("console.js"));
+
+        assertThat(card).contains("approval.completion === \"link\"")
+                .contains("el(\"p\", \"From \" + approval.seller.name")
+                .contains("\"Shopify catalog\"")
+                .contains("\"Listed price\"")
+                .contains("\"Approve and get the link\"");
+        assertThat(count(card, "Other charges (tax)")).as("only in cardCharges' agent branch").isEqualTo(1);
+    }
+
+    // Covers: 24.3, 26.7, I9, D5 (in HANDED_OFF a link intent's link reads Continue at <seller.host>, with the same
+    // anchor rules, and the fixed text that the agent can't see the purchase; the stepper's link steps)
+    @Test
+    void handoffLink_atALinkMerchant_namesTheSellersHost_andSaysTheAgentCantSee() throws IOException {
+        String js = read("console.js");
+        String link = handoffLink(js);
+
+        assertThat(link).contains("\"Continue at \" + ").contains("seller.host")
+                .contains("\"If you buy, the store emails you. The agent can't see this purchase.\"")
+                .contains("anchor.rel = \"noopener noreferrer\";")
+                .contains("anchor.referrerPolicy = \"no-referrer\";");
+        assertThat(count(js, "handoff_url")).as("handoff_url is read once").isEqualTo(1);
+        assertThat(js).contains("\"Priced from Shopify's catalog\"").contains("\"Link ready\"");
+    }
+
     /** The code between {@code // <follow-up>} and {@code // </follow-up>} in console.js. */
     private static String followUp(String js) {
         int from = js.indexOf("// <follow-up>");

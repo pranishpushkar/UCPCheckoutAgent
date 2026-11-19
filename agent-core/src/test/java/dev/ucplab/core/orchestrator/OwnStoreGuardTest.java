@@ -94,4 +94,62 @@ class OwnStoreGuardTest {
         assertThat(OwnStoreGuard.continueUrlAllowed(rest, good)).isFalse();
         assertThat(OwnStoreGuard.continueUrlAllowed(Optional.empty(), good)).isFalse();
     }
+
+    // ---------------------------------------------------------------- link merchants (26.7)
+
+    private static final Optional<MerchantEntry> CATALOG = Optional.of(new MerchantEntry(SHOP,
+            URI.create("https://catalog.shopify.com/api/ucp/mcp"), "Shopify catalog", MerchantStatus.ACTIVE,
+            Transport.CATALOG, Completion.LINK, false, Optional.empty()));
+    private static final String SELLER_DOMAIN = "shop-a.myshopify.example";
+    private static final Optional<String> SELLER_SITE = Optional.of("www.shop-a.example");
+
+    // Covers: I12, 26.7 (propose accepts a link entry without owned; an entry that is neither owned nor link, or none,
+    // is refused; a link entry still allows no mutating call)
+    @Test
+    void proposalAllows_anOwnedEntryOrALinkEntry() {
+        assertThat(OwnStoreGuard.proposalAllows(mcp(true))).isTrue();
+        assertThat(OwnStoreGuard.proposalAllows(CATALOG)).isTrue();
+        assertThat(OwnStoreGuard.proposalAllows(mcp(false))).isFalse();
+        assertThat(OwnStoreGuard.proposalAllows(Optional.empty())).isFalse();
+        assertThat(OwnStoreGuard.entryAllows(CATALOG)).as("no mutating call to a catalog").isFalse();
+    }
+
+    // Covers: I12 C3, 26.7 (a checkout_url is accepted when it is https on the host of seller.url or on seller.domain:
+    // any path and query, the host in any case, no port or 443)
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "https://www.shop-a.example/buy/1:1?_gsid=FAKE&attribution%2Fclick_id_tag=FAKETAG",
+            "https://WWW.Shop-A.example/buy/1:1",
+            "https://www.shop-a.example:443/buy/1:1",
+            "https://shop-a.myshopify.example/buy/1:1",
+            "https://SHOP-A.myshopify.example/buy/1:1"})
+    void linkAllowed_httpsOnTheSellersSiteOrDomain(String raw) {
+        assertThat(OwnStoreGuard.linkAllowed(SELLER_DOMAIN, SELLER_SITE, url(raw))).as(raw).isTrue();
+    }
+
+    // Covers: I12 C3, 26.7 (refused: another host, a look-alike or a subdomain, user info, another port, plain http)
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "https://www.elsewhere.example/buy/1:1",
+            "https://www.shop-a.example.elsewhere.example/buy/1:1",
+            "https://pay.www.shop-a.example/buy/1:1",
+            "https://shop-a.example/buy/1:1",
+            "https://www.shop-a.example@elsewhere.example/buy/1:1",
+            "https://user@www.shop-a.example/buy/1:1",
+            "https://www.shop-a.example:8443/buy/1:1",
+            "http://www.shop-a.example/buy/1:1",
+            "https://checkout.shopify.com/buy/1:1"})
+    void linkAllowed_refusesAnyOtherLink(String raw) {
+        assertThat(ContinueUrl.parse(raw).map(u -> OwnStoreGuard.linkAllowed(SELLER_DOMAIN, SELLER_SITE, u)))
+                .as(raw).isNotEqualTo(Optional.of(true));
+    }
+
+    // Covers: I12 C3, 26.7 (a seller without a site is compared with its domain only)
+    @Test
+    void linkAllowed_withoutASite_comparesTheDomainOnly() {
+        assertThat(OwnStoreGuard.linkAllowed(SELLER_DOMAIN, Optional.empty(),
+                url("https://shop-a.myshopify.example/buy/1:1"))).isTrue();
+        assertThat(OwnStoreGuard.linkAllowed(SELLER_DOMAIN, Optional.empty(),
+                url("https://www.shop-a.example/buy/1:1"))).isFalse();
+    }
 }

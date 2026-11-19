@@ -38,6 +38,16 @@ final class OwnStoreGuard {
         return entry.map(MerchantEntry::owned).orElse(false);
     }
 
+    /** Skeleton for the red tests of real catalog stage 2. */
+    static boolean proposalAllows(Optional<MerchantEntry> entry) {
+        return entryAllows(entry);
+    }
+
+    /** Skeleton for the red tests of real catalog stage 2. */
+    static boolean linkAllowed(String sellerDomain, Optional<String> sellerSite, ContinueUrl url) {
+        return false;
+    }
+
     /** Whether the entry now is the one the intent was proposed under (10, 19); no entry is a change. */
     static boolean unchanged(Optional<MerchantEntry> entry, String storedFingerprint) {
         return entry.map(e -> e.fingerprint().equals(storedFingerprint)).orElse(false);

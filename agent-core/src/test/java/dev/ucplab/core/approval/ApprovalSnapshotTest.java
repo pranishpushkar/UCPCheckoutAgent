@@ -211,4 +211,66 @@ class ApprovalSnapshotTest {
         assertThat(java.util.Arrays.stream(FulfillmentSnapshot.class.getRecordComponents()).map(c -> c.getName()))
                 .containsExactly("optionId", "label", "priceMinor", "destinationCountry");
     }
+
+    // ---------------------------------------------------------------- link (26.7)
+
+    static final String LINK = "https://www.shop-a.example/buy/1000001:1?_gsid=FAKEGSID0001"
+            + "&attribution%2Fclick_id_tag=FAKETAG";
+
+    static ApprovalSnapshot linked(LinkSnapshot link) {
+        return new ApprovalSnapshot(new IntentId("intent-1"), new MerchantId("shopify-catalog"),
+                new SessionId("link:gid://shopify/ProductVariant/1000001"),
+                List.of(new SnapshotLine("gid://shopify/ProductVariant/1000001", 1, 30495, "Example Snowboard 1")),
+                "USD", 30495, 30495, Instant.parse("2026-11-08T10:10:00Z"), Optional.empty(), Optional.of(link));
+    }
+
+    static LinkSnapshot link(String name, String domain, Optional<String> site, String url) {
+        return new LinkSnapshot(name, domain, site, dev.ucplab.core.merchant.ContinueUrl.parse(url).orElseThrow());
+    }
+
+    static final LinkSnapshot SHOP_A = link("Example Shop A", "shop-a.myshopify.example",
+            Optional.of("www.shop-a.example"), LINK);
+
+    // Covers: 9.2, I2, I3, 26.7 (a link intent's snapshot carries link{sellerName, sellerDomain, sellerSite, url}, the
+    // url exactly as read; sellerSite only when present; a snapshot without link hashes exactly as before). Expected
+    // string and hashes from Python json.dumps(sort_keys=True, separators=(',',':')) and hashlib.
+    @Test
+    void theLink_isInTheCanonicalForm_andAbsentWhenThereIsNone() {
+        ApprovalSnapshot s = linked(SHOP_A);
+
+        assertThat(s.canonicalJson()).isEqualTo("{\"currency\":\"USD\",\"expiresAt\":\"2026-11-08T10:10:00Z\","
+                + "\"intentId\":\"intent-1\",\"lines\":[{\"itemId\":\"gid://shopify/ProductVariant/1000001\","
+                + "\"quantity\":1,\"title\":\"Example Snowboard 1\",\"unitPriceMinor\":30495}],"
+                + "\"link\":{\"sellerDomain\":\"shop-a.myshopify.example\",\"sellerName\":\"Example Shop A\","
+                + "\"sellerSite\":\"www.shop-a.example\",\"url\":\"" + LINK + "\"},\"maxTotalMinor\":30495,"
+                + "\"merchantId\":\"shopify-catalog\",\"sessionId\":\"link:gid://shopify/ProductVariant/1000001\","
+                + "\"totalMinor\":30495}");
+        assertThat(s.hash()).isEqualTo("25d64f9a2fb0bdbc7c37f11ca53605859486f3b57080ea0614abb6653dc88186");
+        assertThat(linked(link("Example Shop A", "shop-a.myshopify.example", Optional.empty(), LINK)).hash())
+                .isEqualTo("e9f8efa41135e164a412d6a6dca76ed273b87e6bb8eca04e682122f3a9f3090f");
+        assertThat(sample().canonicalJson()).doesNotContain("link");
+        assertThat(sample().hash()).isEqualTo("37bd4b1e6bfbdb0fde5ee59cf333a620a3ab239b63d2f574c241a56cadb228fa");
+    }
+
+    // Covers: I2, I3, 26.7 (the hash changes with any part of the link: an approval of one link cannot hand off another)
+    @Test
+    void theHash_changesWithAnyPartOfTheLink() {
+        List<ApprovalSnapshot> variants = List.of(
+                linked(link("Example Shop B", "shop-a.myshopify.example", Optional.of("www.shop-a.example"), LINK)),
+                linked(link("Example Shop A", "shop-b.myshopify.example", Optional.of("www.shop-a.example"), LINK)),
+                linked(link("Example Shop A", "shop-a.myshopify.example", Optional.of("www.shop-b.example"), LINK)),
+                linked(link("Example Shop A", "shop-a.myshopify.example", Optional.empty(), LINK)),
+                linked(link("Example Shop A", "shop-a.myshopify.example", Optional.of("www.shop-a.example"),
+                        LINK.replace("FAKETAG", "OTHERTAG"))));
+
+        assertThat(variants).extracting(ApprovalSnapshot::hash).doesNotContain(linked(SHOP_A).hash())
+                .doesNotHaveDuplicates();
+    }
+
+    // Covers: I8, 26.7 (the snapshot's text shows the link by its host only)
+    @Test
+    void theSnapshotsText_showsTheLinkByItsHostOnly() {
+        assertThat(linked(SHOP_A).toString()).doesNotContain("_gsid").doesNotContain("FAKETAG")
+                .doesNotContain("/buy/");
+    }
 }

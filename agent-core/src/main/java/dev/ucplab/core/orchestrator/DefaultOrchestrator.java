@@ -51,6 +51,7 @@ import dev.ucplab.core.merchant.CreateCheckout;
 import dev.ucplab.core.merchant.FrozenBody;
 import dev.ucplab.core.merchant.IdempotencyKey;
 import dev.ucplab.core.merchant.LineView;
+import dev.ucplab.core.merchant.LinkOffers;
 import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantGateway;
 import dev.ucplab.core.merchant.MerchantId;
@@ -193,6 +194,7 @@ public final class DefaultOrchestrator implements Orchestrator {
     private final ApprovalService approvalService;
     private final Function<MerchantId, MerchantGateway> gateways;
     private final Function<MerchantId, Optional<MerchantEntry>> entries;
+    private final LinkOffers links;
     private final PolicyEngine policy;
     private final RequotePolicy requotePolicy;
     private final Function<MerchantId, PaymentInstrument> instruments;
@@ -301,6 +303,21 @@ public final class DefaultOrchestrator implements Orchestrator {
             PolicyEngine policy, RequotePolicy requotePolicy, Function<MerchantId, PaymentInstrument> instruments,
             FulfillmentPolicy fulfillmentPolicy, OrchestratorConfig config, Clock clock, IdGenerator ids,
             String workerId, RandomGenerator jitter) {
+        this(intents, approvals, approvalService, gateways, entries, LinkOffers.NONE, policy, requotePolicy,
+                instruments, fulfillmentPolicy, config, clock, ids, workerId, jitter);
+    }
+
+    /**
+     * @param links the offer reads of the catalog sources (7.2 link rows, 26.7): a link intent's quote is one of them,
+     *     never a checkout call. Every other intent never uses it.
+     */
+    public DefaultOrchestrator(
+            IntentRepository intents, ApprovalRepository approvals, ApprovalService approvalService,
+            Function<MerchantId, MerchantGateway> gateways, Function<MerchantId, Optional<MerchantEntry>> entries,
+            LinkOffers links, PolicyEngine policy, RequotePolicy requotePolicy,
+            Function<MerchantId, PaymentInstrument> instruments, FulfillmentPolicy fulfillmentPolicy,
+            OrchestratorConfig config, Clock clock, IdGenerator ids, String workerId, RandomGenerator jitter) {
+        this.links = Objects.requireNonNull(links, "links");
         this.entries = Objects.requireNonNull(entries, "entries");
         this.fulfillmentPolicy = Objects.requireNonNull(fulfillmentPolicy, "fulfillmentPolicy");
         this.intents = Objects.requireNonNull(intents, "intents");

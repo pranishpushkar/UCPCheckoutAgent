@@ -50,5 +50,7 @@ public enum TransitionEvent {
     /** 7.2 update_rejected: the merchant refused an update with an error envelope (8.1). */
     UPDATE_REJECTED,
     /** 7.2 quote_unsupported (handoff), and fulfillment_unsupported: a readable answer the agent cannot use. */
-    QUOTE_UNSUPPORTED
+    QUOTE_UNSUPPORTED,
+    /** 7.2 link_refused: link_quantity_unsupported, link_not_allowed or catalog_unreadable at a link merchant. */
+    LINK_REFUSED
 }

@@ -17,7 +17,8 @@ import java.util.Optional;
 /**
  * What the user approves. Contract 9.2, invariants I2 and I3. Built from the merchant's
  * response, never from model output. {@code fulfillment} is the chosen shipping option, when the merchant needed one
- * (D4); the hash covers it, and the street address is never part of it.
+ * (D4); the hash covers it, and the street address is never part of it. {@code link} is a link intent's seller and
+ * {@code checkout_url} (9.2, 26.7); its URL shows by its host only.
  */
 public record ApprovalSnapshot(
         IntentId intentId,
@@ -28,7 +29,16 @@ public record ApprovalSnapshot(
         long totalMinor,
         long maxTotalMinor,
         Instant expiresAt,
-        Optional<FulfillmentSnapshot> fulfillment) {
+        Optional<FulfillmentSnapshot> fulfillment,
+        Optional<LinkSnapshot> link) {
+
+    /** A snapshot at a store: no link (9.2). */
+    public ApprovalSnapshot(
+            IntentId intentId, MerchantId merchantId, SessionId sessionId, List<SnapshotLine> lines, String currency,
+            long totalMinor, long maxTotalMinor, Instant expiresAt, Optional<FulfillmentSnapshot> fulfillment) {
+        this(intentId, merchantId, sessionId, lines, currency, totalMinor, maxTotalMinor, expiresAt, fulfillment,
+                Optional.empty());
+    }
 
     /** A snapshot with no shipping part: the lab merchant, and any merchant that needs none. */
     public ApprovalSnapshot(
@@ -51,6 +61,7 @@ public record ApprovalSnapshot(
         Objects.requireNonNull(currency, "currency");
         Objects.requireNonNull(expiresAt, "expiresAt");
         Objects.requireNonNull(fulfillment, "fulfillment");
+        Objects.requireNonNull(link, "link");
         lines = List.copyOf(lines);
         if (lines.isEmpty()) {
             throw new IllegalArgumentException("a snapshot needs at least one line");

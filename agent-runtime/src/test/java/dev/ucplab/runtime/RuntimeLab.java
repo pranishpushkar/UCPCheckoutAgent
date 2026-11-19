@@ -7,6 +7,7 @@ import dev.ucplab.core.approval.ApprovalService;
 import dev.ucplab.core.approval.ApprovalTokens;
 import dev.ucplab.core.approval.DefaultApprovalService;
 import dev.ucplab.core.approval.InMemoryApprovalRepository;
+import dev.ucplab.core.approval.LinkSnapshot;
 import dev.ucplab.core.approval.PendingApproval;
 import dev.ucplab.core.id.IdGenerator;
 import dev.ucplab.core.id.UuidV7IdGenerator;
@@ -121,6 +122,13 @@ final class RuntimeLab implements AutoCloseable {
             @Override
             public PendingApproval open(PurchaseIntent intent, CheckoutView quote) {
                 PendingApproval pending = delegate.open(intent, quote);
+                opened.add(pending);
+                return pending;
+            }
+
+            @Override
+            public PendingApproval openLink(PurchaseIntent intent, CheckoutView quote, LinkSnapshot link) {
+                PendingApproval pending = delegate.openLink(intent, quote, link);
                 opened.add(pending);
                 return pending;
             }
