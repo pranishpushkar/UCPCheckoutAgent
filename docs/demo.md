@@ -50,6 +50,8 @@ a clean volume. Stop with `docker compose down -v` (README step 9).
 
 ## 3. The timeline
 
+- [ ] Before the first intent, the Purchase panel reads **No purchase yet**, with no **Show all n events** toggle (not
+  "Show all 0 events").
 - [ ] The right column shows "Intent …" and a stepper: **Proposed** and **Quoted by the store** done, **Waiting for
   your approval** current, **Sent to the store** and **Order placed at the store** pending. No event names (no
   `approval_opened`, no `transition`) in this view.

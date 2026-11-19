@@ -558,14 +558,33 @@ class ConsoleStaticTest {
                 .doesNotContain("event").doesNotContain("LABELS").doesNotContain("describe(");
         assertThat(js).contains("showSteps(milestones(result.data));")
                 .contains("$(\"events-toggle\").textContent = \"Show all \" + result.data.length + \" events\";");
-        int events = html.indexOf("<details id=\"all-events\">");
-        assertThat(events).as("the events behind a closed toggle").isPositive();
+        int events = html.indexOf("<details id=\"all-events\" hidden>");
+        assertThat(events).as("the events behind a closed toggle, hidden until an intent is followed").isPositive();
         assertThat(html.substring(events, html.indexOf("</details>", events)))
-                .contains("<summary id=\"events-toggle\">Show all 0 events</summary>")
+                .contains("<summary id=\"events-toggle\">Show all events</summary>")
                 .contains("<ol id=\"timeline\" class=\"timeline\"></ol>");
         assertThat(html).contains("<ol id=\"steps\" class=\"steps\" aria-label=\"Milestones\"></ol>");
         assertThat(read("console.css")).contains(".steps li.done").contains(".steps li.current")
                 .contains(".steps li.pending").contains(".steps li.ended");
+    }
+
+    // Covers: 24.3 (before the console follows an intent the Purchase panel reads "No purchase yet", with no toggle and
+    // never "Show all 0 events"; the toggle appears with the followed intent's events and hides again on a 404)
+    @Test
+    void purchasePanel_withNoIntent_saysNoPurchaseYet_andHidesTheToggle() throws IOException {
+        String html = read("index.html");
+        String js = read("console.js");
+
+        assertThat(html).contains("<p id=\"timeline-state\" class=\"muted\">No purchase yet</p>")
+                .contains("<details id=\"all-events\" hidden>").doesNotContain("Show all 0 events");
+        int load = js.indexOf("async function loadEvents(id) {");
+        assertThat(load).isNotNegative();
+        assertThat(js.substring(load, js.indexOf("\n}\n", load)))
+                .contains("$(\"all-events\").hidden = false;");
+        int notFound = js.indexOf("if (result.status === 404) {", js.indexOf("async function pollIntent() {"));
+        assertThat(notFound).isNotNegative();
+        assertThat(js.substring(notFound, js.indexOf("return;", notFound)))
+                .contains("$(\"all-events\").hidden = true;");
     }
 
     // Covers: 24.3, 7.6, VERIFY 11 (the success card: in COMPLETED, and in HANDED_OFF once the store reported an order,
