@@ -284,6 +284,10 @@
                                 <param>${mutation.targetTests}</param>
                                 <param>${mutation.targetTests2}</param>
                             </targetTests>
+                            <!-- Not Surefire's configuration: pitest-maven would take its excludedGroups and drop every class
+                                 tagged "sequential" (the crash matrices among them), which kill mutants on star paths. Those
+                                 tags only order verify's forks; the selection here is targetTests and excludedTestClasses. -->
+                            <parseSurefireConfig>false</parseSurefireConfig>
                             <excludedTestClasses>
                                 <!-- the evaluation harness starts servers and child JVMs (S9, S14): minutes per run, and not part of any star path -->
                                 <param>dev.ucplab.eval.*</param>
