@@ -64,7 +64,7 @@ public final class GeminiException extends RuntimeException implements ModelFail
 
     /**
      * @param cause 6.5's cause: a status, an enum name or a class's simple name, never content (I8)
-     * @param retryAfter the API's {@code Retry-After}, when it sent one as a number of seconds
+     * @param retryAfter the {@code retryDelay} the API's error named (6.3), when it named one
      */
     GeminiException(Reason reason, String cause, Optional<Duration> retryAfter) {
         super(Objects.requireNonNull(reason, "reason").message, null, false, true);

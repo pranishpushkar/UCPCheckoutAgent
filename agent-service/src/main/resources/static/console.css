@@ -111,6 +111,15 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .chat li.user { align-self: flex-end; background: var(--accent); color: var(--accent-fg); border-bottom-right-radius: 4px; }
 .chat li.agent { align-self: flex-start; background: var(--surface); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
 .chat li.question { font-style: italic; }
+/* 24.3: the working bubble. Its dots are the page's one animation; under reduced motion they go, and the text stays. */
+.chat li.working { color: var(--muted); }
+.working-dots { display: inline-block; margin-left: 4px; }
+.working-dots::before { content: "•••"; animation: working-pulse 1.2s ease-in-out infinite; }
+@keyframes working-pulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+.working-still { display: block; font-size: 0.875rem; }
+@media (prefers-reduced-motion: reduce) {
+  .working-dots { display: none; }
+}
 .tools { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip {
   display: inline-flex;

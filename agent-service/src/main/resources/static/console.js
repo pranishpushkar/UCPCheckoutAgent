@@ -224,8 +224,86 @@ function showBudgetField() {
 }
 // </budget>
 
+// <working>
+// 24.3: while a run works. Send is disabled and reads "Working…", and an agent bubble reads "Thinking…", then the step
+// of the run's newest tool event: a fixed text of the page chosen by the tool's name, never a message or the model's
+// text. From 10 s it adds "Still working · <n> s". The bubble is outside the aria-live region, so the status line
+// alone speaks, once.
+const THINKING = "Thinking…";
+const STEP_TEXTS = new Map([
+  ["search_catalog", "Searching the catalog…"],
+  ["propose_purchase", "Preparing your approval…"],
+  ["get_purchase_status", "Checking the purchase…"],
+]);
+const STILL_AFTER_MS = 10000;
+let working = null;   // {bubble, step, still, since, timer} while a run works
+
+// The one merchant's own name, from the lab list, when there is exactly one and it is not the catalog.
+function priceStep() {
+  const only = labMerchants.length === 1 ? labMerchants[0] : null;
+  return only && only.completion !== "link" && only.name ? "Checking the price at " + only.name + "…" : "Checking the price…";
+}
+
+function stepText(events) {
+  const newest = events.length > 0 ? events[events.length - 1].tool : "";
+  if (newest === "get_product") {
+    return priceStep();
+  }
+  return STEP_TEXTS.get(newest) || THINKING;
+}
+
+function startWorking() {
+  const button = $("send-button");
+  button.disabled = true;
+  button.textContent = "Working…";
+  const bubble = el("li", null, "agent working");
+  const step = el("span", THINKING, "working-step");
+  const dots = el("span", null, "working-dots");
+  dots.setAttribute("aria-hidden", "true");
+  const still = el("span", "", "working-still");
+  bubble.appendChild(step);
+  bubble.appendChild(dots);
+  bubble.appendChild(still);
+  working = {bubble: bubble, step: step, still: still, since: Date.now(), timer: window.setInterval(tickWorking, 1000)};
+  setStatus("Working on it.");
+  $("chat").appendChild(bubble);
+}
+
+function tickWorking() {
+  if (!working) {
+    return;
+  }
+  const ms = Date.now() - working.since;
+  working.still.textContent = ms >= STILL_AFTER_MS ? "Still working · " + Math.floor(ms / 1000) + " s" : "";
+}
+
+// A poll of a running run: the bubble, last in the chat, takes the newest step.
+function showWorking(run) {
+  if (!working) {
+    startWorking();
+  }
+  working.step.textContent = stepText(run.tool_events || []);
+  tickWorking();
+  $("chat").appendChild(working.bubble);
+}
+
+function stopWorking() {
+  if (working) {
+    window.clearInterval(working.timer);
+    working.bubble.remove();
+    working = null;
+  }
+  const button = $("send-button");
+  button.disabled = false;
+  button.textContent = "Send";
+}
+// </working>
+
 async function send(event) {
   event.preventDefault();
+  if (working) {
+    return;
+  }
   const input = $("message");
   const text = input.value.trim();
   if (!text) {
@@ -238,10 +316,17 @@ async function send(event) {
     return;
   }
   input.value = "";
+  if (!continuing) {
+    clear($("chat"));
+    clear($("tools"));
+  }
+  $("chat").appendChild(el("li", text, "user"));
+  startWorking();
   const result = continuing
       ? await api("POST", "/api/runs/" + currentRun.id + "/messages", {message: text})
       : await api("POST", "/api/runs", Object.assign({message: text}, budget));
   if (!result.ok) {
+    stopWorking();
     setStatus(errorText(result), true);
     return;
   }
@@ -311,7 +396,15 @@ function showRun(run) {
   if (chatText) {
     $("chat").appendChild(el("li", chatText, "agent"));
   }
-  setStatus(statusText);
+  if (run.status === "running") {
+    showWorking(run);
+  } else {
+    stopWorking();
+    setStatus(statusText);
+  }
+  if (run.tool_events) {
+    showChips(run.tool_events);
+  }
   const intents = run.intent_ids || [];
   if (intents.length > 0) {
     const newest = intents[intents.length - 1];
@@ -338,9 +431,12 @@ async function pollRun() {
     return;
   }
   const result = await api("GET", "/api/runs/" + currentRun.id);
-  if (result.ok) {
-    showRun(result.data);
+  if (!result.ok) {
+    stopWorking();
+    setStatus(errorText(result), true);
+    return;
   }
+  showRun(result.data);
 }
 
 async function loadRunDetails() {
@@ -351,9 +447,13 @@ async function loadRunDetails() {
   if (!result.ok) {
     return;
   }
+  showChips(result.data.tool_events || []);
+}
+
+// 24.3: one chip per call, with a dot for its outcome; a summary other than ok is also shown as text.
+function showChips(events) {
   clear($("tools"));
-  // 24.3: one chip per call, with a dot for its outcome; a summary other than ok is also shown as text.
-  (result.data.tool_events || []).forEach((e) => {
+  events.forEach((e) => {
     const chip = el("li", null, "chip");
     chip.appendChild(el("span", null, e.summary === "ok" ? "dot ok" : "dot warn")).setAttribute("aria-hidden", "true");
     chip.appendChild(el("span", e.tool + " · " + e.took_ms + " ms" + (e.summary === "ok" ? "" : " · " + e.summary)));

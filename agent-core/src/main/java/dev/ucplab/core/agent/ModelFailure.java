@@ -27,7 +27,7 @@ public interface ModelFailure {
         return false;
     }
 
-    /** 6.3: how long the API asked us to wait before trying again ({@code Retry-After}), when it said. */
+    /** 6.3: how long the API asked us to wait before trying again (Gemini's {@code retryDelay}), when it said. */
     default Optional<Duration> retryAfter() {
         return Optional.empty();
     }
