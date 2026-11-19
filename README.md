@@ -174,6 +174,9 @@ row, and 30 runs below 10%. These reports say how many runs there were, not that
   record, not the agent's.
 - **SQLite and one instance.** Postgres and several instances are M7.
 - **No real payments.** Mock tokens at the lab merchants, and no `complete` at Shopify (N1).
+- **Known follow-ups.** [docs/follow-ups.md](docs/follow-ups.md) lists production work left for later, each with the
+  condition it must meet first: for example, equivalents 83, 84, 90 and 91 are killed before a statement cache or Postgres
+  (M7).
 
 ## Where things are
 

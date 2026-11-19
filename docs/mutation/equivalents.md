@@ -469,14 +469,14 @@ Format, one block per mutant. **An entry without an `approved:` line is only a p
 - description: removed call to java/sql/PreparedStatement::setNull
 - why it is equivalent: justified: SQLite binds an unbound parameter as NULL (every statement is opened fresh in a try-with-resources). PIT removes the call and keeps the evaluation of its argument `n++`, so the placeholder stays unbound and is bound as NULL (the same value `setNull` writes). Checked by hand: removing the call and its `n++` is red, removing the call alone is green
 - the test that shows it: `IntentRepositoryContract.recordAttempt_keepsEveryFieldOfTheAttempt` (an attempt with no http status) passes with and without the mutation
-- condition: equivalent only while every PreparedStatement is fresh and the driver is sqlite-jdbc. A statement cache, or a driver that refuses an unset parameter (pgjdbc, M7), makes it a survivor: revisit and kill 83, 84, 90 and 91 before either lands (the statement-cache follow-up)
+- condition: equivalent only while every PreparedStatement is fresh and the driver is sqlite-jdbc. A statement cache, or a driver that refuses an unset parameter (pgjdbc, M7), makes it a survivor: revisit and kill 83, 84, 90 and 91 before either lands (the SQL statement cache item of `docs/follow-ups.md`)
 - approved: owner 2026-11-15; the condition added by the owner 2026-11-19
 
 ### 84. dev.ucplab.persistence.SqlIntentRepository.updateAttempt VoidMethodCallMutator (the `setNull` of an absent http status)
 - description: removed call to java/sql/PreparedStatement::setNull
 - why it is equivalent: as 83: justified: SQLite binds an unbound parameter as NULL (every statement is opened fresh in a try-with-resources)
 - the test that shows it: `IntentRepositoryContract.resolveAttempt*` (a resolve with no http status) pass with and without the mutation
-- condition: equivalent only while every PreparedStatement is fresh and the driver is sqlite-jdbc. A statement cache, or a driver that refuses an unset parameter (pgjdbc, M7), makes it a survivor: revisit and kill 83, 84, 90 and 91 before either lands (the statement-cache follow-up)
+- condition: equivalent only while every PreparedStatement is fresh and the driver is sqlite-jdbc. A statement cache, or a driver that refuses an unset parameter (pgjdbc, M7), makes it a survivor: revisit and kill 83, 84, 90 and 91 before either lands (the SQL statement cache item of `docs/follow-ups.md`)
 - approved: owner 2026-11-15; the condition added by the owner 2026-11-19
 
 ### 85. dev.ucplab.persistence.SqlIntentRepository.lambda$claimRecoverable$14 RemoveConditionalMutator_EQUAL_ELSE (the `excluded.isEmpty()` test)
@@ -519,12 +519,12 @@ SqlIntentRepository runs only on SQLite today: sqlite-jdbc is the only driver, `
 - description: removed call to java/sql/PreparedStatement::setNull
 - why it is equivalent: as 83: SQLite binds an unbound parameter as NULL, and the insert's statement is opened fresh in a try-with-resources, so the placeholder stays unbound and is stored as NULL, the value `setNull` writes. The other mutant of the same line, `setString(n - 1, null)` over the store order label, is killed by `IntentRepositoryContract.insert_withoutABudget_keepsTheHandoffWatchBesideIt`
 - the test that shows it: `IntentRepositoryContract.insert_storesTheBudget_andEveryReadReturnsIt` (`i2`, no budget) and `insert_withoutABudget_keepsTheHandoffWatchBesideIt` pass with and without the mutation
-- condition: equivalent only while every PreparedStatement is fresh and the driver is sqlite-jdbc. A statement cache, or a driver that refuses an unset parameter (pgjdbc, M7), makes it a survivor: revisit and kill 83, 84, 90 and 91 before either lands (the statement-cache follow-up)
+- condition: equivalent only while every PreparedStatement is fresh and the driver is sqlite-jdbc. A statement cache, or a driver that refuses an unset parameter (pgjdbc, M7), makes it a survivor: revisit and kill 83, 84, 90 and 91 before either lands (the SQL statement cache item of `docs/follow-ups.md`)
 - approved: owner 2026-11-19, on the condition above
 
 ### 91. dev.ucplab.persistence.SqlIntentRepository.setBudget VoidMethodCallMutator (the `setString(n + 1, null)` of an absent budget's `budget_currency`)
 - description: removed call to java/sql/PreparedStatement::setString
 - why it is equivalent: as 90, for the second column of the pair: unbound is NULL, the value the call writes. V11's CHECK (both set or both null) holds either way
 - the test that shows it: as 90
-- condition: equivalent only while every PreparedStatement is fresh and the driver is sqlite-jdbc. A statement cache, or a driver that refuses an unset parameter (pgjdbc, M7), makes it a survivor: revisit and kill 83, 84, 90 and 91 before either lands (the statement-cache follow-up)
+- condition: equivalent only while every PreparedStatement is fresh and the driver is sqlite-jdbc. A statement cache, or a driver that refuses an unset parameter (pgjdbc, M7), makes it a survivor: revisit and kill 83, 84, 90 and 91 before either lands (the SQL statement cache item of `docs/follow-ups.md`)
 - approved: owner 2026-11-19, on the condition above
