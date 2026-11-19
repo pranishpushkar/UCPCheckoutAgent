@@ -127,7 +127,8 @@ class OwnStoreGuardTest {
         assertThat(OwnStoreGuard.linkAllowed(SELLER_DOMAIN, SELLER_SITE, url(raw))).as(raw).isTrue();
     }
 
-    // Covers: I12 C3, 26.7 (refused: another host, a look-alike or a subdomain, user info, another port, plain http)
+    // Covers: I12 C3, 26.7 (refused: another host, a look-alike or a subdomain, user info, another port, plain http,
+    // no host)
     @ParameterizedTest
     @ValueSource(strings = {
             "https://www.elsewhere.example/buy/1:1",
@@ -138,7 +139,9 @@ class OwnStoreGuardTest {
             "https://user@www.shop-a.example/buy/1:1",
             "https://www.shop-a.example:8443/buy/1:1",
             "http://www.shop-a.example/buy/1:1",
-            "https://checkout.shopify.com/buy/1:1"})
+            "https://checkout.shopify.com/buy/1:1",
+            "https:/buy/1:1",
+            "https:///buy/1:1"})
     void linkAllowed_refusesAnyOtherLink(String raw) {
         assertThat(ContinueUrl.parse(raw).map(u -> OwnStoreGuard.linkAllowed(SELLER_DOMAIN, SELLER_SITE, u)))
                 .as(raw).isNotEqualTo(Optional.of(true));

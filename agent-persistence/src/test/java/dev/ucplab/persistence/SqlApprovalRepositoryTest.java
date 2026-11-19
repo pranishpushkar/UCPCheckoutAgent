@@ -114,6 +114,32 @@ class SqlApprovalRepositoryTest extends ApprovalRepositoryContract {
         assertThat(read.snapshot().hash()).isEqualTo(read.snapshotHash());
     }
 
+    // Covers: 9.2, 10, I8, 26.7 (a stored link whose url no longer parses is refused on read, never read as no link,
+    // and the refusal names no part of it)
+    @Test
+    void aStoredLinkThatDoesNotParse_isRefusedOnRead_withoutNamingIt() {
+        IntentId id = new IntentId("i-bad-link");
+        storeIntent(id, new UserId("alice"));
+        ApprovalSnapshot snapshot = new ApprovalSnapshot(id, new MerchantId("shopify-catalog"),
+                new SessionId("link:gid://shopify/ProductVariant/1000001"),
+                List.of(new SnapshotLine("gid://shopify/ProductVariant/1000001", 1, 30495, "Example Snowboard 1")),
+                "USD", 30495, 30495, Instant.parse("2026-01-01T00:10:00Z"), Optional.empty(),
+                Optional.of(new LinkSnapshot("Example Shop A", "shop-a.myshopify.example", Optional.empty(),
+                        ContinueUrl.parse("https://www.shop-a.example/buy/1000001:1").orElseThrow())));
+        repo.insert(new ApprovalRecord("a-bad-link", id, new UserId("alice"), snapshot, snapshot.hash(), "th",
+                snapshot.expiresAt(), ApprovalStatus.PENDING, Optional.empty(), Optional.empty()));
+        db.write(c -> {
+            try (var s = c.prepareStatement("UPDATE approval SET snapshot_json = replace(snapshot_json,"
+                    + " 'https://www.shop-a.example/buy/1000001:1', 'https://www.shop-a.example/buy/ 1') WHERE id = 'a-bad-link'")) {
+                return s.executeUpdate();
+            }
+        });
+
+        assertThatThrownBy(() -> repo.findLatest(new UserId("alice"), id))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageNotContaining("shop-a").hasMessageNotContaining("buy");
+    }
+
     @AfterEach
     void closeDatabase() {
         db.close();
