@@ -1,6 +1,7 @@
 package dev.ucplab.core.policy;
 
 import dev.ucplab.core.identity.UserId;
+import dev.ucplab.core.intent.Budget;
 import dev.ucplab.core.intent.ProposedLine;
 import dev.ucplab.core.merchant.CheckoutView;
 import dev.ucplab.core.merchant.LineView;
@@ -78,7 +79,7 @@ public final class RuleBasedPolicyEngine implements PolicyEngine {
     }
 
     @Override
-    public PolicyDecision evaluateQuote(UserId user, CheckoutView quote) {
+    public PolicyDecision evaluateQuote(UserId user, CheckoutView quote, Optional<Budget> budget) {
         Objects.requireNonNull(user, "user");
         Objects.requireNonNull(quote, "quote");
 

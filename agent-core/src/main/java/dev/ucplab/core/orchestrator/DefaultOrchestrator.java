@@ -19,6 +19,7 @@ import dev.ucplab.core.identity.UserId;
 import dev.ucplab.core.intent.AttemptId;
 import dev.ucplab.core.intent.AttemptOp;
 import dev.ucplab.core.intent.AttemptStatus;
+import dev.ucplab.core.intent.Budget;
 import dev.ucplab.core.intent.DuplicateIntentException;
 import dev.ucplab.core.intent.HandoffWatch;
 import dev.ucplab.core.intent.IntentEvent;
@@ -323,7 +324,8 @@ public final class DefaultOrchestrator implements Orchestrator {
      * An identical active proposal returns the existing intent (7.7).
      */
     @Override
-    public ProposalResult propose(AuthContext auth, MerchantId merchantId, List<ProposedLine> lines, String rationale) {
+    public ProposalResult propose(AuthContext auth, MerchantId merchantId, List<ProposedLine> lines, String rationale,
+            Optional<Budget> budget) {
         Objects.requireNonNull(auth, "auth");
         Objects.requireNonNull(merchantId, "merchantId");
         Objects.requireNonNull(lines, "lines");
@@ -430,6 +432,10 @@ public final class DefaultOrchestrator implements Orchestrator {
     }
 
     /** {@code dedupe_key = sha256(userId + '|' + merchantId + '|' + sorted(itemId:quantity))} (7.7), comma-joined. */
+    public static String dedupeKey(UserId user, MerchantId merchantId, List<ProposedLine> lines, Optional<Budget> budget) {
+        return dedupeKey(user, merchantId, lines);
+    }
+
     public static String dedupeKey(UserId user, MerchantId merchantId, List<ProposedLine> lines) {
         String items = lines.stream().map(l -> l.itemId() + ':' + l.quantity()).sorted()
                 .collect(Collectors.joining(","));
@@ -818,7 +824,7 @@ public final class DefaultOrchestrator implements Orchestrator {
     private Step quoteReady(
             PurchaseIntent base, MerchantAttempt attempt, Optional<Integer> http, Optional<String> summary,
             CheckoutView view, TransitionEvent event) {
-        PolicyDecision decision = policy.evaluateQuote(base.owner(), view);
+        PolicyDecision decision = policy.evaluateQuote(base.owner(), view, Optional.empty());
         if (!decision.allowed()) {
             // DESIGN GAP: table 7.2 has no QUOTING row for a quote that policy denies (P2, P3, P4). This uses the
             // QUOTING -> FAILED_NOT_CHARGED row with a best-effort cancel; failure_reason names the rule.

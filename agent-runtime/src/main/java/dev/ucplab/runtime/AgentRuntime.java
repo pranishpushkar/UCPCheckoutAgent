@@ -10,6 +10,7 @@ import dev.ucplab.core.agent.RunRepository;
 import dev.ucplab.core.agent.ToolCall;
 import dev.ucplab.core.agent.ToolEvent;
 import dev.ucplab.core.identity.AuthContext;
+import dev.ucplab.core.intent.Budget;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentNotFoundException;
 import dev.ucplab.core.intent.IntentState;
@@ -81,8 +82,17 @@ public final class AgentRuntime {
         return start(auth, id, userMessage, user, trace).outcome();
     }
 
-    /** Starts a run, as {@link #run(AuthContext, RunId, String, UserChannel, RunTrace)}, and returns its conversation too. */
+    /** Starts a run with no budget. */
     public RunSession start(AuthContext auth, RunId id, String userMessage, UserChannel user, RunTrace trace) {
+        return start(auth, id, userMessage, user, trace, Optional.empty());
+    }
+
+    /**
+     * Starts a run, as {@link #run(AuthContext, RunId, String, UserChannel, RunTrace)}, and returns its conversation too.
+     * {@code userBudget} is the user's own budget for the run (23.1, P9), never anything the model said.
+     */
+    public RunSession start(AuthContext auth, RunId id, String userMessage, UserChannel user, RunTrace trace,
+                            Optional<Budget> userBudget) {
         check(auth, id, userMessage, user, trace);
         Run run = new Run(auth, id, user, trace, Optional.empty());
         runs.insert(auth.user(), RunRecord.started(id, auth.user(), run.modelId, run.start));

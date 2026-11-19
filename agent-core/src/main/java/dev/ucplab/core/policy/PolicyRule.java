@@ -17,5 +17,7 @@ public enum PolicyRule {
     /** Re-approval: a re-quote with a higher total needs a new approval. */
     P7,
     /** Re-quote cap per intent; reaching it ends the intent as REJECTED with price_unstable. */
-    P8
+    P8,
+    /** The user's budget for the run: a quote above it, or in another currency, is refused. */
+    P9
 }

@@ -185,7 +185,7 @@ class ConsoleStaticTest {
         String card = card(js);
 
         Set<String> allowed = Set.of("snapshot", "lines", "item_id", "title", "quantity", "unit_price_minor", "currency",
-                "total_minor", "expires_at", "token", "merchant_id", "completion", "note");
+                "total_minor", "expires_at", "token", "merchant_id", "completion", "note", "budget");
         Set<String> read = new LinkedHashSet<>();
         Matcher fields = Pattern.compile("\\b(?:approval|snapshot|line)\\.([A-Za-z_]+)").matcher(card);
         while (fields.find()) {
@@ -557,5 +557,94 @@ class ConsoleStaticTest {
         assertThat(js).contains("PRICE_CHANGED").contains("Price changed: re-quoting")
                 .contains("Approved by you").contains("Rejected by you")
                 .doesNotContain("\"Approval \" + (p.decision");
+    }
+
+    // Covers: 24.3, 23.1, P9 (the send form has an optional Budget field, an amount and a currency, each with a label;
+    // a 44 px target like every control)
+    @Test
+    void sendForm_hasALabelledBudgetField_withACurrency() throws IOException {
+        String html = read("index.html");
+        String form = html.substring(html.indexOf("<form id=\"send\""), html.indexOf("</form>"));
+
+        assertThat(form).contains("<label for=\"budget\">Budget (optional)</label>")
+                .contains("<input id=\"budget\" name=\"budget\" type=\"text\" inputmode=\"decimal\" maxlength=\"16\">")
+                .contains("<label for=\"budget-currency\" class=\"sr-only\">Budget currency</label>")
+                .contains("<select id=\"budget-currency\" name=\"budget-currency\">"
+                        + "<option>USD</option><option>EUR</option><option>GBP</option></select>");
+        assertThat(form.indexOf("id=\"budget\"")).as("the field follows the message box")
+                .isGreaterThan(form.indexOf("id=\"message\""));
+    }
+
+    // Covers: 24.3, P9 (the pre-fill reads an amount with a limit word from the message, with a $, € or £ sign or a code)
+    @Test
+    void budgetPrefill_knowsTheLimitWords_andTheCurrencySigns() throws IOException {
+        String budget = block(read("console.js"), "budget");
+
+        assertThat(budget).contains("function budgetFromMessage(text) {");
+        for (String word : List.of("under", "below", "max", "maximum", "no more than", "at most", "less than",
+                "or less", "$", "€", "£", "USD", "EUR", "GBP")) {
+            assertThat(budget).as("the pre-fill knows " + word).contains(word);
+        }
+    }
+
+    // Covers: 24.3, P9 (the pre-fill only fills the field, visibly, while the user has not touched it; once the user edits
+    // or clears the field, or changes its currency, typing never fills it again; during a continuation it never runs)
+    @Test
+    void budgetPrefill_onlyFillsAnUntouchedField_andAnEditedFieldWins() throws IOException {
+        String js = read("console.js");
+        String budget = block(js, "budget");
+
+        assertThat(budget).contains("let budgetTouched = false;")
+                .contains("function onMessageInput() {\n"
+                        + "  if (budgetTouched || continuingRun()) {\n"
+                        + "    return;\n"
+                        + "  }\n"
+                        + "  const found = budgetFromMessage($(\"message\").value);\n"
+                        + "  $(\"budget\").value = found ? found.amount : \"\";\n"
+                        + "  if (found) {\n"
+                        + "    $(\"budget-currency\").value = found.currency;\n"
+                        + "  }\n"
+                        + "}");
+        assertThat(js).contains("$(\"message\").addEventListener(\"input\", onMessageInput);")
+                .contains("$(\"budget\").addEventListener(\"input\", () => {\n    budgetTouched = true;\n  });")
+                .contains("$(\"budget-currency\").addEventListener(\"change\", () => {\n    budgetTouched = true;\n  });");
+        assertThat(js.replace("let budgetTouched = false;", "").replace("budgetTouched = true;", ""))
+                .as("nothing else sets the flag, so a pre-fill never counts as the user's edit")
+                .doesNotContain("budgetTouched = ");
+    }
+
+    // Covers: 24.3, 23.1, P9 (only the field is sent, on a new run only: the send handler never parses the message, a
+    // continuation sends the message alone, and the field is disabled while a run continues)
+    @Test
+    void send_sendsOnlyTheField_onANewRunOnly() throws IOException {
+        String js = read("console.js");
+        String send = js.substring(js.indexOf("async function send(event) {"), js.indexOf("function showRun(run) {"));
+        String budget = block(js, "budget");
+
+        assertThat(send).doesNotContain("budgetFromMessage")
+                .contains("const budget = continuing ? {} : budgetToSend();")
+                .contains("? await api(\"POST\", \"/api/runs/\" + currentRun.id + \"/messages\", {message: text})")
+                .contains(": await api(\"POST\", \"/api/runs\", Object.assign({message: text}, budget));");
+        String toSend = budget.substring(budget.indexOf("function budgetToSend() {"));
+        toSend = toSend.substring(0, toSend.indexOf("\n}\n") + 2);
+        assertThat(toSend).contains("$(\"budget\").value").contains("$(\"budget-currency\").value")
+                .contains("budget_minor").contains("currency").doesNotContain("message");
+        assertThat(budget).contains("$(\"budget\").disabled = continuingRun();")
+                .contains("$(\"budget-currency\").disabled = continuingRun();");
+    }
+
+    // Covers: 24.3, 23.2, P9, I2 (the card shows the user's budget from the approval answer's budget field only, under
+    // the total; at a handoff merchant it says the budget is before the store's shipping and tax)
+    @Test
+    void approvalCard_showsTheBudget_fromTheAnswerOnly() throws IOException {
+        String card = card(read("console.js"));
+
+        assertThat(card).contains("if (approval.budget) {\n"
+                + "    card.appendChild(el(\"p\", \"Your budget: \" + money(approval.budget.amount_minor, approval.budget.currency)\n"
+                + "        + (approval.completion === \"handoff\" ? \" (before the store's shipping and tax)\" : \"\"), \"budget-line\"));\n"
+                + "  }");
+        assertThat(card.indexOf("if (approval.budget) {")).as("under the total row")
+                .isGreaterThan(card.indexOf("card.appendChild(table);"))
+                .isLessThan(card.indexOf("const info = el(\"div\", null, \"info\");"));
     }
 }

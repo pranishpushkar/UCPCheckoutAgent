@@ -1,10 +1,12 @@
 package dev.ucplab.core.policy;
 
 import dev.ucplab.core.identity.UserId;
+import dev.ucplab.core.intent.Budget;
 import dev.ucplab.core.intent.ProposedLine;
 import dev.ucplab.core.merchant.CheckoutView;
 import dev.ucplab.core.merchant.MerchantId;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Policy port (Appendix B [CONTRACT], table 9.1, FR7). Guards PROPOSED -> QUOTING and
@@ -16,6 +18,9 @@ public interface PolicyEngine {
     /** P1, P4 and P5 for a proposal from the agent. */
     PolicyDecision evaluateProposal(UserId user, MerchantId merchant, List<ProposedLine> lines);
 
-    /** P2, P3 and P4 for the merchant's quote (the authoritative items and total). */
-    PolicyDecision evaluateQuote(UserId user, CheckoutView quote);
+    /**
+     * P2, P3 and P4 for the merchant's quote (the authoritative items and total), then P9 against the intent's
+     * {@code budget} when it has one.
+     */
+    PolicyDecision evaluateQuote(UserId user, CheckoutView quote, Optional<Budget> budget);
 }

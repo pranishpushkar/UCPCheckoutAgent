@@ -106,6 +106,13 @@ class MigrationsTest {
             + " lines_json, buyer_email, state, version, order_id, created_at, updated_at)"
             + " VALUES ('%s', 'u', '%s', '%s', '[]', 'e', '%s', 0, %s, 't', 't')";
 
+    /** An intent 'ib' with the budget columns set to two SQL literals (V11). */
+    private static String budgetedIntent(String minor, String currency) {
+        return "INSERT INTO purchase_intent (id, user_id, merchant_id, dedupe_key, lines_json, buyer_email, state, version,"
+                + " created_at, updated_at, budget_minor, budget_currency) VALUES ('ib', 'u', 'm', 'kb', '[]', 'e',"
+                + " 'PROPOSED', 0, 't', 't', " + minor + ", " + currency + ")";
+    }
+
     private static void exec(Database db, String... statements) {
         db.write(c -> {
             try (Statement s = c.createStatement()) {
@@ -484,7 +491,7 @@ class MigrationsTest {
 
     // Covers: 10 V10, 7.6 (a database at V9 holding rows upgrades to V10: every row keeps every value it had and the four
     // follow-up columns start empty, so an intent handed off before V10 is not followed; a store order is refused in any
-    // state but HANDED_OFF; V10 is the last migration)
+    // state but HANDED_OFF; V10 follows V9)
     @Test
     void v10_upgradesAV9DatabaseWithRows_addingTheFollowUpColumnsEmpty() {
         Path file = dir.resolve("v9-to-v10.db");
@@ -517,7 +524,90 @@ class MigrationsTest {
                     () -> exec(db, "UPDATE purchase_intent SET handoff_watch_until = 't' WHERE id = 'i2'"))
                     .as("a follow-up window belongs to HANDED_OFF").isInstanceOf(DatabaseException.class);
             assertThat(column(db, "SELECT version FROM flyway_schema_history WHERE success = 1"
-                    + " ORDER BY installed_rank")).endsWith("9", "10");
+                    + " ORDER BY installed_rank")).containsSubsequence("9", "10");
+        }
+    }
+
+    // Covers: 10 V11, P9 (a database at V10 holding intents and runs upgrades to V11: every row keeps every value it had
+    // and has no budget; V11 is the last migration)
+    @Test
+    void v11_upgradesAV10DatabaseWithRows_givingEachNoBudget() {
+        Path file = dir.resolve("v10-to-v11.db");
+        Flyway.configure().dataSource("jdbc:sqlite:" + file, null, null).locations("classpath:db/migration")
+                .target("10").load().migrate();
+        String dump = "SELECT group_concat(id || '|' || user_id || '|' || merchant_id || '|' || merchant_fingerprint"
+                + " || '|' || state || '|' || version || '|' || created_at, ';') FROM (SELECT * FROM purchase_intent ORDER BY id)";
+        List<String> before;
+        try (Database old = Database.open(file, 1)) {
+            exec(old, intent("i1", "merchant-a", "k1", "APPROVED", null),
+                    intent("i2", "merchant-b", "k2", "COMPLETED", "o2"),
+                    "INSERT INTO agent_run (id, user_id, model, started_at, updated_at) VALUES ('r', 'u', 'm', 't', 't')");
+            before = column(old, dump);
+        }
+
+        Migrations.migrate(file);
+
+        try (Database db = Database.open(file, 1)) {
+            assertThat(column(db, dump)).isEqualTo(before);
+            assertThat(column(db, "SELECT count(*) FROM purchase_intent WHERE budget_minor IS NULL AND budget_currency IS NULL"))
+                    .containsExactly("2");
+            assertThat(column(db, "SELECT id || ':' || coalesce(budget_minor, '-') || ':' || coalesce(budget_currency, '-')"
+                    + " FROM agent_run")).containsExactly("r:-:-");
+            assertThat(column(db, "SELECT version FROM flyway_schema_history WHERE success = 1"
+                    + " ORDER BY installed_rank")).endsWith("10", "11");
+        }
+    }
+
+    // Covers: 10 V11, P9, 23.1 (on both tables a budget is both columns or neither, at least one minor unit, in three
+    // upper-case letters; anything else is refused)
+    @Test
+    void v11_aBudgetIsBothColumnsOrNeither_positive_inThreeCapitals() {
+        Path file = dir.resolve("v11.db");
+        Migrations.migrate(file);
+        try (Database db = Database.open(file, 1)) {
+            exec(db, intent("i1", "m", "k1", "PROPOSED", null),
+                    "INSERT INTO agent_run (id, user_id, model, started_at, updated_at) VALUES ('r', 'u', 'm', 't', 't')");
+            exec(db, "UPDATE agent_run SET budget_minor = 50000, budget_currency = 'USD' WHERE id = 'r'");
+            List<List<String>> refused = List.of(List.of("1", "NULL"), List.of("NULL", "'USD'"), List.of("0", "'USD'"),
+                    List.of("-5", "'USD'"), List.of("5", "'usd'"), List.of("5", "'US'"), List.of("5", "'USDX'"),
+                    List.of("5", "'U1D'"));
+            for (List<String> bad : refused) {
+                org.assertj.core.api.Assertions.assertThatThrownBy(() -> exec(db, "UPDATE agent_run SET budget_minor = "
+                        + bad.get(0) + ", budget_currency = " + bad.get(1) + " WHERE id = 'r'"))
+                        .as("agent_run " + bad).isInstanceOf(DatabaseException.class);
+                org.assertj.core.api.Assertions.assertThatThrownBy(() -> exec(db, budgetedIntent(bad.get(0), bad.get(1))))
+                        .as("purchase_intent " + bad).isInstanceOf(DatabaseException.class);
+            }
+            exec(db, budgetedIntent("1", "'EUR'"));
+            assertThat(column(db, "SELECT budget_minor || budget_currency FROM purchase_intent WHERE id = 'ib'"))
+                    .containsExactly("1EUR");
+            assertThat(column(db, "SELECT budget_minor || budget_currency FROM agent_run")).containsExactly("50000USD");
+        }
+    }
+
+    // Covers: 10 V11, P9, I3 (V11's trigger refuses a raw change to an intent's budget, set, raised or cleared, by any
+    // writer, and lets every other update through)
+    @Test
+    void v11_aRawChangeOfAnIntentsBudget_aborts_otherUpdatesDoNot() {
+        Path file = dir.resolve("v11-trigger.db");
+        Migrations.migrate(file);
+        try (Database db = Database.open(file, 1)) {
+            exec(db, intent("i1", "m", "k1", "PROPOSED", null),
+                    budgetedIntent("500", "'USD'"));
+            for (String change : List.of(
+                    "budget_minor = 900 WHERE id = 'ib'", "budget_currency = 'EUR' WHERE id = 'ib'",
+                    "budget_minor = NULL, budget_currency = NULL WHERE id = 'ib'",
+                    "budget_minor = 5, budget_currency = 'USD' WHERE id = 'i1'")) {
+                org.assertj.core.api.Assertions.assertThatThrownBy(() -> exec(db, "UPDATE purchase_intent SET " + change))
+                        .as(change).hasRootCauseMessage("[SQLITE_CONSTRAINT_TRIGGER] A RAISE function within a trigger"
+                                + " fired, causing the SQL statement to abort (P9: an intent's budget never changes)");
+            }
+            exec(db, "UPDATE purchase_intent SET budget_minor = budget_minor, state = 'QUOTING' WHERE id = 'ib'");
+
+            assertThat(column(db, "SELECT state || ':' || budget_minor || budget_currency FROM purchase_intent WHERE id = 'ib'"))
+                    .containsExactly("QUOTING:500USD");
+            assertThat(column(db, "SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name"))
+                    .contains("purchase_intent_budget_immutable", "purchase_intent_merchant_immutable");
         }
     }
 }

@@ -110,10 +110,19 @@ record Observations(
             int seq, Instant at, MerchantCall call, Optional<SessionId> session, Optional<IdempotencyKey> key,
             String body, Optional<CheckoutView> sessionBefore, CallOutcome<CheckoutView> outcome) {}
 
-    /** A decision the user made that the approval service accepted; {@code staleToken} marks a replayed token. */
+    /**
+     * A decision the user made that the approval service accepted; {@code staleToken} marks a replayed token.
+     * {@code budget} is the intent's stored budget when the decision was made (P9, I3).
+     */
     record Decision(
             int seq, Instant at, IntentId intent, boolean approve, ApprovalSnapshot snapshot, String snapshotHash,
-            boolean staleToken) {}
+            boolean staleToken, Optional<dev.ucplab.core.intent.Budget> budget) {
+
+        Decision(int seq, Instant at, IntentId intent, boolean approve, ApprovalSnapshot snapshot, String snapshotHash,
+                 boolean staleToken) {
+            this(seq, at, intent, approve, snapshot, snapshotHash, staleToken, Optional.empty());
+        }
+    }
 
     record CrashEvent(int seq, Instant at, IntentId intent, String where) {}
 

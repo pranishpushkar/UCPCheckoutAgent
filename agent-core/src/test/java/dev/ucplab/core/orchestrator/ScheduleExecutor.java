@@ -391,7 +391,8 @@ final class ScheduleExecutor {
                     || decision instanceof ApprovalDecision.Rejected;
             if (accepted) {
                 decisions.add(new Observations.Decision(seq.incrementAndGet(), lab.clock.instant(), id,
-                        decision instanceof ApprovalDecision.Approved, pending.get().snapshot(), hash, stale));
+                        decision instanceof ApprovalDecision.Approved, pending.get().snapshot(), hash, stale,
+                        lab.intent(id).budget()));
                 due.put(id, lab.clock.instant());
             }
         }

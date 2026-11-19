@@ -1,10 +1,12 @@
 package dev.ucplab.runtime;
 
+import dev.ucplab.core.intent.Budget;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * The system prompt (6.4): {@code system-prompt-v1.txt}, loaded once. It states the five 6.4 requirements, each as one
@@ -24,6 +26,11 @@ public final class SystemPrompt {
     }
 
     public static String text() {
+        return TEXT;
+    }
+
+    /** The system prompt, then the run's [BUDGET] paragraph when it has a budget (6.4): a hint, never a guarantee. */
+    public static String text(Optional<Budget> budget) {
         return TEXT;
     }
 

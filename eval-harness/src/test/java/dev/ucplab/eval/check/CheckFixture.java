@@ -82,6 +82,8 @@ final class CheckFixture {
     Map<String, GroundTruth.Session> sessions = new LinkedHashMap<>(Map.of(SESSION,
             session(SESSION, "completed", "USD", 2, Optional.of(ORDER))));
     Optional<Instant> terminalSeenAt = Optional.of(at(420));
+    /** The intent's budget (P9); none by default. */
+    Optional<dev.ucplab.core.intent.Budget> budget = Optional.empty();
 
     RunEvidence build() {
         PurchaseIntent intent = new PurchaseIntent(INTENT, OWNER, Scenarios.SHOP,
@@ -89,7 +91,7 @@ final class CheckFixture {
                 List.of(new ProposedLine("item_123", 2)), "buyer@eval.example", state, 6,
                 storedSession.map(SessionId::new), Optional.of(snapshot.hash()), 0,
                 state == IntentState.COMPLETED ? Optional.of(ORDER) : Optional.empty(), Optional.empty(), Optional.empty(),
-                Optional.empty(), cancelPending, Optional.empty(), Optional.empty(), T0, at(400), HandoffWatch.NONE);
+                Optional.empty(), cancelPending, Optional.empty(), Optional.empty(), T0, at(400), HandoffWatch.NONE, budget);
         return new RunEvidence("S0", 0, 1000, 0, owner, Optional.ofNullable(aborted), proposed,
                 List.of(new RunEvidence.Persisted(intent, attempts, events, approvalRows)), orders, sessions, log,
                 approvals, T0, terminalSeenAt);

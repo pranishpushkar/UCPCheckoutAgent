@@ -222,10 +222,10 @@ public abstract class PolicyUsageContract {
         spent(ALICE, IntentState.COMPLETED, NOW.minus(DAY).plusSeconds(30), 20_000);
         spent(ALICE, IntentState.COMPLETED, NOW.minusSeconds(30), 20_000);
 
-        PolicyDecision alice = engine.evaluateQuote(ALICE, quote);
-        PolicyDecision bob = engine.evaluateQuote(BOB, quote);
+        PolicyDecision alice = engine.evaluateQuote(ALICE, quote, Optional.empty());
+        PolicyDecision bob = engine.evaluateQuote(BOB, quote, Optional.empty());
         clock.advance(Duration.ofSeconds(31));
-        PolicyDecision aliceLater = engine.evaluateQuote(ALICE, quote);
+        PolicyDecision aliceLater = engine.evaluateQuote(ALICE, quote, Optional.empty());
 
         assertThat(alice.allowed()).isFalse();
         assertThat(alice.ruleId()).contains(PolicyRule.P3);

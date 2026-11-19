@@ -1,0 +1,15 @@
+{
+  "name": "a-s29-over-budget",
+  "expectToolSequence": ["search_catalog", "propose_purchase"],
+  "turns": [
+    { "call": [{ "tool": "search_catalog", "args": { "query": "blue mug", "max_results": 3 } }] },
+    { "when": { "tool": "search_catalog", "resultMatches": "\"item_id\":\"item_456\"" },
+      "call": [{ "tool": "propose_purchase",
+                 "args": { "merchant_id": "${result.items[0].merchant_id}",
+                           "items": [{ "item_id": "item_456", "quantity": 1 }],
+                           "rationale": "The user asked for one blue mug under $10." } }] },
+    { "when": { "tool": "propose_purchase",
+                "resultMatches": "\"failure_reason\":\"policy_P9\".*\"quoted\":\\{\"currency\":\"USD\",\"total_minor\":[0-9]+\\}.*\"reason\":\"over your budget of \\$10\\.00 \\(P9\\)\"" },
+      "text": "Nothing fits your budget of $10.00. The closest price I found was ${result.quoted.total_minor} in USD minor units, for 1 Blue Mug." }
+  ]
+}

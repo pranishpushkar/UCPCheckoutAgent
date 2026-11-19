@@ -234,6 +234,42 @@ public abstract class IntentRepositoryContract {
         assertThat(repo.find(BOB, claimed.id())).isEmpty();
     }
 
+    // Covers: P9, 10 (V11) (the budget is stored at insert and read back by every read: owner-scoped, system and claim;
+    // an intent proposed without one reads back without one)
+    @Test
+    void insert_storesTheBudget_andEveryReadReturnsIt() {
+        Budget budget = new Budget(50_000, "USD");
+        repo.insert(proposed("i1", ALICE, "d1").withBudget(Optional.of(budget)).withState(IntentState.QUOTING, clock.instant()));
+        repo.insert(proposed("i2", ALICE, "d2").withState(IntentState.QUOTING, clock.instant()));
+
+        assertThat(repo.find(ALICE, new IntentId("i1")).orElseThrow().budget()).contains(budget);
+        assertThat(repo.findForSystem(new IntentId("i1")).orElseThrow().budget()).contains(budget);
+        assertThat(repo.claimRecoverable(W1, LEASE, 10)).filteredOn(i -> i.id().value().equals("i1"))
+                .singleElement().satisfies(i -> assertThat(i.budget()).contains(budget));
+        assertThat(repo.findForSystem(new IntentId("i2")).orElseThrow().budget()).isEmpty();
+    }
+
+    // Covers: P9, I3, 10 (V11) (an update never sets, raises or clears the budget: whatever the caller passes, the stored
+    // budget is the one written at insert)
+    @Test
+    void update_keepsTheBudget_whateverTheCallerPasses() {
+        Budget budget = new Budget(50_000, "USD");
+        repo.insert(proposed("i1", ALICE, "d1").withBudget(Optional.of(budget)).withState(IntentState.QUOTING, clock.instant()));
+        repo.insert(proposed("i2", ALICE, "d2").withState(IntentState.QUOTING, clock.instant()));
+        List<PurchaseIntent> claimed = repo.claimRecoverable(W1, LEASE, 10);
+        PurchaseIntent one = claimed.stream().filter(i -> i.id().value().equals("i1")).findFirst().orElseThrow();
+        PurchaseIntent two = claimed.stream().filter(i -> i.id().value().equals("i2")).findFirst().orElseThrow();
+
+        repo.update(one.withBudget(Optional.of(new Budget(90_000, "USD"))), 0, W1);
+        repo.update(two.withBudget(Optional.of(new Budget(1, "USD"))), 0, W1);
+        PurchaseIntent oneAgain = repo.findForSystem(one.id()).orElseThrow();
+        repo.update(oneAgain.withBudget(Optional.empty()), 1, W1);
+
+        assertThat(repo.findForSystem(one.id()).orElseThrow().budget()).contains(budget);
+        assertThat(repo.findForSystem(one.id()).orElseThrow().version()).isEqualTo(2);
+        assertThat(repo.findForSystem(two.id()).orElseThrow().budget()).isEmpty();
+    }
+
     /** A copy of {@code i} at another merchant: what a caller breaking I11 would pass. */
     private static PurchaseIntent atMerchant(PurchaseIntent i, MerchantId merchant) {
         return new PurchaseIntent(i.id(), i.owner(), merchant, i.merchantFingerprint(), i.dedupeKey(), i.lines(), i.buyerEmail(), i.state(),
