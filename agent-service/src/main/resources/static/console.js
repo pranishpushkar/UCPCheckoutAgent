@@ -482,6 +482,7 @@ async function pollIntent() {
     clear($("timeline"));
     clear($("steps"));
     $("timeline-state").textContent = "Intent not found.";
+    $("all-events").hidden = true;
     setStatus("Intent not found.", true);
     currentIntent = null;
     showMerchantMode();
@@ -809,6 +810,7 @@ async function loadEvents(id) {
   }
   clear($("timeline"));
   $("events-toggle").textContent = "Show all " + result.data.length + " events";
+  $("all-events").hidden = false;
   result.data.forEach((event) => {
     $("timeline").appendChild(el("li", describe(event)));
   });
