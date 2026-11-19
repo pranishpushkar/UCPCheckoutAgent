@@ -171,7 +171,7 @@ These are the properties the evaluation checks. Each must be enforced in code an
 | `eval-harness` | Scenario runner, invariant checks, report | JDK, client libraries, `fault-proxy`. Until it drives the REST API (M7) it embeds the agent: `agent-core`, `agent-runtime`, `agent-ucp`, `agent-persistence`, and `merchant` to start lab merchants in process. Never `agent-adk`, ADK or Gemini SDK types at compile scope; live mode loads the model client through a service lookup, with `agent-adk` added at runtime scope by the `eval-live` profile only |
 | `merchant` | System under test | JDK only |
 
-An ArchUnit test must fail the build if `agent-core` imports anything outside `java.*` or `javax.crypto.*`, or if any module other than `agent-adk` imports an ADK or Gemini SDK type, or if `agent-runtime` imports anything outside the JDK and `agent-core`. It must also fail if any module other than `agent-service` imports a Spring, Jakarta Servlet or Jackson 3 type.
+An ArchUnit test must fail the build if `agent-core` imports anything outside `java.*` or `javax.crypto.*`, or if any module other than `agent-adk` imports an ADK or Gemini SDK type, or if `agent-runtime` imports anything outside the JDK and `agent-core`. Within `agent-adk`, the SDK's own dependencies stay out of our code, with one exception: `GeminiModelClient` may use OkHttp, the SDK's HTTP layer, only to build the HTTP client it hands the SDK and the interceptor that reads `Retry-After` (6.3), since the SDK keeps no response header. It must also fail if any module other than `agent-service` imports a Spring, Jakarta Servlet or Jackson 3 type.
 
 ### 5.3 Happy path
 
@@ -235,7 +235,7 @@ Exactly these five. A test asserts the tool list (I6).
 
 ### 6.3 Run budgets \[CONTRACT\]
 
-`AgentBudget` defaults: 6 model calls, 8 tool calls, 30 s wall clock (human waiting time excluded), and a configurable token ceiling (default 20,000 input plus output tokens per run). A limit is checked before each model or tool call; the token count is known only after a turn, so one turn may overshoot and the next call is refused. Exceeding any limit ends the run with `BUDGET_EXCEEDED`. A run that ends without `propose_purchase` has no side effects. Catalog search and lookup are reads for this purpose, although UCP sends them as POST. The limits are the same at every merchant, the catalog source (26.7) included: a limit of its own is proposed only if a measured catalog run, with the `v3` prompt (6.4), still cannot finish within them.
+`AgentBudget` defaults: 6 model calls, 8 tool calls, 30 s wall clock (human waiting time excluded), and a configurable token ceiling (default 20,000 input plus output tokens per run). A limit is checked before each model or tool call; the token count is known only after a turn, so one turn may overshoot and the next call is refused. Exceeding any limit ends the run with `BUDGET_EXCEEDED`. A run that ends without `propose_purchase` has no side effects. Catalog search and lookup are reads for this purpose, although UCP sends them as POST. The limits are the same at every merchant, the catalog source (26.7) included: a limit of its own is proposed only if a measured catalog run, with the `v3` prompt (6.4), still cannot finish within them. A model call that fails with HTTP 429 or 503 is tried once more: after the `Retry-After` the API sent, read only as a whole number of seconds, or after 2 s without one, and only when that wait plus 5 s still fits in the wall clock left. The wait counts against the wall clock and the second call is a model call like any other. A second failure, a wait that does not fit, or a run with no model call left ends the run `failed` with `model_error` and the failure's cause.
 
 ### 6.4 Prompt contract
 
@@ -254,6 +254,7 @@ public record ModelTurn(String text, List<ToolCall> toolCalls, Usage usage) {}
 
 The supporting types live in `agent-core` (`dev.ucplab.core.agent`, JDK only): `Conversation(systemPrompt, messages)`, `Message` (sealed: `User(text)`, `Model(text, toolCalls)`, `ToolResult(callId, tool, json)`), `ToolSpec(name, description, parametersJsonSchema)`, `ToolCall(id, name, arguments)` and `Usage(inputTokens, outputTokens)`. `text` is never null (an empty turn is ""). The agent loop, not the model client, runs every tool call, so budgets (6.3) and I6 are enforced in one place.
 
+- A model call that fails throws a `ModelFailure` (`agent-core`): `code()`, a fixed reason; `cause()`, the finer cause from a closed vocabulary (below); `retryable()`, true for HTTP 429 and 503 only; and `retryAfter()`, the API's `Retry-After` when it sent one. The cause is `http_<status>` for an HTTP error (`http_429`, `http_503`, `http_400`, `http_403`, `http_404`, …); `finish_<finishReason>` for an answer ended by `SAFETY`, `RECITATION`, `MALFORMED_FUNCTION_CALL`, `OTHER` or any other finish reason with nothing usable in it; `prompt_blocked_<blockReason>`; `no_candidates`, `no_content`, `no_function_name`, `bad_arguments`, `no_usage` or `negative_usage` for an answer that cannot be read; `timeout`; `network_<exception class>`; `configuration`; or `exception_<exception class>` for anything else. Each is at most 64 characters of `[A-Za-z0-9_]`: a status, an enum name or a class's simple name, never the prompt, the answer's text, a message, a URL, a header or the key (I8).
 - `GeminiModelClient` (in `agent-adk`) is the live implementation, built directly on the Gemini API with `com.google.genai:google-genai` (a pinned release, ADR 0004), one `generateContent` call per turn. ADK for Java was evaluated and not used (ADR 0004). All Gemini SDK types stay inside this module.
 - `ScriptedModel` replays a JSON script of turns and supports rules of the form: when a tool result matches X, call Y. CI uses it for everything except the live-evaluation job.
 
@@ -708,6 +709,7 @@ CREATE TABLE agent_run (
   output_tokens INTEGER NOT NULL DEFAULT 0 CHECK (output_tokens >= 0),
   budget_minor INTEGER,                  -- the user's budget for the run (23.1, P9); with budget_currency, both set or both null (migration V11)
   budget_currency TEXT,
+  cause TEXT,                            -- a model_error's cause (6.5): [A-Za-z0-9_], 1 to 64 characters, only with reason model_error (migration V12)
   CHECK ((ended_at IS NULL) = (outcome IS NULL)),
   CHECK (reason IS NULL OR ended_at IS NOT NULL)
 );
@@ -751,7 +753,7 @@ CREATE INDEX ix_run_turn_user ON agent_run_turn(user_id, started_at);
 
 **Logs:** JSON lines carrying `intent_id`, `request_id` and `state`. A redaction filter must remove `credential`, `token`, `Authorization` and approval tokens (I8). Every evaluation run seeds a canary secret and a test greps all logs, events and traces for it.
 
-Until M7, spans are written as JSON lines (`trace.jsonl`, one per evaluation run) with the same names and attributes; OpenTelemetry export arrives with the M7 dashboards.
+A failed `llm.call` carries `outcome`, its fixed code, and `cause` (6.5), and `agent.run` carries the run's `cause` when it ended with `model_error`; both are logged by the service at the run's end under `dev.ucplab.trace`. A retried call (6.3) writes one `llm.call` per attempt. Until M7, spans are written as JSON lines (`trace.jsonl`, one per evaluation run) with the same names and attributes; OpenTelemetry export arrives with the M7 dashboards.
 
 ## 12. Fault-injection proxy \[CONTRACT\]
 
@@ -1207,7 +1209,7 @@ Messages are held in the serving instance's memory only (21.3): they are never s
 - **Anything else** (`running`, `budget_exceeded`, `user_timeout`, `failed`, or a conversation no longer in memory) is 409 `run_not_waiting`.
 | `GET /api/runs/{run_id}` |  | 200 with the full message list, tool events (names and short summaries, no raw tool output) and linked intents |
 
-`status` is one of `running`, `waiting_for_user`, `waiting_for_approval`, `done`, `budget_exceeded`, `user_timeout`, `failed`. `budget_exceeded` and `failed` come with `reason`: the limit's name, or `model_error`, `tool_error`, `internal_error` or `interrupted` (the run was cut off by a restart or shutdown). `running` is returned when the run has not reached a settle point within the response wait (a call that started inside the budget may end after it, 6.3); the client polls `GET /api/runs/{run_id}`. `waiting_for_approval` is re-evaluated on every read against the intents' current states.
+`status` is one of `running`, `waiting_for_user`, `waiting_for_approval`, `done`, `budget_exceeded`, `user_timeout`, `failed`. `budget_exceeded` and `failed` come with `reason`: the limit's name, or `model_error`, `tool_error`, `internal_error` or `interrupted` (the run was cut off by a restart or shutdown). A `model_error` also comes with `cause`, the failure's cause (6.5), stored on the run, so it is shown after a restart too. `running` is returned when the run has not reached a settle point within the response wait (a call that started inside the budget may end after it, 6.3); the client polls `GET /api/runs/{run_id}`. `waiting_for_approval` is re-evaluated on every read against the intents' current states.
 
 ### 23.2 Intents and approvals
 
@@ -1229,8 +1231,8 @@ The approval token is delivered only through `GET /api/intents/{id}/approval` to
 | --- | --- |
 | `PUT /api/lab/faults` | Replace the fault rules at one merchant (`merchant_id`, default `merchant-a`; the proxy rule format in section 12). Rules apply only to the caller's lab id |
 | `DELETE /api/lab/faults` | Remove the rules at one merchant (`merchant_id`, default `merchant-a`) |
-| `GET /api/lab/orders?merchant_id=` | Ground-truth orders from the caller's sandbox at each merchant |
-| `GET /api/lab/merchants` | Read-only (local and demo profiles only, like the routes above): lists each configured merchant's `merchant_id`, `name`, `status`, `completion` (`agent`, `handoff` or `link`) and `live` (`true` for a live store: `owned: true` with a `shop_domain` that is not a loopback host), plus its `shop_domain` when `live` and its fixed `reason` while it is SUSPENDED, for the console's merchant selector, header badge and Developer tools. Never a URL, a lab address or a credential |
+| `GET /api/lab/orders?merchant_id=` | Ground-truth orders from the caller's sandbox at each merchant the lab controls; any other is 422 `validation_failed` |
+| `GET /api/lab/merchants` | Read-only (local and demo profiles only, like the routes above): lists each configured merchant's `merchant_id`, `name`, `status`, `completion` (`agent`, `handoff` or `link`), `lab` (`true` when the lab controls it, through its `lab_url`: only then do its faults and orders exist) and `live` (`true` for a live store: `owned: true` with a `shop_domain` that is not a loopback host), plus its `shop_domain` when `live` and its fixed `reason` while it is SUSPENDED, for the console's merchant selector, header badge and Developer tools. Never a URL, a lab address or a credential |
 | `POST /api/lab/reset` | Reset the caller's sandbox at every merchant and clear their rules |
 
 In `prod` these routes do not exist (404). Until M6b adds per-user sandboxes (24.4) the `demo` profile refuses to start, and the routes exist in `local` only.
@@ -1294,6 +1296,7 @@ With several merchants (M6a) the console shows one approval card per intent awai
   | `budget_exceeded` | `TOKENS` | "Stopped: too much to read." | "I had too much to read before choosing. Try a narrower request." |
   | `budget_exceeded` | any other | "Stopped: ran out of steps." | "I looked at several options but ran out of steps before choosing. Try a narrower request." |
   | `user_timeout` | | "Stopped: no answer from you." | "I stopped waiting for your answer. Send a new message to start again." |
+  | `failed` | `model_error` with `cause` `http_429` or `http_503` | "Stopped: the model is busy." | "The model is busy right now; try again in a minute." |
   | `failed` | `model_error` | "Stopped: the model could not be reached." | "I couldn't reach the model, so I stopped. Try again in a moment." |
   | `failed` | `tool_error` | "Stopped: a step failed." | "A step failed, so I stopped. Try again in a moment." |
   | `failed` | `internal_error` | "Stopped: something went wrong." | "Something went wrong on our side, so I stopped. Try again in a moment." |
@@ -1351,7 +1354,7 @@ With several merchants (M6a) the console shows one approval card per intent awai
 - In `HANDED_OFF` only, and only while no store order is shown and the follow-up did not end with `canceled`, `session_gone` or `merchant_changed`, the timeline shows a "Continue at the store" link to the `handoff_url` of `GET /api/intents/{id}` (the owner's, I9), opening in a new tab with `rel="noopener noreferrer"` and `referrerpolicy="no-referrer"`; the URL is never shown as text, and never put in the page URL, the browser console, browser storage or the `aria-live` region.
 - The fault lab and the order counters sit in a "Developer tools" section, closed by default, and hidden whenever the intent the timeline follows has a `merchant.shop_domain` (a live store) or a `merchant.completion` of `link` (the catalog, 26.7), and, before an intent is followed, whenever any merchant of `GET /api/lab/merchants` is `live` or has `completion` `link`.
 - The fault lab toggles map to preset rule sets for `PUT /api/lab/faults`: drop next complete response, merchant returns 503 for 20 s (the service removes the rule after 20 s), and merchant down (at the merchant chosen next to the toggles; `merchant_id` on the request). "Change price before complete" is not a proxy rule: it is a one-shot action that raises, through the merchant's `/_lab/price`, the price of the item of the caller's newest intent awaiting approval.
-- The order counter reads `GET /api/lab/orders` for each merchant, so it shows the merchants' ground truth, not the agent's report. When a run proposes several intents, the console shows one approval card per awaiting intent, each headed by the merchant from its own snapshot (never from the chat text), with its own Approve and Reject. Invariant breaks are shown only when the eval harness has computed them.
+- The order counter reads `GET /api/lab/orders` for each merchant whose `lab` is `true`, so it shows the merchants' ground truth, not the agent's report; it never asks for any other merchant, and with none (the Global Catalog, or a live store alone) it polls nothing. The fault lab's merchant selector lists the same merchants. When a run proposes several intents, the console shows one approval card per awaiting intent, each headed by the merchant from its own snapshot (never from the chat text), with its own Approve and Reject. Invariant breaks are shown only when the eval harness has computed them.
 - Text uses the browser's escaping (`textContent`), never `innerHTML` for data, so product text cannot inject markup.
 - Works at 360 px wide; keyboard reachable; status changes announced through an `aria-live` region.
 
