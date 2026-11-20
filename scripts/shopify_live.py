@@ -38,6 +38,8 @@ TERMINAL = ("HANDED_OFF", "COMPLETED", "REJECTED", "FAILED_NOT_CHARGED", "ESCALA
 PROBE_GAP = 60
 MODELS = ("scripted", "gemini")  # DESIGN 26.6: scripted unless the owner asks for the live model in --console
 KEY_REFUSED = "refused: --model gemini needs GEMINI_API_KEY in your environment (it is never taken as an argument)"
+# DESIGN 6.5: the service would refuse it too; the API's header cannot carry it. Fixed, so it never shows the key.
+KEY_UNSAFE = "refused: GEMINI_API_KEY holds a character an HTTP header cannot carry (only visible ASCII); it is not shown"
 JAR_REFUSED = ("refused: the jar has no agent-adk on its runtime classpath, so it cannot run Gemini; rebuild it: "
                "./mvnw -B -ntp -DskipTests package")
 REDACTED_ENV = ("SHOPIFY_CLIENT", "BUYER_IP", "APPROVAL_SECRET", "GEMINI_API_KEY")
@@ -94,8 +96,11 @@ def model_choice(argv, env, dry):
     model = option(argv, "--model", "scripted")
     if model not in MODELS:
         raise SystemExit("refused: --model must be scripted or gemini")
-    if model == "gemini" and not dry and not (env.get("GEMINI_API_KEY") or "").strip():
+    key = (env.get("GEMINI_API_KEY") or "").strip()
+    if model == "gemini" and not dry and not key:
         raise SystemExit(KEY_REFUSED)
+    if model == "gemini" and not dry and not all("!" <= c <= "~" for c in key):
+        raise SystemExit(KEY_UNSAFE)
     return model
 
 

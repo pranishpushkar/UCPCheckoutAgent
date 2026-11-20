@@ -1,6 +1,7 @@
 package dev.ucplab.adk.gemini;
 
 import com.google.genai.Client;
+import com.google.genai.JsonSerializable;
 import com.google.genai.errors.ApiException;
 import com.google.genai.errors.GenAiIOException;
 import com.google.genai.types.Content;
@@ -77,11 +78,14 @@ public final class GeminiModelClient implements ModelClient, AutoCloseable {
         Objects.requireNonNull(key, "key");
         this.settings = Objects.requireNonNull(settings, "settings");
         Objects.requireNonNull(env, "env");
-        if (env.apply(CLIENT_MODE) != null) {
+        if (env.apply(CLIENT_MODE) != null || !key.visibleAscii()) {
             throw new GeminiException(Reason.CONFIGURATION);
         }
         this.model = settings.model().orElse(GeminiModels.MODEL);
         try {
+            // 6.5: the request config once through the SDK's own serialiser, so a setting it refuses fails here, when
+            // the service starts, and not on the first message.
+            JsonSerializable.toJsonNode(GeminiMapping.config("", List.of(), GeminiModels.MAX_OUTPUT_TOKENS));
             this.client = Client.builder()
                     .apiKey(key.reveal())
                     .vertexAI(false)

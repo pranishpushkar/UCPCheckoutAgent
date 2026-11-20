@@ -75,6 +75,8 @@ public final class ServiceProperties {
     static final String LAB_URL_INVALID = "MERCHANT_LAB_URL must be an http URL";
     static final String MODEL_INVALID = "AGENT_MODEL must be scripted or gemini";
     static final String MODEL_KEY_REQUIRED = "AGENT_MODEL=gemini needs GEMINI_API_KEY";
+    /** 6.5: a key the API's authentication header cannot carry; fixed, so it never shows the key. */
+    static final String MODEL_KEY_UNSAFE = "GEMINI_API_KEY holds a character an HTTP header cannot carry (only visible ASCII)";
     static final String MODEL_URL_INVALID = "GEMINI_BASE_URL must be an http URL on a loopback address";
     static final String ORIGIN_INVALID = "PUBLIC_ORIGIN must be a scheme, host and optional port, with no path";
 
@@ -205,6 +207,9 @@ public final class ServiceProperties {
         Optional<ModelKey> modelKey = env.get("GEMINI_API_KEY").map(ModelKey::of);
         if (agentModel == AgentModel.GEMINI && modelKey.isEmpty()) {
             throw new IllegalStateException(MODEL_KEY_REQUIRED);
+        }
+        if (agentModel == AgentModel.GEMINI && !modelKey.get().visibleAscii()) {
+            throw new IllegalStateException(MODEL_KEY_UNSAFE);
         }
         URI labUrl;
         try {
