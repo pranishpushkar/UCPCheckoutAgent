@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.SessionId;
+import dev.ucplab.core.merchant.VariantOption;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -174,6 +175,33 @@ class ApprovalSnapshotTest {
                 + "\"sessionId\":\"chk_1001\",\"totalMinor\":71195}");
         assertThat(snowboard.hash()).isEqualTo("9dfabfdadce2523a6e90377605a091107753791b4f6ec4f79ee3236b465d8c9e");
         assertThat(titled("").canonicalJson()).doesNotContain("title");
+        assertThat(sample().hash()).isEqualTo("37bd4b1e6bfbdb0fde5ee59cf333a620a3ab239b63d2f574c241a56cadb228fa");
+    }
+
+    private static ApprovalSnapshot sized(List<VariantOption> options) {
+        return new ApprovalSnapshot(new IntentId("intent-1"), new MerchantId("merchant-a"), new SessionId("chk_1001"),
+                List.of(new SnapshotLine("item_456", 1, 1200),
+                        new SnapshotLine("gid://shopify/ProductVariant/1", 1, 69995, "Arbor Element Decon 2026", options)),
+                "USD", 71195, 71195, Instant.parse("2026-11-08T10:10:00Z"));
+    }
+
+    // Covers: 9.2, D4, I2, I3 (a line's options are in the canonical form, like its title, and hashed: a different size
+    // is a different snapshot; an empty list is left out, so a snapshot without options hashes exactly as before).
+    // Expected string and hash from Python json.dumps(sort_keys=True, separators=(',',':')) and hashlib.
+    @Test
+    void aLinesOptions_areInTheCanonicalForm_hashed_andLeftOutWhenEmpty() {
+        ApprovalSnapshot board = sized(List.of(new VariantOption("Size", "154 cm")));
+
+        assertThat(board.canonicalJson()).isEqualTo("{\"currency\":\"USD\",\"expiresAt\":\"2026-11-08T10:10:00Z\","
+                + "\"intentId\":\"intent-1\",\"lines\":[{\"itemId\":\"gid://shopify/ProductVariant/1\","
+                + "\"options\":[{\"label\":\"154 cm\",\"name\":\"Size\"}],\"quantity\":1,"
+                + "\"title\":\"Arbor Element Decon 2026\",\"unitPriceMinor\":69995},{\"itemId\":\"item_456\","
+                + "\"quantity\":1,\"unitPriceMinor\":1200}],\"maxTotalMinor\":71195,\"merchantId\":\"merchant-a\","
+                + "\"sessionId\":\"chk_1001\",\"totalMinor\":71195}");
+        assertThat(board.hash()).isEqualTo("5873bb05df1198bb2bbfb8ab90ca8a0a7c06fc64c6ec16e3fa76e3497a93c005");
+        assertThat(board.hash()).isNotEqualTo(sized(List.of(new VariantOption("Size", "158 cm"))).hash())
+                .isNotEqualTo(sized(List.of()).hash());
+        assertThat(sized(List.of()).canonicalJson()).doesNotContain("options");
         assertThat(sample().hash()).isEqualTo("37bd4b1e6bfbdb0fde5ee59cf333a620a3ab239b63d2f574c241a56cadb228fa");
     }
 

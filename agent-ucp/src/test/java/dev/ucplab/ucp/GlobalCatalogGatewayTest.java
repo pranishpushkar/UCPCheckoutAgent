@@ -16,6 +16,7 @@ import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantStatus;
 import dev.ucplab.core.merchant.Money;
+import dev.ucplab.core.merchant.LinkOffer;
 import dev.ucplab.core.merchant.SessionId;
 import dev.ucplab.core.merchant.Transport;
 import dev.ucplab.core.merchant.VariantOption;
@@ -138,6 +139,16 @@ class GlobalCatalogGatewayTest {
                 .containsExactly(new VariantOption("Size", "149 cm"));
         assertThat(product.variants()).singleElement()
                 .satisfies(v -> assertThat(v.options()).containsExactly(new VariantOption("Size", "149 cm")));
+    }
+
+    // Covers: 26.7, 9.2 (a link intent's offer keeps the variant's own options from the recorded get_product answer)
+    @Test
+    void offer_keepsTheVariantsOptions() {
+        store.answerText("get_product", fixture("global_get_product_us.json"));
+
+        LinkOffer offer = ok(gateway().offer(CATALOG, "gid://shopify/ProductVariant/1000001"));
+
+        assertThat(offer.options()).containsExactly(new VariantOption("Size", "149 cm"));
     }
 
     // Covers: 26.7, I6 (no URL reaches a search result: a variant carries no checkout_url, product url or seller url)

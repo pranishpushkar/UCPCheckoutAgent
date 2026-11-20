@@ -33,6 +33,7 @@ import dev.ucplab.core.merchant.MerchantStatus;
 import dev.ucplab.core.merchant.Money;
 import dev.ucplab.core.merchant.SessionId;
 import dev.ucplab.core.merchant.Seller;
+import dev.ucplab.core.merchant.VariantOption;
 import dev.ucplab.core.merchant.Transport;
 import java.lang.reflect.Proxy;
 import java.net.URI;
@@ -159,6 +160,20 @@ class LinkHandoffTest {
                 .satisfies(e -> assertThat(e).contains("\"allowed\":true"));
         nothingSent(id);
         noFullLinkAnywhere(id);
+    }
+
+    // Covers: 7.2 quote_ready (link), 9.2, I2, 26.7 (the snapshot line carries the offer's variant options from the same
+    // read as its price, so the card shows the size the approval binds)
+    @Test
+    void quoteReady_theSnapshotLineCarriesTheOffersOptions() {
+        LinkOffer plain = offer(LINK);
+        offers.answer = new CallOutcome.Ok<>(200, new LinkOffer(plain.itemId(), plain.title(), plain.price(), true,
+                plain.seller(), plain.checkoutUrl(), List.of(new VariantOption("Size", "154 cm"))), List.of());
+        Lab.Worker w = worker();
+        IntentId id = quoted(w);
+
+        assertThat(lab.pending(w, id).snapshot().lines()).singleElement()
+                .satisfies(l -> assertThat(l.options()).containsExactly(new VariantOption("Size", "154 cm")));
     }
 
     // Covers: 20, 26.7 (the read that prices an approval is never cached: each quote reads the catalog again)
