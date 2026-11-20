@@ -25,7 +25,7 @@ final class ResultFields {
     static final Map<String, Set<String>> FIXED = Map.of("note", Set.of(GetPurchaseStatusTool.HANDED_OFF_NOTE));
     /** Containers and numbers. */
     static final Set<String> STRUCTURE = Set.of("items", "quote", "lines", "price_minor", "total_minor", "quantity",
-            "unit_price_minor", "in_stock", "options");
+            "unit_price_minor", "in_stock", "options", "above_budget", "count", "lowest_price_minor");
 
     private static final Pattern ID = Pattern.compile("[A-Za-z0-9_\\-]{1,100}");
 

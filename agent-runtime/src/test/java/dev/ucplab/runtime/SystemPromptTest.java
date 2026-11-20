@@ -110,7 +110,8 @@ class SystemPromptTest {
     @Test
     void prompt_v4_searchesAtMostTwice_thenProposesOrSaysNoneFits() {
         assertThat(paragraphs()).filteredOn(p -> p.startsWith("[DECIDE]")).singleElement()
-                .satisfies(p -> assertThat(p).contains("at most twice").contains("reworded").contains("none fits"));
+                .satisfies(p -> assertThat(p).contains("at most twice").contains("reworded").contains("none fits")
+                        .contains("above_budget"));
         assertThat(paragraphs()).filteredOn(p -> p.startsWith("[COMPARE]")).singleElement()
                 .satisfies(p -> assertThat(p).doesNotContain("when you need that item's options"));
     }

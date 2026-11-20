@@ -92,6 +92,76 @@ class SearchCatalogBudgetTest {
         });
     }
 
+    /** A catalog that honours the price filter, as the lab merchant does: nothing above {@code maxPrice} comes back. */
+    private ToolRegistry honouring(List<CatalogProduct> products) {
+        CatalogGateway filtering = new CatalogGateway() {
+            @Override
+            public CallOutcome<CatalogPage> search(CatalogSearch request) {
+                asked.add(request);
+                List<CatalogProduct> kept = products.stream().filter(p -> request.maxPrice().isEmpty()
+                        || p.variants().getFirst().price().minor() <= request.maxPrice().get().minor()).toList();
+                return new CallOutcome.Ok<>(200, new CatalogPage(kept, false), List.of());
+            }
+
+            @Override
+            public CallOutcome<List<CatalogProduct>> lookup(List<String> ids) {
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public CallOutcome<CatalogProduct> product(String id) {
+                throw new UnsupportedOperationException();
+            }
+        };
+        return ToolRegistry.of(Stubs.ports(filtering, new Stubs.RecordingOrchestrator()), (q, t) -> Optional.empty(),
+                Duration.ofMinutes(5));
+    }
+
+    private static Map<String, Object> searched(ToolRegistry registry, ToolContext context) {
+        String json = registry.find("search_catalog").orElseThrow()
+                .run(context, Map.of("query", "snowboard", "max_results", 10)).json();
+        ResultFields.check(json);
+        return CanonicalJson.readObject(json);
+    }
+
+    // Covers: 6.2, 6.4, P9 (the near miss: when nothing fits and the catalog honours the filter, the tool asks once more
+    // without it, and the result carries only the count and the lowest price above the budget, numbers from the catalog,
+    // never a title, an id or a seller; an item in another currency is not counted)
+    @Test
+    void nothingFits_theResultNamesTheNearMiss_byCountAndLowestPriceOnly() {
+        ToolContext context = new ToolContext(Stubs.CONTEXT.auth(), Stubs.CONTEXT.runId(), Optional.of(BUDGET));
+        CatalogProduct near = board("5", 52_995, "USD", "152 cm");
+        CatalogProduct far = board("6", 80_000, "USD", "156 cm");
+
+        Map<String, Object> result = searched(honouring(List.of(far, near, board("7", 9_000, "CAD", "160 cm"))), context);
+
+        assertThat(asked).extracting(CatalogSearch::maxPrice)
+                .containsExactly(Optional.of(new Money(50_000, "USD")), Optional.empty());
+        assertThat((List<?>) result.get("items")).isEmpty();
+        assertThat(result.get("above_budget")).isEqualTo(Map.of("count", 2L, "lowest_price_minor", 52_995L,
+                "currency", "USD"));
+        assertThat(CanonicalJson.write(result)).doesNotContain("Example").doesNotContain("ProductVariant")
+                .doesNotContain("untrusted");
+    }
+
+    // Covers: 6.2 (when something fits there is no second search; items the merchant returned above the budget anyway
+    // are counted; with nothing above the budget there is no above_budget at all)
+    @Test
+    void somethingFits_noSecondSearch_andWhatWasLeftOutIsCounted() {
+        ToolContext context = new ToolContext(Stubs.CONTEXT.auth(), Stubs.CONTEXT.runId(), Optional.of(BUDGET));
+
+        Map<String, Object> ignoring = searched(registry(), context);
+        assertThat(asked).hasSize(1);
+        assertThat(ignoring.get("above_budget")).isEqualTo(Map.of("count", 1L, "lowest_price_minor", 50_001L,
+                "currency", "USD"));
+
+        asked.clear();
+        Map<String, Object> honoured = searched(honouring(List.of(IN_BUDGET, ABOVE)), context);
+        assertThat(asked).hasSize(1);
+        assertThat(honoured).doesNotContainKey("above_budget");
+        assertThat(searched(registry(), Stubs.CONTEXT)).doesNotContainKey("above_budget");
+    }
+
     // Covers: 6.2 (without a budget the search carries no price limit and every item is returned)
     @Test
     void withoutABudget_theSearchCarriesNoLimit_andEveryItemIsReturned() {
