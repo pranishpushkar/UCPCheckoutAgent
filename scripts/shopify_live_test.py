@@ -1031,6 +1031,31 @@ class BuyerCountryOption(unittest.TestCase):
         self.assertEqual(chosen.get("BUYER_COUNTRY"), "IN")
         self.assertNotIn("BUYER_COUNTRY", live.service_env(os.environ, self.work, 8080, catalog=True))
 
+    # Covers: 9.1 caps per currency, 26.7 (the console's policy file has caps for USD, the owned store's currency, and
+    # for the buyer country's currency in its own minor units; without a country, USD's only; never a flat cap)
+    def test_thePolicy_hasCapsForUsd_andTheBuyersCurrency(self):
+        self.assertEqual(live.policy_yaml("IN"), "caps:\n"
+                         "  USD: {per_purchase_minor: 200000, daily_minor: 400000}\n"
+                         "  INR: {per_purchase_minor: 20000000, daily_minor: 40000000}\n")
+        self.assertEqual(live.policy_yaml(None), "caps:\n  USD: {per_purchase_minor: 200000, daily_minor: 400000}\n")
+        self.assertEqual(live.policy_yaml("US"), live.policy_yaml(None))
+        self.assertNotIn("per_purchase_cap_minor", live.policy_yaml("GB"))
+
+    # Covers: 9.1 caps per currency, 26.7 (a country the caps table does not hold is refused before anything starts:
+    # its caps would be a guess or a conversion)
+    def test_aCountryWithoutCaps_isRefused(self):
+        for argv, env in ((["--buyer-country", "FR"], {}), ([], {"BUYER_COUNTRY": "JP"})):
+            with self.assertRaises(SystemExit) as e:
+                live.buyer_country(argv, env)
+            self.assertIn("has no console caps", str(e.exception))
+            self.assertIn("CONSOLE_CAPS", str(e.exception))
+
+    # Covers: 9.1 caps per currency, 26.7 (the dry run shows the caps the service will get, the buyer's currency's too)
+    def test_theDryRun_showsTheCaps(self):
+        text = self.dry_run("--buyer-country", "IN")
+        self.assertIn("USD: {per_purchase_minor: 200000, daily_minor: 400000}", text)
+        self.assertIn("INR: {per_purchase_minor: 20000000, daily_minor: 40000000}", text)
+
     # Covers: 26.7, 23.1 (the dry run shows the country the service will get)
     def test_theDryRun_showsTheCountry(self):
         self.assertIn('"BUYER_COUNTRY": "IN"', self.dry_run("--buyer-country", "IN"))

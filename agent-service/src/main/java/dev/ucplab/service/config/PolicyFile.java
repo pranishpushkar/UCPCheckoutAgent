@@ -1,5 +1,6 @@
 package dev.ucplab.service.config;
 
+import dev.ucplab.core.policy.CurrencyCaps;
 import dev.ucplab.core.policy.PolicyConfig;
 import java.io.IOException;
 import java.io.Reader;
@@ -27,8 +28,10 @@ final class PolicyFile {
     static final String UNKNOWN_KEY = "POLICY_FILE has an unknown setting";
     static final String WRONG_TYPE = "POLICY_FILE has a setting of the wrong type";
     static final String OUT_OF_RANGE = "POLICY_FILE has a setting out of range";
+    static final String CAPS_TWICE = "POLICY_FILE sets caps both per currency and with the flat USD keys";
+    static final String CAPS_INCOMPLETE = "POLICY_FILE has a currency without both per_purchase_minor and daily_minor";
 
-    private static final Set<String> KEYS = Set.of("per_purchase_cap_minor", "daily_cap_minor",
+    private static final Set<String> KEYS = Set.of("caps", "per_purchase_cap_minor", "daily_cap_minor",
             "max_quantity_per_line", "max_lines", "max_proposals_per_hour", "approval_required", "max_requotes");
 
     private PolicyFile() {
@@ -54,10 +57,12 @@ final class PolicyFile {
             }
         }
         PolicyConfig d = PolicyConfig.defaults();
+        // Skeleton (red): only the flat keys, as the USD caps.
+        CurrencyCaps usd = d.capsFor(PolicyConfig.USD).orElseThrow();
         try {
             return new PolicyConfig(
-                    longValue(map, "per_purchase_cap_minor", d.perPurchaseCapMinor()),
-                    longValue(map, "daily_cap_minor", d.dailyCapMinor()),
+                    longValue(map, "per_purchase_cap_minor", usd.perPurchaseMinor()),
+                    longValue(map, "daily_cap_minor", usd.dailyMinor()),
                     intValue(map, "max_quantity_per_line", d.maxQuantityPerLine()),
                     intValue(map, "max_lines", d.maxLines()),
                     intValue(map, "max_proposals_per_hour", d.maxProposalsPerHour()),

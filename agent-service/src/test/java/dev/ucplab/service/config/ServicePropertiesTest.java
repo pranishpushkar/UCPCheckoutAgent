@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.ucplab.core.config.AgentProfile;
 import dev.ucplab.core.intent.BuyerCountry;
+import dev.ucplab.core.policy.CurrencyCaps;
 import dev.ucplab.core.policy.PolicyConfig;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -120,9 +121,8 @@ class ServicePropertiesTest {
 
         PolicyConfig loaded = from(env).policy();
 
-        assertThat(loaded.perPurchaseCapMinor()).isEqualTo(9000);
+        assertThat(loaded.capsFor("USD")).contains(new CurrencyCaps(9000, 50_000));
         assertThat(loaded.maxLines()).isEqualTo(3);
-        assertThat(loaded.dailyCapMinor()).isEqualTo(PolicyConfig.defaults().dailyCapMinor());
         assertThat(from(env("prod")).policy()).isEqualTo(PolicyConfig.defaults());
     }
 

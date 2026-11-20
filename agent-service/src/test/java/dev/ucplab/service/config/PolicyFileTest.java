@@ -3,10 +3,12 @@ package dev.ucplab.service.config;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import dev.ucplab.core.policy.CurrencyCaps;
 import dev.ucplab.core.policy.PolicyConfig;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -34,6 +36,51 @@ class PolicyFileTest {
                 """);
 
         assertThat(c).isEqualTo(new PolicyConfig(1000, 3000, 2, 4, 6, true, 0));
+    }
+
+    // Covers: 9.1 caps per currency, 26.7 (caps: gives P2 and P3 per currency, each in its own minor units; the other
+    // settings keep their keys)
+    @Test
+    void load_capsPerCurrency_areRead() throws IOException {
+        PolicyConfig c = load("""
+                caps:
+                  USD: {per_purchase_minor: 200000, daily_minor: 400000}
+                  INR: {per_purchase_minor: 20000000, daily_minor: 40000000}
+                max_lines: 4
+                """);
+
+        assertThat(c.caps()).isEqualTo(Map.of("USD", new CurrencyCaps(200_000, 400_000),
+                "INR", new CurrencyCaps(20_000_000, 40_000_000)));
+        assertThat(c.maxLines()).isEqualTo(4);
+    }
+
+    // Covers: 9.1 caps per currency (the flat keys still load, as the USD caps: an INR quote then has no caps)
+    @Test
+    void load_flatKeys_areTheUsdCaps() throws IOException {
+        PolicyConfig c = load("per_purchase_cap_minor: 1000\ndaily_cap_minor: 3000\n");
+
+        assertThat(c.caps()).isEqualTo(Map.of("USD", new CurrencyCaps(1000, 3000)));
+        assertThat(c.capsFor("INR")).isEmpty();
+    }
+
+    // Covers: 9.1 caps per currency, I8 (caps and a flat key together, a currency that is not three upper-case letters,
+    // a currency without both caps, an unknown key in a currency, a wrong type and a non-positive cap are refused with
+    // fixed messages that echo nothing from the file)
+    @Test
+    void load_badCaps_areRefusedWithFixedMessages() {
+        assertThatThrownBy(() -> load("per_purchase_cap_minor: 1000\ncaps:\n  USD: {per_purchase_minor: 1, daily_minor: 2}\n"))
+                .hasMessage(PolicyFile.CAPS_TWICE);
+        assertThatThrownBy(() -> load("caps:\n  inr-canary: {per_purchase_minor: 1, daily_minor: 2}\n"))
+                .hasMessage(PolicyFile.OUT_OF_RANGE).message().doesNotContain("inr-canary");
+        assertThatThrownBy(() -> load("caps:\n  INR: {per_purchase_minor: 1}\n")).hasMessage(PolicyFile.CAPS_INCOMPLETE);
+        assertThatThrownBy(() -> load("caps:\n  INR: {per_purchase_minor: 1, daily_minor: 2, fx_canary: 3}\n"))
+                .hasMessage(PolicyFile.UNKNOWN_KEY).message().doesNotContain("fx_canary");
+        assertThatThrownBy(() -> load("caps:\n  INR: {per_purchase_minor: lots-canary, daily_minor: 2}\n"))
+                .hasMessage(PolicyFile.WRONG_TYPE).message().doesNotContain("lots-canary");
+        assertThatThrownBy(() -> load("caps: [USD]\n")).hasMessage(PolicyFile.WRONG_TYPE);
+        assertThatThrownBy(() -> load("caps: {}\n")).hasMessage(PolicyFile.OUT_OF_RANGE);
+        assertThatThrownBy(() -> load("caps:\n  INR: {per_purchase_minor: 0, daily_minor: 2}\n"))
+                .hasMessage(PolicyFile.OUT_OF_RANGE);
     }
 
     // Covers: 9.1 (an empty file is the 9.1 defaults)

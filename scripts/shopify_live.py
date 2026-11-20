@@ -149,6 +149,14 @@ def console_merchants(domain):
 
 
 POLICY_YAML = "per_purchase_cap_minor: 200000\ndaily_cap_minor: 400000\n"
+# The console's caps per buyer country (DESIGN 9.1, 26.7): round amounts of about the same size, chosen by the operator
+# and never a conversion. US is the owned store's currency and always written.
+CONSOLE_CAPS = {"US": ("USD", 200000, 400000), "IN": ("INR", 20000000, 40000000), "GB": ("GBP", 150000, 300000)}
+
+
+def policy_yaml(country=None):
+    """Skeleton (red): the flat caps, whatever the country."""
+    return POLICY_YAML
 
 
 COUNTRY_REFUSED = "refused: --buyer-country must be two upper-case letters (ISO 3166-1), such as IN"

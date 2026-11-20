@@ -84,17 +84,19 @@ public final class RuleBasedPolicyEngine implements PolicyEngine {
         Objects.requireNonNull(quote, "quote");
 
         long total = quote.totalMinor();
-        if (total > config.perPurchaseCapMinor()) {
+        // Skeleton (red): the USD caps for every quote, and spend summed across currencies.
+        CurrencyCaps caps = config.capsFor(PolicyConfig.USD).orElseThrow();
+        if (total > caps.perPurchaseMinor()) {
             return PolicyDecision.deny(PolicyRule.P2, "quoted total " + total + " is above the per-purchase cap "
-                    + config.perPurchaseCapMinor());
+                    + caps.perPurchaseMinor());
         }
 
         Instant now = clock.instant();
-        long spent = usage.committedSpendMinor(user, now.minus(SPEND_WINDOW), now);
+        long spent = usage.committedSpendMinor(user, PolicyConfig.USD, now.minus(SPEND_WINDOW), now);
         // Written as a subtraction so a large spent value cannot overflow.
-        if (total > config.dailyCapMinor() - spent) {
+        if (total > caps.dailyMinor() - spent) {
             return PolicyDecision.deny(PolicyRule.P3, "spent in the last 24 hours " + spent + " plus quoted total "
-                    + total + " is above the daily cap " + config.dailyCapMinor());
+                    + total + " is above the daily cap " + caps.dailyMinor());
         }
 
         Optional<PolicyDecision> size = checkSize(quote.lines().size(),

@@ -95,7 +95,7 @@ final class CrashHarness {
                         : Optional.empty(),
                 new PolicyUsage() {
                     @Override
-                    public long committedSpendMinor(dev.ucplab.core.identity.UserId user, Instant from, Instant to) {
+                    public long committedSpendMinor(dev.ucplab.core.identity.UserId user, String currency, Instant from, Instant to) {
                         return 0;
                     }
 

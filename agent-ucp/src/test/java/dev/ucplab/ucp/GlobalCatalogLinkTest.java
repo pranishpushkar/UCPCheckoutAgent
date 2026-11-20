@@ -69,7 +69,7 @@ class GlobalCatalogLinkTest {
                 m -> m.equals(entry.id()) ? Optional.of(entry) : Optional.empty(),
                 new PolicyUsage() {
                     @Override
-                    public long committedSpendMinor(UserId user, Instant from, Instant to) {
+                    public long committedSpendMinor(UserId user, String currency, Instant from, Instant to) {
                         return 0;
                     }
 

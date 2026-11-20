@@ -41,7 +41,7 @@ public final class SqlPolicyUsage implements PolicyUsage {
     }
 
     @Override
-    public long committedSpendMinor(UserId user, Instant from, Instant to) {
+    public long committedSpendMinor(UserId user, String currency, Instant from, Instant to) {
         Objects.requireNonNull(user, "user");
         Objects.requireNonNull(from, "from");
         Objects.requireNonNull(to, "to");

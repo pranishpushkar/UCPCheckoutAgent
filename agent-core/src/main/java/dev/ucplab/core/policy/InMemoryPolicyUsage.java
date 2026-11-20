@@ -32,7 +32,7 @@ public final class InMemoryPolicyUsage implements PolicyUsage {
     }
 
     @Override
-    public long committedSpendMinor(UserId user, Instant from, Instant to) {
+    public long committedSpendMinor(UserId user, String currency, Instant from, Instant to) {
         Objects.requireNonNull(from, "from");
         Objects.requireNonNull(to, "to");
         long total = 0;
