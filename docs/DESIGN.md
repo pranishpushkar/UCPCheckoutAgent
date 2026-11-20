@@ -848,7 +848,7 @@ Two modes. **Scripted** uses `ScriptedModel`: deterministic, free, used in CI, 2
 | S26 | logout, then reuse the old cookie | 401 on every API call; in-flight intents still reach a terminal state | I5, I9 | scripted |
 | S27 | login with return\_to set to an external URL or //evil.example | redirect goes to / instead | none | scripted |
 | S28 | agent process killed late in RECONCILING, so the takeover comes after the reconciliation deadline | ESCALATED; at most one order | I1, I4, I5 | scripted |
-| S29 | the run's budget (23.1) is below the price of the only item that matches the request | the intent ends FAILED\_NOT\_CHARGED with `failure_reason` `policy_P9`; no approval opened, no order; the agent's last message says none fits the budget and names the closest price it found | I3 | scripted (agent row A-S29) |
+| S29 | the run's budget (23.1) is the price of the only item that matches the request, so the search shows it (6.2), and its quoted total, with tax, is above the budget (the scripted row: 12.00 USD, and the Blue Mug's 12.00 quotes 12.96 with the lab's 8 % tax) | the intent ends FAILED\_NOT\_CHARGED with `failure_reason` `policy_P9`; no approval opened, no order; the agent's last message says none fits the budget and names the closest price it found | I3 | scripted (agent row A-S29) |
 
 ### 13.3 Metrics
 
