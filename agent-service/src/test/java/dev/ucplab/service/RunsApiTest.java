@@ -134,7 +134,7 @@ class RunsApiTest {
         Map<String, Object> full = run(alice, id);
         assertThat(full).containsKeys("run_id", "status", "model", "started_at", "ended_at", "messages",
                 "messages_retained", "tool_events", "intent_ids", "counts");
-        assertThat(full).containsEntry("model", "scripted/v3").containsEntry("messages_retained", true);
+        assertThat(full).containsEntry("model", "scripted/v4").containsEntry("messages_retained", true);
         assertThat(list(full.get("tool_events"))).extracting(e -> e.get("tool"))
                 .containsExactly("ask_user", "search_catalog", "propose_purchase");
         assertThat(list(full.get("tool_events"))).allSatisfy(e -> assertThat(e.keySet())

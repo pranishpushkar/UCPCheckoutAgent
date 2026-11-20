@@ -16,7 +16,7 @@ import java.util.regex.Pattern;
 final class ResultFields {
 
     /** Always merchant or user text: wrapped, whatever it holds. */
-    static final Set<String> WRAPPED = Set.of("title", "description", "answer", "seller");
+    static final Set<String> WRAPPED = Set.of("title", "description", "answer", "seller", "name", "label");
     /** Merchant-sent ids and codes: as they are when they look like ids, else wrapped. */
     static final Set<String> WRAPPED_UNLESS_ID = Set.of("item_id", "order_id", "failure_reason");
     /** Our own fields: ids, codes, states and the currency. */
@@ -25,7 +25,7 @@ final class ResultFields {
     static final Map<String, Set<String>> FIXED = Map.of("note", Set.of(GetPurchaseStatusTool.HANDED_OFF_NOTE));
     /** Containers and numbers. */
     static final Set<String> STRUCTURE = Set.of("items", "quote", "lines", "price_minor", "total_minor", "quantity",
-            "unit_price_minor", "in_stock");
+            "unit_price_minor", "in_stock", "options");
 
     private static final Pattern ID = Pattern.compile("[A-Za-z0-9_\\-]{1,100}");
 

@@ -18,6 +18,7 @@ import dev.ucplab.core.merchant.MerchantStatus;
 import dev.ucplab.core.merchant.Money;
 import dev.ucplab.core.merchant.SessionId;
 import dev.ucplab.core.merchant.Transport;
+import dev.ucplab.core.merchant.VariantOption;
 import dev.ucplab.ucp.auth.ClientCredentials;
 import dev.ucplab.ucp.auth.TokenProvider;
 import dev.ucplab.ucp.mcp.McpStore;
@@ -106,6 +107,37 @@ class GlobalCatalogGatewayTest {
         assertThat(sent.arguments().get("meta")).isEqualTo(Map.of("ucp-agent", Map.of("profile", PROFILE)));
         assertThat(sent.header("Authorization")).isEqualTo("Bearer tok-1");
         assertThat(sent.headers().keySet()).noneMatch(k -> k.equalsIgnoreCase(StoreHeaders.BUYER_IP_HEADER));
+    }
+
+    // Covers: 26.7, 6.2, 23.1 (with a run budget the search adds filters.price.max in minor units and the budget's currency
+    // as context.currency; the other recorded filters stay as they are)
+    @Test
+    void search_withABudget_sendsThePriceFilter_inTheBudgetsCurrency() {
+        store.answerText("search_catalog", fixture("global_search_us.json"));
+
+        ok(gateway().search(new CatalogSearch("snowboard", 10, Optional.of(new Money(50_000, "USD")))));
+
+        assertThat(store.toolCalls().getFirst().arguments().get("catalog")).isEqualTo(Map.of(
+                "query", "snowboard",
+                "context", Map.of("address_country", "US", "currency", "USD"),
+                "filters", Map.of("available", true, "ships_to", Map.of("country", "US"), "price", Map.of("max", 50_000L)),
+                "pagination", Map.of("limit", 10L)));
+    }
+
+    // Covers: 26.7, 6.2 (each variant's own options are read from the recorded answers: the search's one variant per
+    // product and get_product's, Size 149 cm, though the product lists five sizes)
+    @Test
+    void searchAndProduct_readTheVariantsOwnOptions() {
+        store.answerText("search_catalog", fixture("global_search_us.json"));
+        store.answerText("get_product", fixture("global_get_product_us.json"));
+
+        CatalogPage page = ok(gateway().search(new CatalogSearch("snowboard", 10)));
+        CatalogProduct product = ok(gateway().product("gid://shopify/ProductVariant/1000001"));
+
+        assertThat(page.products().getFirst().variants().getFirst().options())
+                .containsExactly(new VariantOption("Size", "149 cm"));
+        assertThat(product.variants()).singleElement()
+                .satisfies(v -> assertThat(v.options()).containsExactly(new VariantOption("Size", "149 cm")));
     }
 
     // Covers: 26.7, I6 (no URL reaches a search result: a variant carries no checkout_url, product url or seller url)

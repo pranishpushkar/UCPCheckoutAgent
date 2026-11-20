@@ -107,7 +107,7 @@ class AgentRuntimeTest {
         assertThat(catalogCalls).containsExactly("search first", "product item_456", "search third");
         RunRecord record = record();
         assertThat(record.outcome()).contains("done");
-        assertThat(record.model()).isEqualTo("scripted/v3");
+        assertThat(record.model()).isEqualTo("scripted/v4");
         assertThat(record.modelCalls()).isEqualTo(2);
         assertThat(record.toolCalls()).isEqualTo(3);
         assertThat(record.toolEvents()).extracting(ToolEvent::tool)
