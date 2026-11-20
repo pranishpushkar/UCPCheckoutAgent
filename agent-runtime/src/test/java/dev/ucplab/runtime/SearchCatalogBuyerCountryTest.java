@@ -109,8 +109,7 @@ class SearchCatalogBuyerCountryTest {
     @Test
     void getProduct_readsForTheRunsCountry() {
         String json = registry().find("get_product").orElseThrow().run(new ToolContext(Stubs.ALICE, new RunId("r"),
-                Optional.empty(), INDIA), Map.of("merchant_id", Stubs.SHOP.value(),
-                "item_id", "gid://shopify/ProductVariant/1000001")).json();
+                Optional.empty(), INDIA), Map.of("item_id", "gid://shopify/ProductVariant/1000001")).json();
 
         assertThat(json).doesNotContain("\"error\"");
         assertThat(productReads).containsExactly(INDIA);

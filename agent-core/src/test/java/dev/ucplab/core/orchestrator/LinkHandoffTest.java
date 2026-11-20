@@ -143,7 +143,7 @@ class LinkHandoffTest {
 
     // Covers: 7.2 quote_ready (link), I2, 9.2, 20, 26.7, I12 (propose accepts the catalog without owned; the quote is
     // one fresh read of the offer; the snapshot holds the catalog's title, price and currency and the link exactly as
-    // read; no attempt row, nothing sent to any gateway)
+    // read, with the intent's buyer country (US); no attempt row, nothing sent to any gateway)
     @Test
     void quoteReady_readsTheOfferOnce_andOpensTheApprovalOnIt() {
         Lab.Worker w = worker();
@@ -156,7 +156,7 @@ class LinkHandoffTest {
         assertThat(pending.snapshot().totalMinor()).isEqualTo(12_900);
         assertThat(pending.snapshot().sessionId().value()).isEqualTo("link:" + ITEM);
         assertThat(pending.snapshot().link()).contains(new LinkSnapshot("Example Shop A", "shop-a.myshopify.example",
-                Optional.of("www.shop-a.example"), new ContinueUrl(URI.create(LINK))));
+                Optional.of("www.shop-a.example"), Optional.of("US"), new ContinueUrl(URI.create(LINK))));
         assertThat(events(id, "transition")).contains(
                 "{\"event\":\"QUOTE_READY\",\"from\":\"QUOTING\",\"guard\":\"QUOTE_POLICY_ALLOWS\",\"to\":\"AWAITING_APPROVAL\"}");
         assertThat(events(id, "policy_decision")).filteredOn(e -> e.contains("\"stage\":\"quote\"")).singleElement()

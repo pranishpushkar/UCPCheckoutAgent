@@ -21,7 +21,8 @@ import java.util.Optional;
  * Reads the Global Catalog's answers ({@code structuredContent}, 2026-04-08; 26.7) into core types. Pure.
  *
  * <p>One item per variant: a variant needs an {@code id} and a {@code price} with an integer {@code amount} in minor
- * units in {@value #CURRENCY}; any other variant is left out, and a product left with none is left out with it. A
+ * units in the buyer country's currency; any other variant is left out, and a product left with none is left out with
+ * it. A search counts the variants it left out for another currency, never converting them (26.7). A
  * variant's title defaults to its product's. {@code availability.available} is read as it is, and {@code seller.name}
  * as the variant's seller. Nothing else of the offer is kept for search or product: no {@code checkout_url}, no
  * {@code url}, no seller domain, url or links (I6). Only {@link #offer}, the orchestrator's read for a link intent's
@@ -30,46 +31,64 @@ import java.util.Optional;
  */
 final class GlobalCatalogParser {
 
-    /** The only currency a link intent is priced in (26.7). */
-    static final String CURRENCY = "USD";
     private static final int MAX_TEXT = 200;
     private static final int MAX_DESCRIPTION = 2000;
 
     private GlobalCatalogParser() {
     }
 
-    /** A search answer: {@code products} and {@code pagination.has_next_page}. */
-    static CatalogParser.Parsed<CatalogPage> search(byte[] body) {
+    /**
+     * A search answer in {@code currency}: {@code products}, {@code pagination.has_next_page}, and the number of
+     * variants left out for a price in another currency.
+     */
+    static CatalogParser.Parsed<CatalogPage> search(byte[] body, String currency) {
         return read(body, root -> {
             if (!(root.get("products") instanceof List<?> list)) {
                 return new CatalogParser.Parsed.Invalid<>("products missing");
             }
             List<CatalogProduct> products = new ArrayList<>();
+            int other = 0;
             for (Object o : list) {
                 if (o instanceof Map<?, ?> p) {
-                    product(p).ifPresent(products::add);
+                    product(p, currency).ifPresent(products::add);
+                    other += otherCurrency(p, currency);
                 }
             }
             boolean more = root.get("pagination") instanceof Map<?, ?> p && Boolean.TRUE.equals(p.get("has_next_page"));
-            return new CatalogParser.Parsed.Found<>(new CatalogPage(products, more));
+            return new CatalogParser.Parsed.Found<>(new CatalogPage(products, more, other));
         });
     }
 
-    /** A {@code get_product} answer: {@code product}, with at least one variant this parser keeps. */
-    static CatalogParser.Parsed<CatalogProduct> product(byte[] body) {
+    /** A {@code get_product} answer in {@code currency}: {@code product}, with at least one variant this parser keeps. */
+    static CatalogParser.Parsed<CatalogProduct> product(byte[] body, String currency) {
         return read(body, root -> root.get("product") instanceof Map<?, ?> p
-                ? product(p).<CatalogParser.Parsed<CatalogProduct>>map(CatalogParser.Parsed.Found::new)
-                        .orElseGet(() -> new CatalogParser.Parsed.Invalid<>("no variant in " + CURRENCY))
+                ? product(p, currency).<CatalogParser.Parsed<CatalogProduct>>map(CatalogParser.Parsed.Found::new)
+                        .orElseGet(() -> new CatalogParser.Parsed.Invalid<>("no variant in " + currency))
                 : new CatalogParser.Parsed.Invalid<>("product missing"));
+    }
+
+    /** The product's variants with an id and an integer price in a currency other than {@code currency}. */
+    private static int otherCurrency(Map<?, ?> p, String currency) {
+        int n = 0;
+        if (p.get("variants") instanceof List<?> variants) {
+            for (Object o : variants) {
+                if (o instanceof Map<?, ?> v && string(v.get("id")).isPresent() && v.get("price") instanceof Map<?, ?> price
+                        && price.get("amount") instanceof Long && price.get("currency") instanceof String c
+                        && !c.equals(currency)) {
+                    n++;
+                }
+            }
+        }
+        return n;
     }
 
     /**
      * A {@code get_product} answer as the offer of {@code itemId} (7.2 quote_ready (link)): the variant with that id, its
      * seller's name, domain and site (the host of {@code seller.url}, lower-cased), and its {@code checkout_url} exactly
-     * as sent. A variant the answer does not hold is the catalog's refusal ({@code not_found}); a variant without a USD
-     * price or without a seller name and domain is unreadable.
+     * as sent. A variant the answer does not hold is the catalog's refusal ({@code not_found}); a variant without a price
+     * in {@code currency} or without a seller name and domain is unreadable.
      */
-    static CatalogParser.Parsed<LinkOffer> offer(byte[] body, String itemId) {
+    static CatalogParser.Parsed<LinkOffer> offer(byte[] body, String itemId, String currency) {
         return read(body, root -> {
             if (!(root.get("product") instanceof Map<?, ?> p) || !(p.get("variants") instanceof List<?> variants)) {
                 return new CatalogParser.Parsed.Invalid<>("product missing");
@@ -77,7 +96,7 @@ final class GlobalCatalogParser {
             String productTitle = string(p.get("title")).map(t -> clean(MerchantMarkup.strip(t), MAX_TEXT)).orElse("");
             for (Object o : variants) {
                 if (o instanceof Map<?, ?> v && itemId.equals(v.get("id"))) {
-                    return offer(v, productTitle);
+                    return offer(v, productTitle, currency);
                 }
             }
             return new CatalogParser.Parsed.Error<>(NOT_FOUND, "the variant is not in the answer");
@@ -87,10 +106,10 @@ final class GlobalCatalogParser {
     /** The code of {@link #offer}'s refusal when the answer does not hold the variant. */
     static final String NOT_FOUND = "not_found";
 
-    private static CatalogParser.Parsed<LinkOffer> offer(Map<?, ?> v, String productTitle) {
-        Optional<CatalogVariant> variant = variant(v, productTitle);
+    private static CatalogParser.Parsed<LinkOffer> offer(Map<?, ?> v, String productTitle, String currency) {
+        Optional<CatalogVariant> variant = variant(v, productTitle, currency);
         if (variant.isEmpty()) {
-            return new CatalogParser.Parsed.Invalid<>("no price in " + CURRENCY);
+            return new CatalogParser.Parsed.Invalid<>("no price in " + currency);
         }
         if (!(v.get("seller") instanceof Map<?, ?> s)) {
             return new CatalogParser.Parsed.Invalid<>("no seller");
@@ -131,7 +150,7 @@ final class GlobalCatalogParser {
     }
 
     /** The product with its kept variants, or empty when it has no id, no title or no kept variant. */
-    static Optional<CatalogProduct> product(Map<?, ?> p) {
+    static Optional<CatalogProduct> product(Map<?, ?> p, String currency) {
         Optional<String> id = string(p.get("id"));
         Optional<String> title = string(p.get("title")).map(t -> clean(MerchantMarkup.strip(t), MAX_TEXT));
         if (id.isEmpty() || title.isEmpty() || !(p.get("variants") instanceof List<?> variants)) {
@@ -140,18 +159,18 @@ final class GlobalCatalogParser {
         List<CatalogVariant> kept = new ArrayList<>();
         for (Object o : variants) {
             if (o instanceof Map<?, ?> v) {
-                variant(v, title.get()).ifPresent(kept::add);
+                variant(v, title.get(), currency).ifPresent(kept::add);
             }
         }
         return kept.isEmpty() ? Optional.empty()
                 : Optional.of(new CatalogProduct(id.get(), title.get(), description(p.get("description")), kept));
     }
 
-    /** The variant, or empty when it has no id or no integer price in {@value #CURRENCY}. */
-    static Optional<CatalogVariant> variant(Map<?, ?> v, String productTitle) {
+    /** The variant, or empty when it has no id or no integer price in {@code currency}. */
+    static Optional<CatalogVariant> variant(Map<?, ?> v, String productTitle, String currency) {
         Optional<String> id = string(v.get("id"));
         if (id.isEmpty() || !(v.get("price") instanceof Map<?, ?> price) || !(price.get("amount") instanceof Long amount)
-                || amount < 0 || !CURRENCY.equals(price.get("currency"))) {
+                || amount < 0 || !currency.equals(price.get("currency"))) {
             return Optional.empty();
         }
         String title = string(v.get("title")).map(t -> clean(MerchantMarkup.strip(t), MAX_TEXT)).filter(t -> !t.isBlank())
@@ -160,7 +179,7 @@ final class GlobalCatalogParser {
         Optional<String> seller = v.get("seller") instanceof Map<?, ?> s
                 ? string(s.get("name")).map(n -> clean(MerchantMarkup.strip(n), MAX_TEXT)).filter(n -> !n.isBlank())
                 : Optional.empty();
-        return Optional.of(new CatalogVariant(id.get(), title, new Money(amount, CURRENCY),
+        return Optional.of(new CatalogVariant(id.get(), title, new Money(amount, currency),
                 new Availability(available, Optional.empty()), seller, options(v.get("options"))));
     }
 

@@ -151,9 +151,18 @@ def console_merchants(domain):
 POLICY_YAML = "per_purchase_cap_minor: 200000\ndaily_cap_minor: 400000\n"
 
 
+COUNTRY_REFUSED = "refused: --buyer-country must be two upper-case letters (ISO 3166-1), such as IN"
+
+
 def buyer_country(argv, env):
-    """Skeleton (red): no default buyer country is chosen yet."""
-    return None
+    """--buyer-country (DESIGN 26.7, 23.1): the service's BUYER_COUNTRY, the option winning over the environment's; None
+    when neither names one, so the service's own default (US) holds. The service checks that the code is a country."""
+    code = option(argv, "--buyer-country", None) if "--buyer-country" in argv else env.get("BUYER_COUNTRY")
+    if code is None:
+        return None
+    if not re.fullmatch(r"[A-Z]{2}", code):
+        raise SystemExit(COUNTRY_REFUSED)
+    return code
 
 
 def service_env(env, tmp, port, model="scripted", catalog=False, buyer_country=None):
@@ -180,6 +189,8 @@ def service_env(env, tmp, port, model="scripted", catalog=False, buyer_country=N
     })
     if catalog:
         del out["BUYER_IP"]
+    if buyer_country is not None:
+        out["BUYER_COUNTRY"] = buyer_country
     if model == "gemini":
         key = (env.get("GEMINI_API_KEY") or "").strip()
         remember(key)
@@ -639,18 +650,18 @@ def after_payment_for(argv, store_factory, db, api, evidence):
     return lambda: after_payment_reads(store_factory(), db, api, evidence)
 
 
-def shown_env(port, model="scripted", catalog=False):
+def shown_env(port, model="scripted", catalog=False, country=None):
     """The service's environment as a dry run prints it: every secret replaced, an unset Gemini key named as unset."""
-    env = service_env(os.environ, "<tmp>", port, model, catalog)
+    env = service_env(os.environ, "<tmp>", port, model, catalog, country)
     return {k: ("<redacted>" if k in REDACTED_ENV and v else "<unset: the real run refuses>" if k in REDACTED_ENV else v)
             for k, v in env.items() if k not in ("PATH", "HOME", "LANG", "TMPDIR")}
 
 
-def console_dry_run(domain, port, evidence, jar, after_payment=False, model="scripted"):
+def console_dry_run(domain, port, evidence, jar, after_payment=False, model="scripted", country=None):
     catalog = domain is None
     say("DRY-RUN --console: merchants.yaml (temporary, deleted on exit):\n" + console_merchants(domain))
     say("DRY-RUN policy.yaml (temporary): " + POLICY_YAML.strip().replace("\n", ", "))
-    shown = shown_env(port, model, catalog)
+    shown = shown_env(port, model, catalog, country)
     if catalog:
         say("DRY-RUN --catalog: the service's only calls to Shopify: POST %s (token for client <redacted>, secret "
             "<redacted>); then POST %s tools/call search_catalog and get_product, Authorization: Bearer <redacted>, "
@@ -681,7 +692,7 @@ def console_dry_run(domain, port, evidence, jar, after_payment=False, model="scr
     return 0
 
 
-def start_service(jar, tmp, domain, evidence, port, model="scripted"):
+def start_service(jar, tmp, domain, evidence, port, model="scripted", country=None):
     """Writes the temporary merchants and policy files and starts the service; returns the process and its log. With
     --catalog (no domain) the file lists the catalog alone."""
     with open(os.path.join(tmp, "merchants.yaml"), "w") as f:
@@ -689,7 +700,8 @@ def start_service(jar, tmp, domain, evidence, port, model="scripted"):
     with open(os.path.join(tmp, "policy.yaml"), "w") as f:
         f.write(POLICY_YAML)
     log = open(os.path.join(evidence, "service.log"), "w")
-    return spawn(["java", "-jar", jar], service_env(os.environ, tmp, port, model, domain is None), log, tmp), log
+    return spawn(["java", "-jar", jar], service_env(os.environ, tmp, port, model, domain is None, country), log,
+                 tmp), log
 
 
 def spawn(command, env, log, cwd):
@@ -716,11 +728,12 @@ def console_main(argv, domain, root, port, jar):
     """--console: the service and the owner's store, for the browser, until Ctrl-C (docs/demo.md)."""
     console_options(argv)
     model = model_choice(argv, os.environ, "--dry-run" in argv)
+    country = buyer_country(argv, os.environ)
     default = "notes/catalog/console/evidence" if domain is None else "notes/h5/console/evidence"
     evidence = os.path.abspath(option(argv, "--evidence", os.path.join(root, default)))
     base = "http://localhost:%d" % port
     if "--dry-run" in argv:
-        return console_dry_run(domain, port, evidence, jar, "--after-payment" in argv, model)
+        return console_dry_run(domain, port, evidence, jar, "--after-payment" in argv, model, country)
     if not os.path.isfile(jar):
         raise SystemExit("build first: ./mvnw -B -ntp -DskipTests package")
     if model == "gemini" and not jar_has_live_model(jar):
@@ -733,7 +746,7 @@ def console_main(argv, domain, root, port, jar):
     db = os.path.join(tmp, "ucplab.db")
     proc = log = api = None
     try:
-        proc, log = start_service(jar, tmp, domain, evidence, port, model)
+        proc, log = start_service(jar, tmp, domain, evidence, port, model, country)
         wait_ready(base, proc)
         api = Api(base)
         api.sign_in(USER)          # the script's own session, to read each intent's evidence on the way out

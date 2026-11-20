@@ -276,7 +276,20 @@ public final class ServiceProperties {
         return new ServiceProperties(profile, databaseFile, secretBytes, approvalKey, policy, first.entry(first.fileStatus()), merchants, localUsers,
                 origins(env.get("PUBLIC_ORIGIN").orElse(DEFAULT_ORIGINS)), agentModel,
                 agentModel == AgentModel.GEMINI ? modelKey : Optional.empty(), modelBaseUrl, first.labUrl().orElse(fallbackLab), buyerIp, tokenEndpoint,
-                agentProfile, agentVersion, BuyerCountry.US);
+                agentProfile, agentVersion, buyerCountry(env));
+    }
+
+    /** 23.1, 26.7: the operator's default buyer country, US when unset; a code BuyerCountry refuses stops startup. */
+    private static BuyerCountry buyerCountry(Environment env) {
+        Optional<String> code = env.get("BUYER_COUNTRY");
+        if (code.isEmpty()) {
+            return BuyerCountry.US;
+        }
+        try {
+            return new BuyerCountry(code.get());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalStateException(BUYER_COUNTRY_INVALID);
+        }
     }
 
     /**
@@ -440,7 +453,7 @@ public final class ServiceProperties {
         return merchantLabUrl;
     }
 
-    /** The operator's default buyer country (23.1 {@code BUYER_COUNTRY}). Skeleton (red): always US. */
+    /** The operator's default buyer country (23.1 {@code BUYER_COUNTRY}), US when unset. */
     public BuyerCountry buyerCountry() {
         return buyerCountry;
     }

@@ -353,10 +353,11 @@ public final class DefaultOrchestrator implements Orchestrator {
         Objects.requireNonNull(lines, "lines");
         Objects.requireNonNull(rationale, "rationale");
         Objects.requireNonNull(budget, "budget");
+        Objects.requireNonNull(shipTo, "shipTo");
         if (lines.isEmpty()) {
             throw new IllegalArgumentException("a proposal needs at least one line");
         }
-        String dedupeKey = dedupeKey(auth.user(), merchantId, lines, budget);
+        String dedupeKey = dedupeKey(auth.user(), merchantId, lines, budget, shipTo);
         Optional<ProposalResult> existing = existingProposal(auth.user(), dedupeKey);
         if (existing.isPresent()) {
             return existing.get();
@@ -376,6 +377,7 @@ public final class DefaultOrchestrator implements Orchestrator {
                         entry.map(MerchantEntry::fingerprint).orElse(OwnStoreGuard.NO_ENTRY), dedupeKey, lines,
                         auth.email(), now)
                 .withBudget(budget)
+                .withShipTo(shipTo)
                 .withState(t.to(), now)
                 .withLease(Optional.of(workerId), Optional.of(now.plus(config.lease())));
         if (!allowed) {
@@ -460,19 +462,23 @@ public final class DefaultOrchestrator implements Orchestrator {
         return dedupeKey(user, merchantId, lines, Optional.empty());
     }
 
-    /** 7.7, with the run's buyer country. Skeleton (red): the country is not in the key yet. */
-    public static String dedupeKey(UserId user, MerchantId merchantId, List<ProposedLine> lines, Optional<Budget> budget,
-            BuyerCountry shipTo) {
-        return dedupeKey(user, merchantId, lines, budget);
-    }
-
     /** 7.7: with the run's budget appended when it has one, so proposals under different budgets never share an intent. */
     public static String dedupeKey(UserId user, MerchantId merchantId, List<ProposedLine> lines, Optional<Budget> budget) {
+        return dedupeKey(user, merchantId, lines, budget, BuyerCountry.US);
+    }
+
+    /**
+     * 7.7: then the run's buyer country, when it is not US, so the same item for two countries (two quotes, two links)
+     * never shares an intent; for US the key is the key before the buyer country.
+     */
+    public static String dedupeKey(UserId user, MerchantId merchantId, List<ProposedLine> lines, Optional<Budget> budget,
+            BuyerCountry shipTo) {
         String items = lines.stream().map(l -> l.itemId() + ':' + l.quantity()).sorted()
                 .collect(Collectors.joining(","));
         // No lambda: a new one here would renumber those the mutation equivalents name.
         String limit = budget.isPresent() ? "|" + budget.get().currency() + ':' + budget.get().amountMinor() : "";
-        return Sha256.hex(user.value() + '|' + merchantId.value() + '|' + items + limit);
+        String country = shipTo.equals(BuyerCountry.US) ? "" : "|ship_to:" + shipTo.code();
+        return Sha256.hex(user.value() + '|' + merchantId.value() + '|' + items + limit + country);
     }
 
     // ---------------------------------------------------------------- the step function (7.3)
@@ -2124,7 +2130,8 @@ public final class DefaultOrchestrator implements Orchestrator {
             return linkRefused(intent, LINK_QUANTITY_UNSUPPORTED, Optional.empty());
         }
         String itemId = intent.lines().getFirst().itemId();
-        CallOutcome<LinkOffer> read = links.offer(intent.merchantId(), itemId);
+        // 26.7: read for the intent's buyer country, so the price and the link are that country's.
+        CallOutcome<LinkOffer> read = links.offer(intent.merchantId(), itemId, intent.shipTo());
         if (read instanceof CallOutcome.Rejected<LinkOffer>) {
             return linkFailed(intent, TransitionEvent.ITEM_UNAVAILABLE, ITEM_UNAVAILABLE);
         }
@@ -2155,7 +2162,8 @@ public final class DefaultOrchestrator implements Orchestrator {
         Move m = move(intent, TransitionEvent.QUOTE_READY, TransitionGuard.QUOTE_POLICY_ALLOWS);
         // Opened before the state write, as at any merchant (quoteReady). The link is the one this read returned.
         approvalService.openLink(m.next(), view,
-                new LinkSnapshot(seller.name(), seller.domain(), seller.site(), offer.checkoutUrl().get()));
+                new LinkSnapshot(seller.name(), seller.domain(), seller.site(), Optional.of(intent.shipTo().code()),
+                        offer.checkoutUrl().get()));
         intents.update(m.next(), intent.version(), workerId);
         policyEvent(intent.id(), "quote", decision);
         transitionEvent(intent.id(), m.transition());

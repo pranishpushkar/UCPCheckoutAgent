@@ -22,9 +22,27 @@ public record Budget(long amountMinor, String currency) {
         }
     }
 
-    /** The amount as the console shows money (24.3): "$500.00" in USD, "EUR 500.00" otherwise; two minor digits. */
+    /**
+     * The amount as the console shows money (24.3): "$500.00" in USD, "EUR 500.00" otherwise, in the currency's own minor
+     * digits from the JDK's ISO 4217 table ("JPY 500"); a code the table does not know takes two.
+     */
     public String display() {
-        String amount = amountMinor / 100 + "." + String.format("%02d", amountMinor % 100);
+        int digits = minorDigits(currency);
+        long unit = 1;
+        for (int i = 0; i < digits; i++) {
+            unit *= 10;
+        }
+        String amount = digits == 0 ? Long.toString(amountMinor)
+                : amountMinor / unit + "." + String.format("%0" + digits + "d", amountMinor % unit);
         return (currency.equals("USD") ? "$" : currency + " ") + amount;
+    }
+
+    private static int minorDigits(String currency) {
+        try {
+            int digits = java.util.Currency.getInstance(currency).getDefaultFractionDigits();
+            return digits < 0 ? 2 : digits;
+        } catch (IllegalArgumentException e) {
+            return 2;
+        }
     }
 }

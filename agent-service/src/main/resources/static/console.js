@@ -42,8 +42,19 @@ function setStatus(text, isError) {
   node.className = isError ? "status error" : "status";
 }
 
+// 24.3: money in the currency's own minor digits (JPY 0, INR 2, KWD 3), from the browser's ISO 4217 table; 2 for a code
+// it does not know.
+function minorDigits(currency) {
+  try {
+    return new Intl.NumberFormat("en", {style: "currency", currency: currency}).resolvedOptions().maximumFractionDigits;
+  } catch (e) {
+    return 2;
+  }
+}
+
 function money(minor, currency) {
-  const amount = (Number(minor) / 100).toFixed(2);
+  const digits = minorDigits(currency);
+  const amount = (Number(minor) / Math.pow(10, digits)).toFixed(digits);
   return (currency === "USD" || !currency ? "$" : currency + " ") + amount;
 }
 
@@ -125,6 +136,7 @@ async function boot() {
   csrf = me.headers.get("X-CSRF-Token") || "";
   $("who").textContent = me.data.email;
   showModel(me.data);
+  loadCountries(me.data);
   $("sign-out").hidden = false;
   $("sign-out").addEventListener("click", signOut);
   $("send").addEventListener("submit", send);
@@ -135,6 +147,7 @@ async function boot() {
   $("budget-currency").addEventListener("change", () => {
     budgetTouched = true;
   });
+  $("ship-to").addEventListener("change", onShipToChange);
   document.querySelectorAll("[data-preset]").forEach((button) => {
     button.addEventListener("click", () => preset(button.getAttribute("data-preset")));
   });
@@ -200,29 +213,69 @@ function onMessageInput() {
   }
 }
 
-// The field as budget_minor and currency: {} when it is empty, null when it is not an amount of at least 0.01.
+// The field as budget_minor and currency, in the currency's own minor digits: {} when it is empty, null when it is not an
+// amount of at least one minor unit.
 function budgetToSend() {
   const raw = $("budget").value.trim().replace(/,/g, "");
   if (raw === "") {
     return {};
   }
-  const m = /^(\d{1,10})(?:\.(\d{1,2}))?$/.exec(raw);
+  const currency = $("budget-currency").value;
+  const digits = minorDigits(currency);
+  const m = new RegExp("^(\\d{1,10})" + (digits > 0 ? "(?:\\.(\\d{1," + digits + "}))?" : "") + "$").exec(raw);
   if (!m) {
     return null;
   }
-  const minor = Number(m[1]) * 100 + Number((m[2] || "0").padEnd(2, "0"));
+  const minor = Number(m[1]) * Math.pow(10, digits) + Number((m[2] || "").padEnd(digits, "0") || "0");
   if (minor < 1) {
     return null;
   }
-  return {budget_minor: minor, currency: $("budget-currency").value};
+  return {budget_minor: minor, currency: currency};
 }
 
 // While a run continues, the field keeps the run's budget and cannot change: the budget is fixed for the run.
 function showBudgetField() {
   $("budget").disabled = continuingRun();
   $("budget-currency").disabled = continuingRun();
+  $("ship-to").disabled = continuingRun();
 }
 // </budget>
+
+// <ship-to>
+// 24.3, 23.1: Deliver to, always visible. Its choices are GET /api/countries by name, set as text; it starts at the
+// operator's default from /api/me and is sent as ship_to_country on a new run only. Changing it sets the Budget field's
+// currency to the country's, so a budget the server refuses for its currency is rare. Nothing is kept in browser storage.
+let countries = [];
+
+async function loadCountries(me) {
+  const answer = await api("GET", "/api/countries");
+  if (!answer.ok) {
+    return;
+  }
+  countries = answer.data.countries;
+  const select = $("ship-to");
+  clear(select);
+  countries.forEach((country) => {
+    const option = el("option", country.name);
+    option.value = country.country;
+    select.appendChild(option);
+  });
+  $("ship-to").value = me.buyer_country.country;
+  onShipToChange();
+}
+
+function onShipToChange() {
+  const country = countries.find((c) => c.country === $("ship-to").value);
+  if (!country) {
+    return;
+  }
+  const known = Array.from($("budget-currency").options).some((o) => o.value === country.currency);
+  if (!known) {
+    $("budget-currency").appendChild(el("option", country.currency));
+  }
+  $("budget-currency").value = country.currency;
+}
+// </ship-to>
 
 // <working>
 // 24.3: while a run works. Send is disabled and reads "Working…", and an agent bubble reads "Thinking…", then the step
@@ -311,6 +364,7 @@ async function send(event) {
   }
   const continuing = continuingRun();
   const budget = continuing ? {} : budgetToSend();
+  const shipTo = continuing ? {} : {ship_to_country: $("ship-to").value};
   if (budget === null) {
     setStatus("Enter the budget as an amount such as 500 or 499.99, or leave it empty.", true);
     return;
@@ -324,7 +378,7 @@ async function send(event) {
   startWorking();
   const result = continuing
       ? await api("POST", "/api/runs/" + currentRun.id + "/messages", {message: text})
-      : await api("POST", "/api/runs", Object.assign({message: text}, budget));
+      : await api("POST", "/api/runs", Object.assign({message: text}, budget, shipTo));
   if (!result.ok) {
     stopWorking();
     setStatus(errorText(result), true);
@@ -524,6 +578,9 @@ function showApprovalCard(id, approvalResponse) {
   if (linked) {
     heading.appendChild(el("p", "From " + approval.seller.name, "muted"));
     heading.appendChild(el("span", "Shopify catalog", "pill"));
+    if (approval.ships_to) {
+      heading.appendChild(el("p", "Listed as shipping to " + approval.ships_to.name, "muted"));
+    }
   } else {
     heading.appendChild(el("p", "From " + snapshot.merchant_id, "muted"));
   }

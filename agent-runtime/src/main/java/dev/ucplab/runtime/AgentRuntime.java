@@ -102,26 +102,24 @@ public final class AgentRuntime {
         return start(auth, id, userMessage, user, trace, Optional.empty());
     }
 
-    /**
-     * Starts a run for the run's buyer country {@code shipTo} (23.1), the user's own choice or the operator's default,
-     * never anything the model said. Skeleton (red): the country is not used yet.
-     */
+    /** Starts a run with the user's budget, for US. */
     public RunSession start(AuthContext auth, RunId id, String userMessage, UserChannel user, RunTrace trace,
-                            Optional<Budget> userBudget, BuyerCountry shipTo) {
-        Objects.requireNonNull(shipTo, "shipTo");
-        return start(auth, id, userMessage, user, trace, userBudget);
+                            Optional<Budget> userBudget) {
+        return start(auth, id, userMessage, user, trace, userBudget, BuyerCountry.US);
     }
 
     /**
      * Starts a run, as {@link #run(AuthContext, RunId, String, UserChannel, RunTrace)}, and returns its conversation too.
-     * {@code userBudget} is the user's own budget for the run (23.1, P9), never anything the model said.
+     * {@code userBudget} is the user's own budget for the run (23.1, P9) and {@code shipTo} the run's buyer country
+     * (23.1, 26.7), the user's own choice or the operator's default; never anything the model said.
      */
     public RunSession start(AuthContext auth, RunId id, String userMessage, UserChannel user, RunTrace trace,
-                            Optional<Budget> userBudget) {
+                            Optional<Budget> userBudget, BuyerCountry shipTo) {
         check(auth, id, userMessage, user, trace);
         Objects.requireNonNull(userBudget, "userBudget");
-        Run run = new Run(auth, id, user, trace, Optional.empty(), userBudget);
-        runs.insert(auth.user(), RunRecord.started(id, auth.user(), run.modelId, run.start, userBudget));
+        Objects.requireNonNull(shipTo, "shipTo");
+        Run run = new Run(auth, id, user, trace, Optional.empty(), userBudget, shipTo);
+        runs.insert(auth.user(), RunRecord.started(id, auth.user(), run.modelId, run.start, userBudget, shipTo));
         return run.execute(new Conversation(SystemPrompt.text(userBudget), List.of()), userMessage);
     }
 
@@ -139,7 +137,7 @@ public final class AgentRuntime {
         Objects.requireNonNull(history, "history");
         RunRecord stored = runs.find(auth.user(), id)
                 .orElseThrow(() -> new IllegalArgumentException("no such run for this user"));
-        Run run = new Run(auth, id, user, trace, Optional.of(stored), stored.budget());
+        Run run = new Run(auth, id, user, trace, Optional.of(stored), stored.budget(), stored.shipTo());
         run.snapshot();
         // The hint is rebuilt from the stored budget, never carried over from the history (6.4).
         return run.execute(new Conversation(SystemPrompt.text(stored.budget()), history.messages()), userMessage);
@@ -174,9 +172,9 @@ public final class AgentRuntime {
         private Conversation conversation;
 
         Run(AuthContext auth, RunId id, UserChannel user, RunTrace trace, Optional<RunRecord> earlier,
-            Optional<Budget> userBudget) {
+            Optional<Budget> userBudget, BuyerCountry shipTo) {
             this.auth = auth;
-            this.context = new ToolContext(auth, id, userBudget);
+            this.context = new ToolContext(auth, id, userBudget, shipTo);
             this.trace = trace;
             this.meter = new BudgetMeter(budget, clock);
             this.tools = ToolRegistry.of(ports, (q, t) -> meter.waitingForUser(() -> user.ask(q, t)), askTimeout);
@@ -219,7 +217,7 @@ public final class AgentRuntime {
             runs.update(auth.user(), new RunRecord(context.runId(), auth.user(), modelId, start, Optional.empty(),
                     Optional.empty(), Optional.empty(), baseModelCalls + meter.modelCalls(),
                     baseToolCalls + meter.toolCalls(), baseInputTokens + meter.usage().inputTokens(),
-                    baseOutputTokens + meter.usage().outputTokens(), intents, events));
+                    baseOutputTokens + meter.usage().outputTokens(), intents, events).withShipTo(context.shipTo()));
         }
 
         RunOutcome loop(Conversation initial) {
@@ -350,7 +348,7 @@ public final class AgentRuntime {
             runs.update(auth.user(), new RunRecord(context.runId(), auth.user(), modelId, start, Optional.of(ended),
                     Optional.of(status), reason, baseModelCalls + meter.modelCalls(), baseToolCalls + meter.toolCalls(),
                     baseInputTokens + meter.usage().inputTokens(), baseOutputTokens + meter.usage().outputTokens(),
-                    intents, events).withCause(cause));
+                    intents, events).withCause(cause).withShipTo(context.shipTo()));
             trace.run(status, detail, cause, baseModelCalls + meter.modelCalls(), baseToolCalls + meter.toolCalls(),
                     baseInputTokens + meter.usage().inputTokens(), baseOutputTokens + meter.usage().outputTokens(),
                     Duration.between(begun, ended));

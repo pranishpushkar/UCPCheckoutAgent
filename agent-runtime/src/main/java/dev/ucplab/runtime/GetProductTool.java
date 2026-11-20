@@ -55,7 +55,8 @@ final class GetProductTool implements Tool {
             return ToolOutcome.invalid(e.getMessage());
         }
         List<MerchantEntry> active = ports.merchants().active();
-        List<Optional<CallOutcome<CatalogProduct>>> answers = FanOut.ask(ports, active, c -> c.product(itemId));
+        List<Optional<CallOutcome<CatalogProduct>>> answers = FanOut.ask(ports, active,
+                c -> c.product(itemId, context.shipTo()));
         boolean unavailable = false;
         // Registry order: the first merchant that has the item answers, whatever order they finished in (decision 5).
         for (int i = 0; i < active.size(); i++) {

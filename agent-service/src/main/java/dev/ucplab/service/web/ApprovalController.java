@@ -76,8 +76,14 @@ final class ApprovalController {
             body.put("seller", QuoteCard.seller(pending.snapshot().link().get()));
         }
         // 23.2, P9: the intent's stored budget, outside the snapshot too; read for the owner only, never cached (20).
-        intents.find(auth.user(), pending.snapshot().intentId()).flatMap(PurchaseIntent::budget).ifPresent(b ->
+        Optional<PurchaseIntent> intent = intents.find(auth.user(), pending.snapshot().intentId());
+        intent.flatMap(PurchaseIntent::budget).ifPresent(b ->
                 body.put("budget", Map.of("amount_minor", b.amountMinor(), "currency", b.currency())));
+        // 23.2, 26.7: at a link merchant, the intent's buyer country and its English name, our own text.
+        if (body.containsKey("seller")) {
+            intent.map(PurchaseIntent::shipTo).ifPresent(c ->
+                    body.put("ships_to", Map.of("country", c.code(), "name", c.name())));
+        }
         return body;
     }
 

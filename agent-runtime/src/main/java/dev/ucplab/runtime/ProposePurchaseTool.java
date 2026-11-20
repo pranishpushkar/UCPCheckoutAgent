@@ -95,9 +95,10 @@ final class ProposePurchaseTool implements Tool {
         } catch (Args.Invalid e) {
             return ToolOutcome.invalid(e.getMessage());
         }
-        // The budget is the run's, from its context: no argument can set, raise or clear it (6.2, P9).
+        // The budget and the buyer country are the run's, from its context: no argument can set or change either (6.2,
+        // P9, 23.1).
         ProposalResult proposal = ports.orchestrator().propose(context.auth(), merchant, lines, rationale,
-                context.budget());
+                context.budget(), context.shipTo());
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("intent_id", proposal.intentId().value());
         result.put("state", proposal.state().name());

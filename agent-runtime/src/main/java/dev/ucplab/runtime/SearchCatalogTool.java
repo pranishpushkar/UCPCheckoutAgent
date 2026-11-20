@@ -71,7 +71,8 @@ final class SearchCatalogTool implements Tool {
         }
         List<MerchantEntry> active = ports.merchants().active();
         Optional<Money> limit = context.budget().map(b -> new Money(b.amountMinor(), b.currency()));
-        List<Optional<CatalogPage>> pages = askAll(active, new CatalogSearch(query, max, limit));
+        // 26.7, 23.1: the run's buyer country, from its context: no argument can name one.
+        List<Optional<CatalogPage>> pages = askAll(active, new CatalogSearch(query, max, limit, context.shipTo()));
         List<List<Object>> perMerchant = new ArrayList<>();
         List<String> unavailable = new ArrayList<>();
         for (int i = 0; i < active.size(); i++) {
@@ -99,8 +100,16 @@ final class SearchCatalogTool implements Tool {
         if (limit.isPresent()) {
             // 6.2, the near miss: a merchant that honours the filter returns nothing above it, so when nothing fits the
             // same search is asked once more without it. Only numbers from the catalog reach the model.
-            List<Optional<CatalogPage>> read = items.isEmpty() ? askAll(active, new CatalogSearch(query, max)) : pages;
+            List<Optional<CatalogPage>> read = items.isEmpty()
+                    ? askAll(active, new CatalogSearch(query, max, Optional.empty(), context.shipTo())) : pages;
             aboveBudget(read, limit.get()).ifPresent(a -> result.put("above_budget", a));
+        }
+        // 6.2, 26.7: the country searched for, our own text; and how many items the first search left out for a price
+        // in another currency, a number only (the near miss's second search would count them twice).
+        result.put("ships_to", Map.of("country", context.shipTo().code(), "country_name", context.shipTo().name()));
+        long other = pages.stream().flatMap(Optional::stream).mapToLong(CatalogPage::otherCurrency).sum();
+        if (other > 0) {
+            result.put("other_currency", Map.of("count", other));
         }
         if (!unavailable.isEmpty()) {
             result.put("unavailable", unavailable);

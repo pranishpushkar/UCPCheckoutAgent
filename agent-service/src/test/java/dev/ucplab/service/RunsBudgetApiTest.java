@@ -149,7 +149,9 @@ class RunsBudgetApiTest {
             assertThat(r.body()).contains("validation_failed");
         }
         assertThat(api.post(alice, "/api/runs", budgeted("hi", 1, "USD")).statusCode()).isEqualTo(201);
-        assertThat(api.post(alice, "/api/runs", budgeted("hi", 1_000_000_000_000L, "EUR")).statusCode()).isEqualTo(201);
+        // 23.1: a budget is in the buyer country's currency, so a EUR budget goes with a country that uses it.
+        assertThat(api.post(alice, "/api/runs", "{\"message\":\"hi\",\"budget_minor\":1000000000000,\"currency\":\"EUR\","
+                + "\"ship_to_country\":\"DE\"}").statusCode()).isEqualTo(201);
         assertThat(api.post(alice, "/api/runs", message("hi")).statusCode()).isEqualTo(201);
     }
 

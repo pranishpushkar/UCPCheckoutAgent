@@ -5,6 +5,7 @@ import dev.ucplab.core.intent.AttemptId;
 import dev.ucplab.core.intent.AttemptOp;
 import dev.ucplab.core.intent.AttemptStatus;
 import dev.ucplab.core.intent.Budget;
+import dev.ucplab.core.intent.BuyerCountry;
 import dev.ucplab.core.intent.DuplicateIntentException;
 import dev.ucplab.core.intent.HandoffWatch;
 import dev.ucplab.core.intent.IntentEvent;
@@ -56,7 +57,8 @@ public final class SqlIntentRepository implements IntentRepository {
     static final String INTENT_COLUMNS = "id, user_id, merchant_id, merchant_fingerprint, dedupe_key, lines_json,"
             + " buyer_email, state, version, session_id, approved_snapshot_hash, requote_count, order_id, failure_reason,"
             + " uncertain_since, cancel_pending, lease_owner, lease_until, created_at, updated_at, handoff_url,"
-            + " handoff_watch_until, handoff_next_read_at, store_order_id, store_order_label, budget_minor, budget_currency";
+            + " handoff_watch_until, handoff_next_read_at, store_order_id, store_order_label, budget_minor, budget_currency,"
+            + " ship_to_country";
 
     private static final String ATTEMPT_COLUMNS = "id, intent_id, op, revision, idempotency_key, request_hash,"
             + " request_body, status, http_status, response_json, sent_at, responded_at";
@@ -126,7 +128,7 @@ public final class SqlIntentRepository implements IntentRepository {
         db.write(c -> {
             try (PreparedStatement s = c.prepareStatement(
                     "INSERT INTO purchase_intent (" + INTENT_COLUMNS + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
-                            + " ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+                            + " ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
                 int n = 1;
                 s.setString(n++, i.id().value());
                 s.setString(n++, i.owner().value());
@@ -151,6 +153,8 @@ public final class SqlIntentRepository implements IntentRepository {
                 s.setString(n++, handoffUrl(i));
                 n = setHandoffWatch(s, n, i.handoffWatch());
                 setBudget(s, n, i.budget());
+                // Written here only, like the budget: an update never touches it (23.1, V13's trigger).
+                s.setString(n + 2, i.shipTo().code());
                 s.executeUpdate();
             } catch (SQLException e) {
                 // The primary key (a repeated id) and ux_intent_active_dedupe (an active dedupe key) both land here.
@@ -648,7 +652,8 @@ public final class SqlIntentRepository implements IntentRepository {
                 Optional.ofNullable(r.getString("lease_owner")),
                 Optional.ofNullable(r.getString("lease_until")).map(SqlTimes::parse),
                 SqlTimes.parse(r.getString("created_at")),
-                SqlTimes.parse(r.getString("updated_at")), handoffWatch(r), budget(r));
+                SqlTimes.parse(r.getString("updated_at")), handoffWatch(r), budget(r),
+                new BuyerCountry(r.getString("ship_to_country")));
     }
 
     /** V11's pair at {@code n} and {@code n + 1}: both set or both null. No lambda, as for handoffUrl. */

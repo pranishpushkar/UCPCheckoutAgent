@@ -5,7 +5,9 @@ import dev.ucplab.core.agent.RunRecord;
 import dev.ucplab.core.agent.ToolEvent;
 import dev.ucplab.core.identity.AuthContext;
 import dev.ucplab.core.intent.Budget;
+import dev.ucplab.core.intent.BuyerCountry;
 import dev.ucplab.core.intent.IntentId;
+import dev.ucplab.service.config.ServiceProperties;
 import dev.ucplab.service.run.RunMessage;
 import dev.ucplab.service.run.RunRefused;
 import dev.ucplab.service.run.RunSupervisor;
@@ -40,21 +42,30 @@ final class RunController {
     static final String BAD_BUDGET = "budget_minor and currency must both be set or both left out: an integer from 1 to"
             + " 10^12 and three upper-case letters";
     static final String BUDGET_FIXED = "the budget is fixed for the run; start a new run for a new budget";
+    static final String BAD_COUNTRY = "ship_to_country must be two upper-case letters naming a country of /api/countries";
+    static final String COUNTRY_FIXED = "the buyer country is fixed for the run; start a new run for another country";
     static final long MAX_BUDGET = 1_000_000_000_000L;
     static final int MAX_MESSAGE = 2000;
 
     private final RunSupervisor supervisor;
+    private final BuyerCountry defaultCountry;
 
-    RunController(RunSupervisor supervisor) {
+    RunController(RunSupervisor supervisor, ServiceProperties properties) {
         this.supervisor = Objects.requireNonNull(supervisor, "supervisor");
+        this.defaultCountry = properties.buyerCountry();
     }
 
     @PostMapping("/api/runs")
     ResponseEntity<Map<String, Object>> start(AuthContext auth, @RequestBody Map<String, Object> body) {
         String message = message(body);
         Optional<Budget> budget = budget(body);
+        BuyerCountry shipTo = shipTo(body, defaultCountry);
+        if (budget.isPresent() && !budget.get().currency().equals(shipTo.currency())) {
+            throw ApiException.of(ErrorCode.VALIDATION_FAILED, "the budget's currency must be " + shipTo.currency()
+                    + ", the currency of " + shipTo.name());
+        }
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(summary(refusing(() -> supervisor.start(auth, message, budget))));
+                .body(summary(refusing(() -> supervisor.start(auth, message, budget, shipTo))));
     }
 
     @PostMapping("/api/runs/{id}/messages")
@@ -63,6 +74,9 @@ final class RunController {
         String message = message(body);
         if (body.containsKey("budget_minor") || body.containsKey("currency")) {
             throw ApiException.of(ErrorCode.VALIDATION_FAILED, BUDGET_FIXED);
+        }
+        if (body.containsKey("ship_to_country")) {
+            throw ApiException.of(ErrorCode.VALIDATION_FAILED, COUNTRY_FIXED);
         }
         return summary(refusing(() -> supervisor.answer(auth, run, message)));
     }
@@ -168,6 +182,24 @@ final class RunController {
             throw ApiException.of(ErrorCode.VALIDATION_FAILED, BAD_BUDGET);
         }
         return Optional.of(new Budget(minor, currency));
+    }
+
+    /**
+     * The run's buyer country (23.1), from the body's own field only, never from the message, the buyer's IP or a
+     * header: a country of {@code GET /api/countries}, or the operator's default when absent; anything else is 422.
+     */
+    private static BuyerCountry shipTo(Map<String, Object> body, BuyerCountry fallback) {
+        if (!body.containsKey("ship_to_country")) {
+            return fallback;
+        }
+        if (!(body.get("ship_to_country") instanceof String code)) {
+            throw ApiException.of(ErrorCode.VALIDATION_FAILED, BAD_COUNTRY);
+        }
+        try {
+            return new BuyerCountry(code);
+        } catch (IllegalArgumentException e) {
+            throw ApiException.of(ErrorCode.VALIDATION_FAILED, BAD_COUNTRY);
+        }
     }
 
     private static String message(Map<String, Object> body) {

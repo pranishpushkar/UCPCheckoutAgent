@@ -38,15 +38,18 @@ class ServicePropertiesTest {
         return ServiceProperties.from(Environment.of(env));
     }
 
-    // Covers: 23.1, 26.7 (BUYER_COUNTRY: US when unset; a known code is the default; anything else is refused at startup
-    // with a fixed message)
+    // Covers: 23.1, 26.7 (BUYER_COUNTRY: US when unset or blank, as every setting here; a known code is the default;
+    // anything else is refused at startup with a fixed message)
     @Test
     void buyerCountry_isUSWhenUnset_aKnownCode_orRefused() {
         assertThat(from(env("local")).buyerCountry()).isEqualTo(BuyerCountry.US);
+        Map<String, String> blank = env("local");
+        blank.put("BUYER_COUNTRY", "");
+        assertThat(from(blank).buyerCountry()).isEqualTo(BuyerCountry.US);
         Map<String, String> india = env("local");
         india.put("BUYER_COUNTRY", "IN");
         assertThat(from(india).buyerCountry()).isEqualTo(new BuyerCountry("IN"));
-        for (String bad : List.of("in", "IND", "XX", "AQ", "", " IN")) {
+        for (String bad : List.of("in", "IND", "XX", "AQ", " IN")) {
             Map<String, String> env = env("local");
             env.put("BUYER_COUNTRY", bad);
             assertThatThrownBy(() -> from(env)).as(bad).isInstanceOf(IllegalStateException.class)

@@ -188,8 +188,8 @@ public final class RunSupervisor implements AutoCloseable {
     }
 
     /**
-     * As above, for the run's buyer country {@code shipTo} (23.1): the request body's, or the operator's default.
-     * Skeleton (red): the country is not passed on yet.
+     * As above, for the run's buyer country {@code shipTo} (23.1): the request body's, or the operator's default; fixed
+     * for the run.
      */
     public RunView start(AuthContext auth, String message, Optional<Budget> budget, BuyerCountry shipTo) {
         Objects.requireNonNull(shipTo, "shipTo");
@@ -212,7 +212,7 @@ public final class RunSupervisor implements AutoCloseable {
         CompletableFuture<Phase> first = run.settled.get();
         RunTrace trace = new RunTrace(id);
         Objects.requireNonNull(budget, "budget");
-        launch(run, trace, () -> runtime.start(auth, id, message, run.channel(), trace, budget));
+        launch(run, trace, () -> runtime.start(auth, id, message, run.channel(), trace, budget, shipTo));
         return await(run, first);
     }
 

@@ -6,6 +6,7 @@ import dev.ucplab.core.agent.RunRepository;
 import dev.ucplab.core.agent.ToolEvent;
 import dev.ucplab.core.identity.UserId;
 import dev.ucplab.core.intent.Budget;
+import dev.ucplab.core.intent.BuyerCountry;
 import dev.ucplab.core.intent.IntentId;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -48,7 +49,8 @@ public final class SqlRunRepository implements RunRepository {
         checkOwner(owner, run);
         db.write(c -> {
             try (PreparedStatement s = c.prepareStatement("INSERT INTO agent_run (" + RUN_COLUMNS + ", updated_at,"
-                    + " budget_minor, budget_currency, cause) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+                    + " budget_minor, budget_currency, cause, ship_to_country)"
+                    + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
                 bindRun(s, run);
                 s.setString(12, SqlTimes.format(clock.instant()));
                 // The budget is written here only: an update never touches it (23.1, fixed for the run).
@@ -60,6 +62,8 @@ public final class SqlRunRepository implements RunRepository {
                     s.setString(14, null);
                 }
                 s.setString(15, run.cause().orElse(null));
+                // The buyer country too: fixed for the run (23.1, V13).
+                s.setString(16, run.shipTo().code());
                 s.executeUpdate();
             } catch (SQLException e) {
                 if (SqlErrors.isUniqueViolation(e)) {
@@ -248,7 +252,8 @@ public final class SqlRunRepository implements RunRepository {
     private static List<RunRecord> runs(Connection c, String where, String... params) throws SQLException {
         List<RunRecord> out = new ArrayList<>();
         try (PreparedStatement s = c.prepareStatement(
-                "SELECT " + RUN_COLUMNS + ", budget_minor, budget_currency, cause FROM agent_run WHERE " + where
+                "SELECT " + RUN_COLUMNS + ", budget_minor, budget_currency, cause, ship_to_country FROM agent_run WHERE "
+                        + where
                         + " ORDER BY started_at, id")) {
             for (int i = 0; i < params.length; i++) {
                 s.setString(i + 1, params[i]);
@@ -274,7 +279,8 @@ public final class SqlRunRepository implements RunRepository {
                             intents(c, id),
                             toolEvents(c, id),
                             budget,
-                            Optional.ofNullable(r.getString("cause")).map(SqlRunRepository::storedCause)));
+                            Optional.ofNullable(r.getString("cause")).map(SqlRunRepository::storedCause),
+                            new BuyerCountry(r.getString("ship_to_country"))));
                 }
             }
         }
