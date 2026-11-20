@@ -53,6 +53,8 @@ class GeminiRedactionTest {
     private final ByteArrayOutputStream output = new ByteArrayOutputStream();
     private final List<String> seen = new ArrayList<>();
     private final List<Level> levels = new ArrayList<>();
+    /** The loggers the search raises, held for the test: java.util.logging holds a logger only weakly. */
+    private final List<Logger> held = new ArrayList<>();
     private Handler handler;
     private PrintStream stdout;
     private PrintStream stderr;
@@ -83,6 +85,7 @@ class GeminiRedactionTest {
         handler.setLevel(Level.ALL);
         for (String name : LOGGERS) {
             Logger logger = Logger.getLogger(name);
+            held.add(logger);
             levels.add(logger.getLevel());
             logger.setLevel(Level.ALL);
         }
@@ -99,8 +102,9 @@ class GeminiRedactionTest {
         System.setErr(stderr);
         Logger.getLogger("").removeHandler(handler);
         for (int i = 0; i < LOGGERS.size(); i++) {
-            Logger.getLogger(LOGGERS.get(i)).setLevel(levels.get(i));
+            held.get(i).setLevel(levels.get(i));
         }
+        held.clear();
     }
 
     /** Everything an exception can show: message, toString, the whole stack trace with causes and suppressed. */
