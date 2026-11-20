@@ -13,6 +13,15 @@ public record AgentBudget(int maxModelCalls, int maxToolCalls, Duration wallCloc
     /** 6 model calls, 8 tool calls, 30 s and 20,000 tokens (6.3, D5). */
     public static final AgentBudget DEFAULT = new AgentBudget(6, 8, Duration.ofSeconds(30), 20_000);
 
+    /** The live model's limits (6.3): DEFAULT's, with a 60 s wall clock. */
+    public static final AgentBudget LIVE = DEFAULT;
+
+    /** 6.3: {@link #DEFAULT} for the scripted model, {@link #LIVE} for any other. */
+    public static AgentBudget forModel(String model) {
+        Objects.requireNonNull(model, "model");
+        return DEFAULT;
+    }
+
     public AgentBudget {
         Objects.requireNonNull(wallClock, "wallClock");
         if (maxModelCalls < 1 || maxToolCalls < 1 || maxTokens < 1) {

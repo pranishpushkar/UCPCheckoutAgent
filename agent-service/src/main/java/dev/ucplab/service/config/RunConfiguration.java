@@ -39,6 +39,11 @@ public class RunConfiguration {
     /** One model call may take this long; the run's own wall clock stays 30 s (6.3, m6-plan section 3.2). */
     static final Duration CALL_TIMEOUT = Duration.ofSeconds(10);
 
+    /** 6.3: the run's limits for {@code AGENT_MODEL}. */
+    static AgentBudget budget(ServiceProperties.AgentModel model) {
+        return AgentBudget.DEFAULT;
+    }
+
     /** The model for {@code AGENT_MODEL}; a test may register its own. */
     @Bean
     @ConditionalOnMissingBean

@@ -161,11 +161,11 @@ class GeminiModelClientTest {
         }
     }
 
-    // Covers: 6.5, 11, I8 (an HTTP failure's cause is its status, never the error body; only 429 and 503 may be tried
-    // again, and the client itself still sends one attempt)
+    // Covers: 6.5, 11, I8 (an HTTP failure's cause is its status, never the error body; only 429, 503 and 504 may be
+    // tried again, and the client itself still sends one attempt)
     @Test
     void generate_httpErrors_causeIsTheStatus_retryableFor429And503Only() {
-        Map<Integer, Boolean> cases = Map.of(400, false, 403, false, 404, false, 429, true, 500, false, 503, true);
+        Map<Integer, Boolean> cases = Map.of(400, false, 403, false, 404, false, 429, true, 500, false, 503, true, 504, true);
         int sent = 0;
         for (Map.Entry<Integer, Boolean> c : cases.entrySet()) {
             stub.answer(c.getKey(), "{\"error\":{\"code\":" + c.getKey() + ",\"message\":\"SECRET-BODY\"}}");

@@ -9,6 +9,8 @@ import com.google.genai.types.FinishReason;
 import com.google.genai.types.GenerateContentConfig;
 import com.google.genai.types.GenerateContentResponse;
 import com.google.genai.types.Part;
+import com.google.genai.types.ThinkingConfig;
+import com.google.genai.types.ThinkingLevel;
 import dev.ucplab.adk.gemini.GeminiException.Reason;
 import dev.ucplab.core.agent.Conversation;
 import dev.ucplab.core.agent.Message;
@@ -243,6 +245,21 @@ class GeminiMappingTest {
         assertThat(json).contains("\"parametersJsonSchema\"").contains("\"minLength\":1").contains("\"maxLength\":500")
                 .contains("\"additionalProperties\":false");
         assertThat(GeminiMapping.declaredNames(GeminiMapping.config("p", List.of(), 1))).isEmpty();
+    }
+
+    // Covers: 6.5 (every call asks for thinking level LOW, with tools or without: the agent's turns pick a tool or relay a
+    // result, and gemini-3.8-flash's default, medium, spends latency on that)
+    @Test
+    void config_asksForLowThinking_onEveryCall() {
+        List<ToolSpec> tools = List.of(new ToolSpec("get_product", "Look up.", "{\"type\":\"object\",\"properties\":{}}"));
+        for (GenerateContentConfig config : List.of(GeminiMapping.config("p", tools, 8192),
+                GeminiMapping.config("p", List.of(), 8192))) {
+            assertThat(config.thinkingConfig().flatMap(ThinkingConfig::thinkingLevel).map(ThinkingLevel::knownEnum))
+                    .hasValue(ThinkingLevel.Known.LOW);
+            assertThat(config.thinkingConfig().flatMap(ThinkingConfig::thinkingBudget)).as("no budget beside the level")
+                    .isEmpty();
+            assertThat(JsonSerializable.toJsonString(config)).contains("\"thinkingLevel\":\"LOW\"");
+        }
     }
 
     // Covers: 6.5, ADR 0004 item 2 (the conversation as contents: user, model with its remembered call part, and the

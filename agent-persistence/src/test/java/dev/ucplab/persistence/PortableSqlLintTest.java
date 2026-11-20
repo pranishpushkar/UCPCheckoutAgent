@@ -14,7 +14,7 @@ class PortableSqlLintTest {
     private static final Path MIGRATIONS = Path.of("src/main/resources/db/migration");
 
     // Covers: section 10, ADR 0002 (every migration stays in the portable subset: no AUTOINCREMENT and no other
-    // SQLite-only syntax)
+    // SQLite-only syntax, and no nesting an SQLite with a fixed parser stack cannot read)
     @Test
     void migrations_useOnlyPortableSql() throws IOException {
         List<Path> files;
@@ -64,5 +64,20 @@ class PortableSqlLintTest {
                 """;
 
         assertThat(PortableSql.violations(ok)).isEmpty();
+    }
+
+    private static String nested(int depth) {
+        return "CREATE TABLE t (c TEXT CHECK (" + "lower(".repeat(depth - 2) + "c" + ")".repeat(depth - 2) + " = ''));";
+    }
+
+    // Covers: section 10 (the nesting rule: 8 parentheses deep passes, 9 is flagged, and a parenthesis inside a string
+    // literal or a comment does not count; V12's first CHECK, 40 deep, could not be parsed by macOS's sqlite3 or Python)
+    @Test
+    void lint_flagsNestingDeeperThan8() {
+        assertThat(PortableSql.MAX_NESTING).isEqualTo(8);
+        assertThat(PortableSql.violations(nested(8))).isEmpty();
+        assertThat(PortableSql.violations(nested(9))).singleElement().asString().contains("nesting 9 deep");
+        assertThat(PortableSql.violations("CREATE TABLE t (c TEXT CHECK (c <> '((((((((((((')); -- ((((((((((\n"))
+                .isEmpty();
     }
 }

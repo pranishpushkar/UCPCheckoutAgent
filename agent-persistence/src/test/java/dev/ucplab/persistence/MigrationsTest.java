@@ -640,10 +640,11 @@ class MigrationsTest {
         }
     }
 
-    // Covers: 10 V12, 6.5, I8 (a cause is stored only with reason model_error, and only as an identifier of 1 to 64
-    // characters; anything else is refused by the database)
+    // Covers: 10 V12, 6.5 (the database stores a cause only with reason model_error, and only of 1 to 64 characters; the
+    // [A-Za-z0-9_] rule is RunRecord's, since a CHECK that could test it portably nested too deep for a fixed-stack
+    // SQLite, so the database itself takes any such text; SqlRunRepositoryTest reads one back as unknown)
     @Test
-    void v12_aCauseGoesOnlyWithModelError_andIsAnIdentifier() {
+    void v12_aCauseGoesOnlyWithModelError_andIsOneTo64Characters() {
         Path file = dir.resolve("v12.db");
         Migrations.migrate(file);
         try (Database db = Database.open(file, 1)) {
@@ -653,7 +654,12 @@ class MigrationsTest {
                     "INSERT INTO agent_run (id, user_id, model, started_at, updated_at, ended_at, outcome, reason)"
                     + " VALUES ('t', 'u', 'm', 't', 't', 't', 'failed', 'tool_error')");
             exec(db, "UPDATE agent_run SET cause = 'http_429' WHERE id = 'r'");
-            for (String bad : List.of("''", "'http 429'", "'finish-SAFETY'", "'SECRET: text'", "'" + "a".repeat(65) + "'")) {
+            for (String any : List.of("'http 429'", "'" + "a".repeat(64) + "'")) {
+                org.assertj.core.api.Assertions.assertThatCode(() -> exec(db, "UPDATE agent_run SET cause = " + any
+                        + " WHERE id = 'r'")).as(any).doesNotThrowAnyException();
+            }
+            exec(db, "UPDATE agent_run SET cause = 'http_429' WHERE id = 'r'");
+            for (String bad : List.of("''", "'" + "a".repeat(65) + "'")) {
                 org.assertj.core.api.Assertions.assertThatThrownBy(() -> exec(db, "UPDATE agent_run SET cause = " + bad
                         + " WHERE id = 'r'")).as(bad).isInstanceOf(DatabaseException.class);
             }
