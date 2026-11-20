@@ -337,7 +337,7 @@ class LiveModeTest {
         assertThat(blankKey.toString(StandardCharsets.UTF_8)).contains(EvalMain.NO_KEY);
     }
 
-    // Covers: R4 (the caps may only be lowered; live mode runs only S10 and S12; a fake key never shows)
+    // Covers: R4, S30 (the caps may only be lowered; live mode runs only S10, S12 and S30; a fake key never shows)
     @Test
     void evalMain_live_refusesHigherCapsAndOtherRows() {
         String fakeKey = "AIzaFAKE-not-a-real-key-0123456789abcdef";
@@ -356,6 +356,7 @@ class LiveModeTest {
         assertThat(cost.toString(StandardCharsets.UTF_8)).contains("--max-cost-usd must be above 0 and at most 5")
                 .doesNotContain(fakeKey);
         assertThat(tokens.toString(StandardCharsets.UTF_8)).contains("--max-tokens-total must be 1 to 2000000");
-        assertThat(row.toString(StandardCharsets.UTF_8)).contains("live mode runs only [A-S10, A-S12]");
+        assertThat(row.toString(StandardCharsets.UTF_8)).contains("live mode runs only [A-S10, A-S12, A-S30]");
+        assertThat(Scenarios.live()).containsExactly(Scenarios.A_S10, Scenarios.A_S12, Scenarios.A_S30);
     }
 }
