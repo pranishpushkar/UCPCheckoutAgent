@@ -982,5 +982,86 @@ class Catalog(unittest.TestCase):
             self.assertNotIn(never, text)
 
 
+class BuyerCountryOption(unittest.TestCase):
+    """--buyer-country (DESIGN 26.7, 23.1): the operator's default buyer country for the service, from the option or
+    BUYER_COUNTRY in the environment, the option winning; without either the service's own default, US."""
+
+    ENV = {"SHOPIFY_CLIENT_ID": "cid-canary-3", "SHOPIFY_CLIENT_SECRET": "csec-canary-3",
+           "AGENT_PROFILE_URL": "https://example.test/profile.json", "PATH": os.environ.get("PATH", "/bin")}
+
+    def setUp(self):
+        self.saved = dict(os.environ)
+        self.work = tempfile.mkdtemp()
+        os.environ.clear()
+        os.environ.update(self.ENV)
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self.saved)
+        shutil.rmtree(self.work)
+
+    def dry_run(self, *extra):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = live.main(["--console", "--catalog", "--dry-run"] + list(extra))
+        self.assertEqual(code, 0)
+        return out.getvalue()
+
+    # Covers: 26.7, 23.1 (the option wins over BUYER_COUNTRY; BUYER_COUNTRY is used alone; neither is no setting)
+    def test_theOptionWins_thenTheEnvironment_elseNone(self):
+        self.assertEqual(live.buyer_country(["--buyer-country", "IN"], {"BUYER_COUNTRY": "GB"}), "IN")
+        self.assertEqual(live.buyer_country([], {"BUYER_COUNTRY": "GB"}), "GB")
+        self.assertIsNone(live.buyer_country([], {}))
+
+    # Covers: 23.1 (anything but two upper-case letters is refused before anything starts; the service checks the code)
+    def test_aBadCode_isRefused(self):
+        for bad in (["--buyer-country", "in"], ["--buyer-country", "IND"], ["--buyer-country", ""]):
+            with self.assertRaises(SystemExit) as e:
+                live.buyer_country(bad, {})
+            self.assertEqual(str(e.exception),
+                             "refused: --buyer-country must be two upper-case letters (ISO 3166-1), such as IN")
+        with self.assertRaises(SystemExit):
+            live.buyer_country([], {"BUYER_COUNTRY": "india"})
+
+    # Covers: 26.7, 23.1 (the service's environment carries BUYER_COUNTRY only when one was chosen: it is built from
+    # nothing, so the shell's value reaches it only through buyer_country)
+    def test_theServiceEnv_carriesTheChosenCountryOnly(self):
+        os.environ["BUYER_COUNTRY"] = "GB"
+        chosen = live.service_env(os.environ, self.work, 8080, catalog=True, buyer_country="IN")
+        self.assertEqual(chosen.get("BUYER_COUNTRY"), "IN")
+        self.assertNotIn("BUYER_COUNTRY", live.service_env(os.environ, self.work, 8080, catalog=True))
+
+    # Covers: 9.1 caps per currency, 26.7 (the console's policy file has caps for USD, the owned store's currency, and
+    # for the buyer country's currency in its own minor units; without a country, USD's only; never a flat cap)
+    def test_thePolicy_hasCapsForUsd_andTheBuyersCurrency(self):
+        self.assertEqual(live.policy_yaml("IN"), "caps:\n"
+                         "  USD: {per_purchase_minor: 200000, daily_minor: 400000}\n"
+                         "  INR: {per_purchase_minor: 20000000, daily_minor: 40000000}\n")
+        self.assertEqual(live.policy_yaml(None), "caps:\n  USD: {per_purchase_minor: 200000, daily_minor: 400000}\n")
+        self.assertEqual(live.policy_yaml("US"), live.policy_yaml(None))
+        self.assertNotIn("per_purchase_cap_minor", live.policy_yaml("GB"))
+
+    # Covers: 9.1 caps per currency, 26.7 (a country the caps table does not hold is refused before anything starts:
+    # its caps would be a guess or a conversion)
+    def test_aCountryWithoutCaps_isRefused(self):
+        for argv, env in ((["--buyer-country", "FR"], {}), ([], {"BUYER_COUNTRY": "JP"})):
+            with self.assertRaises(SystemExit) as e:
+                live.buyer_country(argv, env)
+            self.assertIn("has no console caps", str(e.exception))
+            self.assertIn("CONSOLE_CAPS", str(e.exception))
+
+    # Covers: 9.1 caps per currency, 26.7 (the dry run shows the caps the service will get, the buyer's currency's too)
+    def test_theDryRun_showsTheCaps(self):
+        text = self.dry_run("--buyer-country", "IN")
+        self.assertIn("USD: {per_purchase_minor: 200000, daily_minor: 400000}", text)
+        self.assertIn("INR: {per_purchase_minor: 20000000, daily_minor: 40000000}", text)
+
+    # Covers: 26.7, 23.1 (the dry run shows the country the service will get)
+    def test_theDryRun_showsTheCountry(self):
+        self.assertIn('"BUYER_COUNTRY": "IN"', self.dry_run("--buyer-country", "IN"))
+        os.environ["BUYER_COUNTRY"] = "GB"
+        self.assertIn('"BUYER_COUNTRY": "GB"', self.dry_run())
+
+
 if __name__ == "__main__":
     unittest.main()

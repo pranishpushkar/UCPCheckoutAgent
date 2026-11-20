@@ -16,6 +16,7 @@ import dev.ucplab.core.intent.Budget;
 import dev.ucplab.core.intent.IntentState;
 import dev.ucplab.core.intent.PurchaseIntent;
 import dev.ucplab.core.json.CanonicalJson;
+import dev.ucplab.core.money.MoneyFormat;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -52,9 +53,10 @@ class RunBudgetTest {
         }
     }
 
-    // Covers: P9, 6.2, 6.4, 23.1 (a run under a 10.00 USD budget: the model's context has the hint after the unchanged
-    // prompt, the intent gets the run's budget, the quote above it ends FAILED_NOT_CHARGED with policy_P9, and the tool
-    // result names the budget and the quoted total, as text and as numbers, so the agent can say none fits)
+    // Covers: P9, 6.2, 6.2 amounts as text, 6.4, 23.1 (a run under a 10.00 USD budget: the model's context has the hint
+    // after the unchanged prompt, the intent gets the run's budget, the quote above it ends FAILED_NOT_CHARGED with
+    // policy_P9, and the tool result names the budget and the quoted total, as text and as numbers, so the agent can
+    // say none fits)
     @Test
     void aQuoteAboveTheRunsBudget_isRefused_andTheToolResultSaysWhy() throws Exception {
         try (RuntimeLab lab = new RuntimeLab()) {
@@ -81,8 +83,13 @@ class RunBudgetTest {
             assertThat(result.get("quoted")).isInstanceOfSatisfying(Map.class, q -> assertThat(q)
                     .containsEntry("currency", "USD").containsKey("total_minor"));
             assertThat(((Number) ((Map<?, ?>) result.get("quoted")).get("total_minor")).longValue()).isGreaterThan(1_000);
-            // 6.2: the budget as numbers too, so a model names both amounts without reading our text back.
-            assertThat(result).containsEntry("budget", Map.of("amount_minor", 1_000L, "currency", "USD"));
+            // 6.2: the budget as numbers too, so a model names both amounts without reading our text back; and each
+            // amount as text beside its minor units (6.2 amounts as text, 24.3), for the agent to write as it is.
+            assertThat(result).containsEntry("budget", Map.of("amount_minor", 1_000L, "amount", "$10.00",
+                    "currency", "USD"));
+            long quotedMinor = ((Number) ((Map<?, ?>) result.get("quoted")).get("total_minor")).longValue();
+            assertThat(result.get("quoted")).isEqualTo(Map.of("currency", "USD", "total_minor", quotedMinor,
+                    "total", MoneyFormat.format(quotedMinor, "USD")));
             assertThat(runs.find(auth.user(), new RunId("run-b")).orElseThrow().budget())
                     .contains(new Budget(1_000, "USD"));
             assertThat(lab.merchant.orders()).isEmpty();

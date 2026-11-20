@@ -147,8 +147,8 @@ final class MerchantWiring {
      */
     static LinkOffers linkOffers(Map<MerchantId, MerchantGateway> gateways) {
         Map<MerchantId, MerchantGateway> byId = Map.copyOf(gateways);
-        return (merchant, itemId) -> byId.get(merchant) instanceof LinkOffers catalog
-                ? catalog.offer(merchant, itemId)
+        return (merchant, itemId, shipTo) -> byId.get(merchant) instanceof LinkOffers catalog
+                ? catalog.offer(merchant, itemId, shipTo)
                 : new CallOutcome.NotSent<>("not a catalog source: " + merchant.value());
     }
 

@@ -114,12 +114,16 @@ public record ApprovalSnapshot(
         return m;
     }
 
-    /** The seller and the checkout_url exactly as read; sellerSite only when the seller has one (9.2). */
+    /**
+     * The seller and the checkout_url exactly as read; sellerSite only when the seller has one, shipsTo only when the
+     * snapshot names the buyer country, so a link snapshot made before it hashes exactly as before (9.2).
+     */
     private static Map<String, Object> linkJson(LinkSnapshot l) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("sellerName", l.sellerName());
         m.put("sellerDomain", l.sellerDomain());
         l.sellerSite().ifPresent(s -> m.put("sellerSite", s));
+        l.shipsTo().ifPresent(c -> m.put("shipsTo", c));
         m.put("url", l.url().value().toString());
         return m;
     }

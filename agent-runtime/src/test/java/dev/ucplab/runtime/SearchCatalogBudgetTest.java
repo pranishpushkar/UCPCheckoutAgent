@@ -124,9 +124,9 @@ class SearchCatalogBudgetTest {
         return CanonicalJson.readObject(json);
     }
 
-    // Covers: 6.2, 6.4, P9 (the near miss: when nothing fits and the catalog honours the filter, the tool asks once more
-    // without it, and the result carries only the count and the lowest price above the budget, numbers from the catalog,
-    // never a title, an id or a seller; an item in another currency is not counted)
+    // Covers: 6.2, 6.2 amounts as text, 6.4, P9 (the near miss: when nothing fits and the catalog honours the filter,
+    // the tool asks once more without it, and the result carries only the count and the lowest price above the budget,
+    // numbers from the catalog, never a title, an id or a seller; an item in another currency is not counted)
     @Test
     void nothingFits_theResultNamesTheNearMiss_byCountAndLowestPriceOnly() {
         ToolContext context = new ToolContext(Stubs.CONTEXT.auth(), Stubs.CONTEXT.runId(), Optional.of(BUDGET));
@@ -139,13 +139,13 @@ class SearchCatalogBudgetTest {
                 .containsExactly(Optional.of(new Money(50_000, "USD")), Optional.empty());
         assertThat((List<?>) result.get("items")).isEmpty();
         assertThat(result.get("above_budget")).isEqualTo(Map.of("count", 2L, "lowest_price_minor", 52_995L,
-                "currency", "USD"));
+                "lowest_price", "$529.95", "currency", "USD"));
         assertThat(CanonicalJson.write(result)).doesNotContain("Example").doesNotContain("ProductVariant")
                 .doesNotContain("untrusted");
     }
 
-    // Covers: 6.2 (when something fits there is no second search; items the merchant returned above the budget anyway
-    // are counted; with nothing above the budget there is no above_budget at all)
+    // Covers: 6.2, 6.2 amounts as text (when something fits there is no second search; items the merchant returned
+    // above the budget anyway are counted; with nothing above the budget there is no above_budget at all)
     @Test
     void somethingFits_noSecondSearch_andWhatWasLeftOutIsCounted() {
         ToolContext context = new ToolContext(Stubs.CONTEXT.auth(), Stubs.CONTEXT.runId(), Optional.of(BUDGET));
@@ -153,7 +153,7 @@ class SearchCatalogBudgetTest {
         Map<String, Object> ignoring = searched(registry(), context);
         assertThat(asked).hasSize(1);
         assertThat(ignoring.get("above_budget")).isEqualTo(Map.of("count", 1L, "lowest_price_minor", 50_001L,
-                "currency", "USD"));
+                "lowest_price", "$500.01", "currency", "USD"));
 
         asked.clear();
         Map<String, Object> honoured = searched(honouring(List.of(IN_BUDGET, ABOVE)), context);

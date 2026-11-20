@@ -1,5 +1,6 @@
 package dev.ucplab.persistence;
 
+import dev.ucplab.core.approval.ApprovalSnapshot;
 import dev.ucplab.core.identity.UserId;
 import dev.ucplab.core.intent.IntentState;
 import dev.ucplab.core.policy.PolicyUsage;
@@ -16,8 +17,9 @@ import java.util.stream.Collectors;
  * {@code created_at}.
  *
  * <p><b>P3.</b> The sum of the {@code totalMinor} of each counted intent's newest approval (the highest {@code seq}),
- * so a re-quoted intent counts once, at its latest quote. A counted intent with no approval adds nothing. The amount is
- * read from {@code snapshot_json} in Java, because extracting JSON in SQL is not portable (section 10).
+ * so a re-quoted intent counts once, at its latest quote, when that approval is in the asked currency: another
+ * currency's spend is never added or converted (9.1). A counted intent with no approval adds nothing. The amount and
+ * currency are read from {@code snapshot_json} in Java, because extracting JSON in SQL is not portable (section 10).
  *
  * <p><b>P5.</b> Every intent the user created in the window, whatever its state: a proposal the policy refused is still
  * a proposal, so a looping agent stays limited.
@@ -41,8 +43,9 @@ public final class SqlPolicyUsage implements PolicyUsage {
     }
 
     @Override
-    public long committedSpendMinor(UserId user, Instant from, Instant to) {
+    public long committedSpendMinor(UserId user, String currency, Instant from, Instant to) {
         Objects.requireNonNull(user, "user");
+        Objects.requireNonNull(currency, "currency");
         Objects.requireNonNull(from, "from");
         Objects.requireNonNull(to, "to");
         return db.read(c -> {
@@ -56,7 +59,10 @@ public final class SqlPolicyUsage implements PolicyUsage {
                 try (ResultSet r = s.executeQuery()) {
                     long total = 0;
                     while (r.next()) {
-                        total = Math.addExact(total, SqlApprovalRepository.snapshot(r.getString(1)).totalMinor());
+                        ApprovalSnapshot snapshot = SqlApprovalRepository.snapshot(r.getString(1));
+                        if (snapshot.currency().equals(currency)) {
+                            total = Math.addExact(total, snapshot.totalMinor());
+                        }
                     }
                     return total;
                 }

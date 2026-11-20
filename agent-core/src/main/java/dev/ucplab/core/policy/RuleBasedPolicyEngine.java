@@ -14,12 +14,14 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.TreeSet;
 import java.util.function.Function;
 
 /**
  * Table 9.1 rules P1 to P5. Rules are checked in rule-number order and the first failure is
  * returned. The P3 window is the last 24 hours (rolling, so time zones don't matter); the P5
- * window is the last hour.
+ * window is the last hour. P2 and P3 use the caps of the quote's own currency and that
+ * currency's spend only; a quote in a currency with no caps is refused by P2, never converted.
  */
 public final class RuleBasedPolicyEngine implements PolicyEngine {
 
@@ -84,17 +86,24 @@ public final class RuleBasedPolicyEngine implements PolicyEngine {
         Objects.requireNonNull(quote, "quote");
 
         long total = quote.totalMinor();
-        if (total > config.perPurchaseCapMinor()) {
-            return PolicyDecision.deny(PolicyRule.P2, "quoted total " + total + " is above the per-purchase cap "
-                    + config.perPurchaseCapMinor());
+        String currency = quote.currency();
+        Optional<CurrencyCaps> found = config.capsFor(currency);
+        if (found.isEmpty()) {
+            return PolicyDecision.deny(PolicyRule.P2, "no per-purchase cap is set for " + currency
+                    + "; caps are set for " + String.join(", ", new TreeSet<>(config.caps().keySet())));
+        }
+        CurrencyCaps caps = found.get();
+        if (total > caps.perPurchaseMinor()) {
+            return PolicyDecision.deny(PolicyRule.P2, "quoted total " + total + " " + currency
+                    + " is above the per-purchase cap " + caps.perPurchaseMinor() + " " + currency);
         }
 
         Instant now = clock.instant();
-        long spent = usage.committedSpendMinor(user, now.minus(SPEND_WINDOW), now);
+        long spent = usage.committedSpendMinor(user, currency, now.minus(SPEND_WINDOW), now);
         // Written as a subtraction so a large spent value cannot overflow.
-        if (total > config.dailyCapMinor() - spent) {
+        if (total > caps.dailyMinor() - spent) {
             return PolicyDecision.deny(PolicyRule.P3, "spent in the last 24 hours " + spent + " plus quoted total "
-                    + total + " is above the daily cap " + config.dailyCapMinor());
+                    + total + " " + currency + " is above the daily cap " + caps.dailyMinor() + " " + currency);
         }
 
         Optional<PolicyDecision> size = checkSize(quote.lines().size(),

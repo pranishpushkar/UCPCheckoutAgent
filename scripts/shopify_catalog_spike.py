@@ -3,7 +3,8 @@ VERIFY C1-C6 before any DESIGN change. Python 3 standard library only; run with 
 scripts/shopify-catalog-spike.sh. Never run in CI or by an agent.
 
 It reads the agent profile (C6), takes one token-tier token (C5), lists the catalog's tools (C1, C2), searches twice
-(IN/INR and US/USD, each filtered to available items that ship to that country), searches once more anonymously (C4),
+(IN/INR and US/USD, each filtered to available items that ship to that country; with --pages N, up to N pages of the
+IN/INR search, following its cursor), searches once more anonymously (C4),
 looks the first offers up, and reads each with get_product (C1, C3). It calls only three hosts: the agent profile's
 (GET), the token endpoint and the catalog (POST), and only tools/list, search_catalog, lookup_catalog and get_product.
 It never calls a store, never builds or follows a checkout_url, and never sends a buyer IP. Every printed or recorded
@@ -29,6 +30,7 @@ CONTEXTS = (("IN", "INR"), ("US", "USD"))
 CAPABILITIES = ("dev.ucp.shopping.catalog.search", "dev.ucp.shopping.catalog.lookup", "dev.shopify.catalog.global")
 DEFAULT_RECORD = "notes/catalog/recordings"
 DEFAULT_QUERY = "snowboard"
+MAX_PAGES = 3                   # --pages: how many pages of the IN/INR search to read (buyer country)
 GAP = 0.5                       # seconds between calls: far below the documented 5 requests per second
 HEADER_HINTS = re.compile(r"rate|retry", re.I)
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -156,6 +158,30 @@ def context_summary(answer):
             "has_next_page": pagination.get("has_next_page"), "ucp_version": (payload.get("ucp") or {}).get("version")}
 
 
+def page_counts(answer):
+    """One page's offers counted by their price's currency."""
+    counts = {}
+    for _, v in offers(answer):
+        currency = str((v.get("price") or {}).get("currency")) if isinstance(v.get("price"), dict) else "none"
+        counts[currency] = counts.get(currency, 0) + 1
+    return counts
+
+
+def currency_line(label, counts):
+    total = sum(counts.values())
+    other = {k: n for k, n in sorted(counts.items()) if k != "INR"}
+    return "%s: %s; INR %d; other currencies %d%s" % (
+        label, plural(total, "offer"), counts.get("INR", 0), sum(other.values()),
+        " (%s)" % ", ".join("%s %d" % kv for kv in other.items()) if other else "")
+
+
+def pages_option(argv):
+    value = option(argv, "--pages", "1")
+    if not value.isdigit() or not 1 <= int(value) <= MAX_PAGES:
+        raise SystemExit("refused: --pages is 1 to %d" % MAX_PAGES)
+    return int(value)
+
+
 def link_shape(url):
     p = urllib.parse.urlparse(url)
     return re.sub(r"\d+", "<n>", p.path), sorted(urllib.parse.parse_qs(p.query, keep_blank_values=True))
@@ -201,6 +227,7 @@ def option(argv, name, default):
 
 def main(argv):
     dry = "--dry-run" in argv
+    pages = pages_option(argv)
     profile = configuration(os.environ, dry)
     query = option(argv, "--query", DEFAULT_QUERY)
     directory = None
@@ -240,6 +267,22 @@ def main(argv):
             search_status = search_status or status
             answers.append(found)
             report["contexts"][label] = context_summary(found)
+            if country == "IN" and pages > 1:
+                report["contexts"][label]["pages"] = [{"page": 1, "currencies": page_counts(found)}]
+                answer = found
+                for page in range(2, pages + 1):
+                    cursor = ((spike.content(answer).get("pagination") or {}) if not dry else {}).get("cursor")
+                    more = (spike.content(answer).get("pagination") or {}).get("has_next_page") if not dry else True
+                    if not more or not (cursor or dry):
+                        break
+                    status, _, answer = call("search_catalog %s page %d" % (label, page), "POST", CATALOG, auth, rpc(
+                        n, "search_catalog", {
+                            "query": query, "context": {"address_country": country, "currency": currency},
+                            "filters": {"available": True, "ships_to": {"country": country}},
+                            "pagination": {"limit": 10, "cursor": cursor or "<cursor of page %d>" % (page - 1)}}, meta),
+                        dry, profile, "search_%s_%s_page%d" % (country.lower(), currency.lower(), page), directory)
+                    answers.append(answer)
+                    report["contexts"][label]["pages"].append({"page": page, "currencies": page_counts(answer)})
             ids = [v.get("id") for _, v in offers(found) if v.get("id")]
             if ids:
                 first[label] = ids[0]
@@ -301,6 +344,13 @@ def main(argv):
         say("  currencies %s; total_count %s; has_next_page %s; ucp.version %s; messages %s" % (
             ", ".join(summary["currencies"]) or "none", summary["total_count"], summary["has_next_page"],
             summary["ucp_version"], ", ".join(map(str, summary["messages"])) or "none"))
+        if summary.get("pages"):
+            together = {}
+            for page in summary["pages"]:
+                say("  " + currency_line("%s page %d" % (label, page["page"]), page["currencies"]))
+                for k, v in page["currencies"].items():
+                    together[k] = together.get(k, 0) + v
+            say("  " + currency_line("%s pages 1-%d" % (label, len(summary["pages"])), together))
     c1 = report["C1"]
     say("C1 quantity: %s; checkout_url paths seen: %s with quantity %s; query keys: %s" % (
         "a quantity argument in the tools' input schemas" if c1["quantity_in_schemas"]

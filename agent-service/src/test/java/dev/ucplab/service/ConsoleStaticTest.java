@@ -164,7 +164,7 @@ class ConsoleStaticTest {
         rows.put("handoff_timeout", "The handoff to the store timed out: no order was placed");
         rows.put("price_unstable", "The store's price kept changing: no order was placed");
         rows.put("policy_P1", "This store is not allowed: no order was placed");
-        rows.put("policy_P2", "Above the limit for one purchase: no order was placed");
+        rows.put("policy_P2", "Above the limit for one purchase, or in a currency with no limit set: no order was placed");
         rows.put("policy_P3", "Above your limit for the last 24 hours: no order was placed");
         rows.put("policy_P4", "Too many items or too large a quantity: no order was placed");
         rows.put("policy_P5", "Too many proposals in the last hour: no order was placed");
@@ -297,14 +297,15 @@ class ConsoleStaticTest {
 
     // Covers: I2, 9.3 L4, 24.3, 9.2 (the approval card is its own component and reads only the approval response's
     // fields: the snapshot's lines with their merchant titles, currency and total, the expiry and the token, and at a link
-    // merchant the answer's seller (23.2, 26.7); never the chat, the run, the messages or a description)
+    // merchant the answer's seller and ships_to (23.2, 26.7); never the chat, the run, the messages or a description)
     @Test
     void approvalCard_readsOnlyTheApprovalResponsesFields() throws IOException {
         String js = read("console.js");
         String card = card(js);
 
         Set<String> allowed = Set.of("snapshot", "lines", "item_id", "title", "quantity", "unit_price_minor", "currency",
-                "total_minor", "expires_at", "token", "merchant_id", "completion", "note", "budget", "seller", "options");
+                "total_minor", "expires_at", "token", "merchant_id", "completion", "note", "budget", "seller", "ships_to",
+                "options");
         Set<String> read = new LinkedHashSet<>();
         Matcher fields = Pattern.compile("\\b(?:approval|snapshot|line)\\.([A-Za-z_]+)").matcher(card);
         while (fields.find()) {
@@ -759,20 +760,306 @@ class ConsoleStaticTest {
                 .isGreaterThan(form.indexOf("id=\"message\""));
     }
 
+    // Covers: 24.3, 23.1 (beside the Budget field, an always-visible, labelled Deliver to select)
+    @Test
+    void sendForm_hasADeliverToSelect_alwaysVisible() throws IOException {
+        String html = read("index.html");
+        String form = html.substring(html.indexOf("<form id=\"send\""), html.indexOf("</form>"));
+
+        assertThat(form).contains("<label for=\"ship-to\">Deliver to</label>")
+                .contains("<select id=\"ship-to\" name=\"ship-to\"></select>");
+        assertThat(form.indexOf("id=\"ship-to\"")).as("it follows the budget's currency")
+                .isGreaterThan(form.indexOf("id=\"budget-currency\""));
+        String select = form.substring(form.indexOf("<select id=\"ship-to\""));
+        assertThat(select.substring(0, select.indexOf(">"))).doesNotContain("hidden").doesNotContain("disabled");
+    }
+
+    // Covers: 24.3, 23.1, 18 (Deliver to lists GET /api/countries by name, as text, and starts at /api/me's
+    // buyer_country; it keeps nothing in browser storage, where the theme stays the only stored value)
+    @Test
+    void deliverTo_listsTheCountries_asText_andStartsAtTheOperatorsDefault() throws IOException {
+        String js = read("console.js");
+        String shipTo = block(js, "ship-to");
+
+        assertThat(shipTo).contains("await api(\"GET\", \"/api/countries\")")
+                .contains("const option = el(\"option\", country.name);")
+                .contains("option.value = country.country;")
+                .contains("$(\"ship-to\").value = me.buyer_country.country;")
+                .doesNotContain("localStorage");
+        assertThat(js).contains("loadCountries(me.data);");
+    }
+
+    // Covers: 24.3, 23.1 (changing Deliver to sets the Budget field's currency to the country's, adding it to the list
+    // when it is not there; a new run sends the country, a continuation does not, and it is disabled while a run
+    // continues)
+    @Test
+    void deliverTo_switchesTheBudgetsCurrency_andIsSentOnANewRunOnly() throws IOException {
+        String js = read("console.js");
+        String shipTo = block(js, "ship-to");
+
+        assertThat(shipTo).contains("function onShipToChange() {")
+                .contains("$(\"budget-currency\").appendChild(el(\"option\", country.currency));")
+                .contains("$(\"budget-currency\").value = country.currency;");
+        assertThat(js).contains("$(\"ship-to\").addEventListener(\"change\", onShipToChange);")
+                .contains("const shipTo = continuing ? {} : {ship_to_country: $(\"ship-to\").value};")
+                .contains("$(\"ship-to\").disabled = continuingRun();");
+    }
+
+    // Covers: 24.3 (money in the currency's own minor digits: shown that way, and the Budget field's amount turned into
+    // minor units with the same digits)
+    @Test
+    void money_andTheBudgetField_useTheCurrencysOwnMinorDigits() throws IOException {
+        String js = read("console.js");
+
+        assertThat(js).contains("function minorDigits(currency) {")
+                .contains("new Intl.NumberFormat(\"en\", {style: \"currency\", currency: currency})"
+                        + ".resolvedOptions().maximumFractionDigits");
+        String money = js.substring(js.indexOf("function money(minor, currency) {"));
+        money = money.substring(0, money.indexOf("\n}\n"));
+        assertThat(money).contains("minorDigits(currency)").doesNotContain("/ 100");
+        String toSend = block(js, "budget").substring(block(js, "budget").indexOf("function budgetToSend() {"));
+        assertThat(toSend.substring(0, toSend.indexOf("\n}\n"))).contains("minorDigits(").doesNotContain("* 100");
+    }
+
+    // Covers: 24.3 money format (the console formats every amount from its minor units as a string of digits, never
+    // through floating point: the browser's CLDR en symbol and digits, Indian grouping for INR and threes otherwise; the
+    // Budget field is shown and read the same way; nothing else formats an amount)
+    @Test
+    void money_isFormattedFromMinorUnits_withTheSymbol_andTheCurrencysGrouping() throws IOException {
+        String js = read("console.js");
+        String money = block(js, "money");
+
+        assertThat(money).contains("function money(minor, currency) {")
+                .contains("function currencySymbol(currency) {")
+                .contains(".formatToParts(0).find((part) => part.type === \"currency\")")
+                .contains("function grouped(whole, currency) {")
+                .contains("const size = currency === \"INR\" ? 2 : 3;")
+                .contains("function plainAmount(minorText, digits) {")
+                .doesNotContain("toFixed").doesNotContain("Math.pow").doesNotContain("Number(").doesNotContain(" / ")
+                .doesNotContain("parseFloat");
+        assertThat(js).as("no amount through floating point anywhere").doesNotContain("toFixed(")
+                .doesNotContain("Math.pow(10");
+        String showRunBudget = js.substring(js.indexOf("function showRunBudget(budget) {"));
+        assertThat(showRunBudget.substring(0, showRunBudget.indexOf("\n}\n")))
+                .contains("plainAmount(String(budget.amount_minor), minorDigits(budget.currency))");
+        String toSend = js.substring(js.indexOf("function budgetToSend() {"));
+        assertThat(toSend.substring(0, toSend.indexOf("\n}\n")))
+                .contains("const minor = Number(m[1] + (m[2] || \"\").padEnd(digits, \"0\"));");
+    }
+
+    // Covers: 24.3, 23.2, 26.7 (the link card says where the catalog listed the item as shipping to, from the approval
+    // answer's ships_to, as text)
+    @Test
+    void approvalCard_atALinkMerchant_saysListedAsShippingTo() throws IOException {
+        String card = card(read("console.js"));
+
+        assertThat(card).contains("if (approval.ships_to) {")
+                .contains("el(\"p\", \"Listed as shipping to \" + approval.ships_to.name");
+    }
+
+    /** The pre-fill's pattern: console.js's {@code BUDGET_LIMIT} literal, compiled as the browser reads it. */
+    private static Pattern budgetPattern() throws IOException {
+        String budget = block(read("console.js"), "budget");
+        String start = "const BUDGET_LIMIT = /";
+        int from = budget.indexOf(start);
+        assertThat(from).as("BUDGET_LIMIT is one regex literal").isNotNegative();
+        int to = budget.indexOf("/i;\n", from);
+        assertThat(to).as("the literal ends with /i;").isGreaterThan(from);
+        return Pattern.compile(budget.substring(from + start.length(), to),
+                Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    }
+
+    /** The amount and the sign the pattern finds in {@code text}, as budgetFromMessage picks them, or null. */
+    private static List<String> found(Pattern pattern, String text) {
+        Matcher m = pattern.matcher(text);
+        if (!m.find()) {
+            return null;
+        }
+        String amount = m.group(2) != null ? m.group(2) : m.group(5) != null ? m.group(5) : m.group(8);
+        String sign = java.util.stream.Stream.of(1, 3, 4, 6, 7, 9).map(m::group).filter(java.util.Objects::nonNull)
+                .findFirst().orElse("");
+        return List.of(amount, sign.toLowerCase(java.util.Locale.ROOT));
+    }
+
+    /** console.js's {@code BUDGET_NOT_MONEY} literal: a word after a sign-less amount that says it is not money. */
+    private static Pattern notMoneyPattern() throws IOException {
+        String budget = block(read("console.js"), "budget");
+        String start = "const BUDGET_NOT_MONEY = /";
+        int from = budget.indexOf(start);
+        assertThat(from).as("BUDGET_NOT_MONEY is one regex literal").isNotNegative();
+        int to = budget.indexOf("/i;\n", from);
+        assertThat(to).as("the literal ends with /i;").isGreaterThan(from);
+        return Pattern.compile(budget.substring(from + start.length(), to),
+                Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    }
+
+    /**
+     * The amount and currency budgetFromMessage fills from {@code text} with {@code selected} as the field's currency, or
+     * null, step for step as the pinned lines below read: the first match; a sign or code names the currency; a sign-less
+     * amount after a limit word is money only from 100 up and with no unit after it.
+     */
+    private static List<String> prefill(String text, String selected) throws IOException {
+        Matcher m = budgetPattern().matcher(text);
+        if (!m.find()) {
+            return null;
+        }
+        String amount = m.group(2) != null ? m.group(2) : m.group(5) != null ? m.group(5) : m.group(8);
+        String sign = java.util.stream.Stream.of(1, 3, 4, 6, 7, 9).map(m::group).filter(java.util.Objects::nonNull)
+                .findFirst().orElse(null);
+        boolean named = m.group(8) != null;
+        if (sign == null && !named && (new java.math.BigDecimal(amount.replace(",", "")).compareTo(
+                java.math.BigDecimal.valueOf(100)) < 0 || notMoneyPattern().matcher(text.substring(m.end())).find())) {
+            return null;
+        }
+        java.util.Map<String, String> signs = java.util.Map.of("$", "USD", "€", "EUR", "£", "GBP", "₹", "INR", "rs", "INR", "rs.", "INR",
+                "rupee", "INR", "rupees", "INR");
+        String currency = sign == null ? selected
+                : signs.getOrDefault(sign.toLowerCase(java.util.Locale.ROOT), sign.toUpperCase(java.util.Locale.ROOT));
+        return List.of(amount.replace(",", ""), currency);
+    }
+
+    // Covers: 24.3, P9, 23.1 (a sign-less amount after a limit word takes the selected budget currency: "shoes under
+    // 15000" with INR fills 15000 INR, "under 15000" with USD 15000 USD; the field stays as it is for "under 2 kg", "kids
+    // under 10", "under 3 days", "size 7 uk" and "under 50", for an amount of 100 or more with a unit after it, and an
+    // amount with a sign is still taken in its own currency)
+    @Test
+    void budgetPrefill_aSignlessAmountAfterALimitWord_takesTheSelectedCurrency_unlessItIsNotMoney() throws IOException {
+        assertThat(prefill("shoes under 15000", "INR")).containsExactly("15000", "INR");
+        assertThat(prefill("under 15000", "USD")).containsExactly("15000", "USD");
+        assertThat(prefill("a board below 1,50,000", "INR")).containsExactly("150000", "INR");
+        assertThat(prefill("shoes up to 100", "EUR")).containsExactly("100", "EUR");
+        for (String text : List.of("under 2 kg", "kids under 10", "under 3 days", "size 7 uk", "under 50",
+                "a bag under 2500 g", "tent under 250 cm", "under 120 months", "under 200 pcs", "under 500 pack",
+                "under 100 %", "under 150 x 3", "under 300 mm", "under 150 years", "under 120 yrs", "under 700 UK",
+                "under 500 us", "under 450 EU", "under 100 size")) {
+            assertThat(prefill(text, "INR")).as(text).isNull();
+        }
+        assertThat(prefill("under $50", "INR")).as("a sign keeps a small amount").containsExactly("50", "USD");
+        assertThat(prefill("under 500 USD", "INR")).containsExactly("500", "USD");
+        assertThat(prefill("my budget is 50", "INR")).as("after budget, any amount").containsExactly("50", "INR");
+        String budget = block(read("console.js"), "budget");
+        assertThat(budget).contains("const named = Boolean(m[8]);\n"
+                + "  if (!sign && !named && (Number(amount.replace(/,/g, \"\")) < 100\n"
+                + "      || BUDGET_NOT_MONEY.test(text.slice(m.index + m[0].length)))) {\n"
+                + "    return null;\n  }\n")
+                .contains("currency: sign ? budgetCurrency(sign) : $(\"budget-currency\").value");
+    }
+
+    // Covers: 24.3, P9 (the live check's rupee forms, each run through the console's own pattern: "500 rupees", "rs 500",
+    // "Rs.500", "₹500" and "500 INR", each with a limit word; Indian grouping "1,50,000" and thousands "15,000"; "budget to
+    // 15000" without a sign; and each sign maps to INR)
+    @Test
+    void budgetPrefill_readsRupeeForms_andIndianGrouping() throws IOException {
+        Pattern p = budgetPattern();
+
+        assertThat(found(p, "red nike shoes under 500 rupees")).containsExactly("500", "rupees");
+        assertThat(found(p, "shoes below rs 500")).containsExactly("500", "rs");
+        assertThat(found(p, "shoes max Rs.500")).containsExactly("500", "rs.");
+        assertThat(found(p, "shoes under ₹500")).containsExactly("500", "₹");
+        assertThat(found(p, "shoes for 500 INR or less")).containsExactly("500", "inr");
+        assertThat(found(p, "a board under ₹1,50,000")).containsExactly("1,50,000", "₹");
+        assertThat(found(p, "a board up to rs 15,000.50")).containsExactly("15,000.50", "rs");
+        assertThat(found(p, "lets increase the budget to 15000")).containsExactly("15000", "");
+        assertThat(found(p, "my budget is $80")).containsExactly("80", "$");
+        assertThat(found(p, "under $500")).containsExactly("500", "$");
+        assertThat(found(p, "red nike shoes")).isNull();
+        assertThat(found(p, "7 UK")).isNull();
+        String budget = block(read("console.js"), "budget");
+        for (String sign : List.of("\"₹\": \"INR\"", "\"rs\": \"INR\"", "\"rs.\": \"INR\"", "\"rupee\": \"INR\"",
+                "\"rupees\": \"INR\"")) {
+            assertThat(budget).as(sign).contains(sign);
+        }
+        assertThat(budget).contains("BUDGET_SIGNS[sign.toLowerCase()] || sign.toUpperCase()")
+                .contains("const named = Boolean(m[8]);")
+                .contains("currency: sign ? budgetCurrency(sign) : $(\"budget-currency\").value");
+    }
+
+    // Covers: 24.3, 23.1 PATCH budget (on a follow-up, a field that differs from the run's current budget is sent as a
+    // PATCH before the message; the status line then reads "Budget updated to <amount> for new proposals."; a refused
+    // change sends no message)
+    @Test
+    void aFollowUp_withAChangedField_patchesTheRunsBudget_first() throws IOException {
+        String js = read("console.js");
+        String send = js.substring(js.indexOf("async function send(event) {"), js.indexOf("// <run-end>"));
+
+        assertThat(send).contains("if (continuing && !fieldMatchesRun(budget)) {")
+                .contains("await api(\"PATCH\", \"/api/runs/\" + currentRun.id + \"/budget\", budget)")
+                .contains("budgetNote = changed.data.budget\n"
+                        + "        ? \"Budget updated to \" + money(changed.data.budget.amount_minor, changed.data.budget.currency)\n"
+                        + "            + \" for new proposals.\"\n"
+                        + "        : \"Budget removed for new proposals.\";");
+        assertThat(send.indexOf("\"PATCH\"")).as("the change goes first")
+                .isLessThan(send.indexOf("\"/messages\""));
+        assertThat(send.substring(send.indexOf("if (!changed.ok) {"))).startsWith("if (!changed.ok) {\n"
+                + "      stopWorking();\n      setStatus(errorText(changed), true);\n      return;\n    }");
+        String budget = block(js, "budget");
+        assertThat(budget).contains("function fieldMatchesRun(field) {");
+        assertThat(budget).contains("function showBudgetNote(run, statusText) {\n"
+                + "  if (budgetNote && run.status !== \"running\") {\n"
+                + "    setStatus(budgetNote + \" \" + statusText);\n");
+        assertThat(js).contains("  showBudgetNote(run, statusText);\n");
+    }
+
+    // Covers: 24.3, 23.1, 21 (the run's current budget comes from the server's run answers only, never from what the page
+    // sent; the page keeps the run in the URL fragment, never in storage, and on load reads GET /api/runs/{run_id} to
+    // show the run and set the field from its budget, so a page loaded again after a change matches the server)
+    @Test
+    void theRunsBudget_comesFromTheServer_andAPageLoadedAgainRestoresIt() throws IOException {
+        String js = read("console.js");
+        String restore = block(js, "restore");
+
+        assertThat(js).contains("runBudget = run.budget || null;")
+                .contains("history.replaceState(null, \"\", \"#run=\" + encodeURIComponent(run.run_id));")
+                .contains("await restoreRun();");
+        assertThat(restore).contains("/^#run=([^&#]{1,128})$/.exec(location.hash)")
+                .contains("const result = await api(\"GET\", \"/api/runs/\" + encodeURIComponent(id));")
+                .contains("showRun(result.data);")
+                .contains("showRunBudget(result.data.budget);")
+                .doesNotContain("localStorage").doesNotContain("sessionStorage");
+        String showRunBudget = js.substring(js.indexOf("function showRunBudget(budget) {"));
+        showRunBudget = showRunBudget.substring(0, showRunBudget.indexOf("\n}\n"));
+        assertThat(showRunBudget).contains("minorDigits(budget.currency)").contains("showCurrency(budget.currency);");
+        assertThat(js.indexOf("runBudget = run.budget || null;")).as("set in showRun, from the run answer")
+                .isGreaterThan(js.indexOf("function showRun(run) {"));
+        assertThat(js.replace("runBudget = run.budget || null;", "").replace("let runBudget = null;", ""))
+                .as("nothing else sets the run's budget").doesNotContain("runBudget = ");
+    }
+
+    // Covers: 24.3, 23.2, 23.1 PATCH budget (a pending card whose approval budget differs from the run's current budget
+    // reads "Proposed under your earlier budget of <amount>", from the approval's budget, as text; Approve stays enabled)
+    @Test
+    void approvalCard_underAnEarlierBudget_saysSo_andStaysApprovable() throws IOException {
+        String js = read("console.js");
+        String card = card(js);
+
+        assertThat(card).contains("if (approval.budget && budgetChanged(approval.budget)) {\n"
+                + "    card.appendChild(el(\"p\", \"Proposed under your earlier budget of \"\n"
+                + "        + money(approval.budget.amount_minor, approval.budget.currency), \"budget-line\"));\n"
+                + "  } else if (linked && approval.budget) {");
+        assertThat(card.replace("approve.disabled = left === 0;", "")).as("only the expiry disables Approve")
+                .doesNotContain("approve.disabled");
+        String budget = block(js, "budget");
+        assertThat(budget).contains("function budgetChanged(budget) {\n"
+                + "  return Boolean(currentRun) && !(runBudget && runBudget.amount_minor === budget.amount_minor\n"
+                + "      && runBudget.currency === budget.currency);\n"
+                + "}");
+    }
+
     // Covers: 24.3, P9 (the pre-fill reads an amount with a limit word from the message, with a $, € or £ sign or a code)
     @Test
     void budgetPrefill_knowsTheLimitWords_andTheCurrencySigns() throws IOException {
         String budget = block(read("console.js"), "budget");
 
         assertThat(budget).contains("function budgetFromMessage(text) {");
-        for (String word : List.of("under", "below", "max", "maximum", "no more than", "at most", "less than",
-                "or less", "$", "€", "£", "USD", "EUR", "GBP")) {
+        for (String word : List.of("under", "below", "max", "maximum", "no more than", "at most", "less than", "up to",
+                "or less", "budget", "$", "€", "£", "₹", "rs", "rupees", "USD", "EUR", "GBP", "INR")) {
             assertThat(budget).as("the pre-fill knows " + word).contains(word);
         }
     }
 
     // Covers: 24.3, P9 (the pre-fill only fills the field, visibly, while the user has not touched it; once the user edits
-    // or clears the field, or changes its currency, typing never fills it again; during a continuation it never runs)
+    // or clears the field, or changes its currency, typing never fills it again; on a follow-up it only ever fills the
+    // field, so a follow-up without an amount never changes the budget)
     @Test
     void budgetPrefill_onlyFillsAnUntouchedField_andAnEditedFieldWins() throws IOException {
         String js = read("console.js");
@@ -780,13 +1067,15 @@ class ConsoleStaticTest {
 
         assertThat(budget).contains("let budgetTouched = false;")
                 .contains("function onMessageInput() {\n"
-                        + "  if (budgetTouched || continuingRun()) {\n"
+                        + "  if (budgetTouched) {\n"
                         + "    return;\n"
                         + "  }\n"
                         + "  const found = budgetFromMessage($(\"message\").value);\n"
-                        + "  $(\"budget\").value = found ? found.amount : \"\";\n"
                         + "  if (found) {\n"
-                        + "    $(\"budget-currency\").value = found.currency;\n"
+                        + "    $(\"budget\").value = found.amount;\n"
+                        + "    showCurrency(found.currency);\n"
+                        + "  } else if (!continuingRun()) {\n"
+                        + "    $(\"budget\").value = \"\";\n"
                         + "  }\n"
                         + "}");
         assertThat(js).contains("$(\"message\").addEventListener(\"input\", onMessageInput);")
@@ -797,8 +1086,8 @@ class ConsoleStaticTest {
                 .doesNotContain("budgetTouched = ");
     }
 
-    // Covers: 24.3, 23.1, P9 (only the field is sent, on a new run only: the send handler never parses the message, a
-    // continuation sends the message alone, and the field is disabled while a run continues)
+    // Covers: 24.3, 23.1, P9 (only the field is sent: the send handler never parses the message; a new run sends it with
+    // the message; a continuation sends the message alone, after a PATCH when the field differs from the run's budget)
     @Test
     void send_sendsOnlyTheField_onANewRunOnly() throws IOException {
         String js = read("console.js");
@@ -806,15 +1095,14 @@ class ConsoleStaticTest {
         String budget = block(js, "budget");
 
         assertThat(send).doesNotContain("budgetFromMessage")
-                .contains("const budget = continuing ? {} : budgetToSend();")
+                .contains("const budget = budgetToSend();")
                 .contains("? await api(\"POST\", \"/api/runs/\" + currentRun.id + \"/messages\", {message: text})")
-                .contains(": await api(\"POST\", \"/api/runs\", Object.assign({message: text}, budget));");
+                .contains(": await api(\"POST\", \"/api/runs\", Object.assign({message: text}, budget, shipTo));");
         String toSend = budget.substring(budget.indexOf("function budgetToSend() {"));
         toSend = toSend.substring(0, toSend.indexOf("\n}\n") + 2);
         assertThat(toSend).contains("$(\"budget\").value").contains("$(\"budget-currency\").value")
                 .contains("budget_minor").contains("currency").doesNotContain("message");
-        assertThat(budget).contains("$(\"budget\").disabled = continuingRun();")
-                .contains("$(\"budget-currency\").disabled = continuingRun();");
+        assertThat(js).doesNotContain("$(\"budget\").disabled = ").doesNotContain("$(\"budget-currency\").disabled = ");
     }
 
     // Covers: 24.3, 23.2, P9, I2 (the card shows the user's budget from the approval answer's budget field only, under

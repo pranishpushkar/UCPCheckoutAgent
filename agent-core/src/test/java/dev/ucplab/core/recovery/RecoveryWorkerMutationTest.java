@@ -6,6 +6,7 @@ import dev.ucplab.core.MutableClock;
 import dev.ucplab.core.identity.AuthContext;
 import dev.ucplab.core.identity.UserId;
 import dev.ucplab.core.intent.Budget;
+import dev.ucplab.core.intent.BuyerCountry;
 import dev.ucplab.core.intent.InMemoryIntentRepository;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentRepository;
@@ -128,7 +129,7 @@ class RecoveryWorkerMutationTest {
 
     private final Orchestrator orchestrator = new Orchestrator() {
         @Override
-        public ProposalResult propose(AuthContext auth, MerchantId merchant, List<ProposedLine> lines, String why, Optional<Budget> budget) {
+        public ProposalResult propose(AuthContext auth, MerchantId merchant, List<ProposedLine> lines, String why, Optional<Budget> budget, BuyerCountry shipTo) {
             throw new UnsupportedOperationException();
         }
 

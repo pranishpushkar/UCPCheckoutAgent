@@ -128,7 +128,8 @@ live client.
 The limits that exist are per run (DESIGN 6.3, `AgentBudget.DEFAULT`): 6 model calls, 8 tool calls, 30 s of wall clock
 (your time answering excluded) and 20,000 input plus output tokens. A run that reaches any of them ends with
 `BUDGET_EXCEEDED`. There is no daily cap on model calls or tokens. The console's daily cap is P3's on purchases
-(`daily_cap_minor: 400000`, 4,000.00 in the store's currency, in the temporary policy file), not on the model. The
+(`caps.USD.daily_minor: 400000`, 4,000.00 USD, the store's currency, in the temporary policy file; with
+`--catalog --buyer-country IN` also `caps.INR.daily_minor: 40000000`, 400,000.00 INR), not on the model. The
 console runs only while you keep it open, and each message you send is one run. Check Gemini's current pricing
 yourself.
 

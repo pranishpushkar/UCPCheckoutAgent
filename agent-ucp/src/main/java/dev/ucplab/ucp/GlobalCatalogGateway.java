@@ -2,6 +2,7 @@ package dev.ucplab.ucp;
 
 import dev.ucplab.core.id.IdGenerator;
 import dev.ucplab.core.intent.AttemptOp;
+import dev.ucplab.core.intent.BuyerCountry;
 import dev.ucplab.core.merchant.CallOutcome;
 import dev.ucplab.core.merchant.CatalogGateway;
 import dev.ucplab.core.merchant.CatalogPage;
@@ -48,7 +49,9 @@ import java.util.regex.Pattern;
  * refuses an answer at another {@code ucp.version}), retry executor, breaker and rate limiter as a store's, and a call
  * refused for its token is tried once more with a new one.
  *
- * <p>Search is US/USD, {@code ships_to} US and available only ({@link GlobalCatalogParser}). As a
+ * <p>Every read is for the run's buyer country (26.7, 23.1): its code as {@code context.address_country} and, on a
+ * search, {@code filters.ships_to}, its currency as {@code context.currency}; available only, and priced only in that
+ * currency ({@link GlobalCatalogParser}). As a
  * {@link MerchantGateway} it takes no checkout call: create, update, complete, cancel and get send nothing and are
  * {@code NotSent} (I12, 26.5, N1), and discovery reads nothing (19: the catalog serves no {@code /.well-known/ucp}).
  * Nothing is cached (20). The gateway logs nothing.
@@ -61,8 +64,6 @@ public final class GlobalCatalogGateway implements MerchantGateway, CatalogGatew
     public static final String VERSION = "2026-04-08";
     static final String NO_CHECKOUT = "a catalog source takes no checkout call (I12, 26.7)";
     static final String NO_LOOKUP = "the Global Catalog's lookup is not used (26.7)";
-    static final Map<String, Object> CONTEXT = Map.of("address_country", "US", "currency", GlobalCatalogParser.CURRENCY);
-    private static final Map<String, Object> FILTERS = Map.of("available", true, "ships_to", Map.of("country", "US"));
     private static final Pattern AGENT_PROFILE = Pattern.compile("profile=\"([^\"]+)\"");
 
     private final MerchantEntry catalog;
@@ -114,19 +115,19 @@ public final class GlobalCatalogGateway implements MerchantGateway, CatalogGatew
     @Override
     public CallOutcome<CatalogPage> search(CatalogSearch request) {
         Objects.requireNonNull(request, "request");
-        // 6.2, 26.7: a run's budget as filters.price.max in minor units, in the budget's currency as context.currency.
-        Map<String, Object> context = request.maxPrice()
-                .<Map<String, Object>>map(m -> Map.of("address_country", "US", "currency", m.currency())).orElse(CONTEXT);
-        Map<String, Object> filters = request.maxPrice().<Map<String, Object>>map(m -> {
-            Map<String, Object> withPrice = new LinkedHashMap<>(FILTERS);
-            withPrice.put("price", Map.of("max", m.minor()));
-            return withPrice;
-        }).orElse(FILTERS);
-        CallOutcome<CatalogPage> page = call("search_catalog", Map.of("query", request.query(), "context", context,
-                "filters", filters, "pagination", Map.of("limit", request.limit())), GlobalCatalogParser::search);
+        // 6.2, 26.7: the buyer country and its currency; a run's budget, in that currency (23.1), as filters.price.max.
+        BuyerCountry country = request.shipTo();
+        Map<String, Object> filters = new LinkedHashMap<>();
+        filters.put("available", true);
+        filters.put("ships_to", Map.of("country", country.code()));
+        request.maxPrice().ifPresent(m -> filters.put("price", Map.of("max", m.minor())));
+        String currency = country.currency();
+        CallOutcome<CatalogPage> page = call("search_catalog", Map.of("query", request.query(), "context",
+                context(country), "filters", filters, "pagination", Map.of("limit", request.limit())),
+                body -> GlobalCatalogParser.search(body, currency));
         if (page instanceof CallOutcome.Ok<CatalogPage> ok && ok.value().products().size() > request.limit()) {
-            return new CallOutcome.Ok<>(ok.httpStatus(),
-                    new CatalogPage(ok.value().products().subList(0, request.limit()), true), ok.messages());
+            return new CallOutcome.Ok<>(ok.httpStatus(), new CatalogPage(ok.value().products().subList(0,
+                    request.limit()), true, ok.value().otherCurrency()), ok.messages());
         }
         return page;
     }
@@ -140,23 +141,39 @@ public final class GlobalCatalogGateway implements MerchantGateway, CatalogGatew
         return new CallOutcome.ProtocolError<>(0, "capability_missing", NO_LOOKUP, Optional.empty());
     }
 
-    /** {@code get_product} of a variant id, with the US context (26.7). */
+    /** {@code get_product} of a variant id, for US (26.7). */
     @Override
     public CallOutcome<CatalogProduct> product(String id) {
+        return product(id, BuyerCountry.US);
+    }
+
+    /** {@code get_product} of a variant id, for the buyer country and in its currency (26.7). */
+    @Override
+    public CallOutcome<CatalogProduct> product(String id, BuyerCountry shipTo) {
         Objects.requireNonNull(id, "id");
-        return call("get_product", Map.of("id", id, "context", CONTEXT), GlobalCatalogParser::product);
+        String currency = shipTo.currency();
+        return call("get_product", Map.of("id", id, "context", context(shipTo)),
+                body -> GlobalCatalogParser.product(body, currency));
+    }
+
+    /** The context of every read: the buyer country and its currency (26.7). */
+    private static Map<String, Object> context(BuyerCountry country) {
+        return Map.of("address_country", country.code(), "currency", country.currency());
     }
 
     /**
-     * A link intent's offer (7.2 quote_ready (link), 26.7): {@code get_product} of the variant, with the US context,
-     * read fresh each time (20). The catalog's refusal, or an answer without that variant, is {@code Rejected}.
+     * A link intent's offer (7.2 quote_ready (link), 26.7): {@code get_product} of the variant, for the intent's buyer
+     * country and in its currency, read fresh each time (20). The catalog's refusal, or an answer without that variant,
+     * is {@code Rejected}.
      */
     @Override
-    public CallOutcome<LinkOffer> offer(MerchantId merchant, String itemId) {
+    public CallOutcome<LinkOffer> offer(MerchantId merchant, String itemId, BuyerCountry shipTo) {
         Objects.requireNonNull(merchant, "merchant");
         Objects.requireNonNull(itemId, "itemId");
-        return call("get_product", Map.of("id", itemId, "context", CONTEXT), body -> GlobalCatalogParser.offer(body, itemId),
-                true);
+        Objects.requireNonNull(shipTo, "shipTo");
+        String currency = shipTo.currency();
+        return call("get_product", Map.of("id", itemId, "context", context(shipTo)),
+                body -> GlobalCatalogParser.offer(body, itemId, currency), true);
     }
 
     /** One read tool call, its answer read by {@code parser}. */

@@ -1,5 +1,6 @@
 package dev.ucplab.core.intent;
 
+import dev.ucplab.core.money.MoneyFormat;
 import java.util.Objects;
 import java.util.regex.Pattern;
 
@@ -22,9 +23,8 @@ public record Budget(long amountMinor, String currency) {
         }
     }
 
-    /** The amount as the console shows money (24.3): "$500.00" in USD, "EUR 500.00" otherwise; two minor digits. */
+    /** The amount in 24.3's money format, as the console shows money: "$500.00", "₹42,700.00", "¥500". */
     public String display() {
-        String amount = amountMinor / 100 + "." + String.format("%02d", amountMinor % 100);
-        return (currency.equals("USD") ? "$" : currency + " ") + amount;
+        return MoneyFormat.format(amountMinor, currency);
     }
 }

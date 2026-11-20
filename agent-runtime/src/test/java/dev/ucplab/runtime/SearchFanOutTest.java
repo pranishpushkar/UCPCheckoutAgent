@@ -168,7 +168,7 @@ class SearchFanOutTest {
 
         ToolOutcome.Result r = search(ports, 5);
 
-        assertThat(r.json()).isEqualTo("{\"items\":[],\"unavailable\":[\"merchant-a\",\"merchant-c\",\"merchant-d\"]}");
+        assertThat(r.json()).isEqualTo("{\"items\":[],\"ships_to\":{\"country\":\"US\",\"country_name\":\"United States\"},\"unavailable\":[\"merchant-a\",\"merchant-c\",\"merchant-d\"]}");
     }
 
     // Covers: 6.2 (a catalog that throws is a bug, not a failed merchant: the tool fails as it always did, so a run records
@@ -255,29 +255,29 @@ class SearchFanOutTest {
     }
 
     // Covers: 6.2, M5 goldens (with one merchant the output is what the sequential tool gave: its items in its own order,
-    // capped, and no unavailable key)
+    // capped, and no unavailable key; then ships_to, the run's country, US)
     @Test
     void withOneMerchant_theOutputIsTheSequentialOutput_byteForByte() {
         ToolPorts ports = ports(Duration.ofSeconds(5), catalogs(A, catalog(() -> page("a1", "a2", "a3"))));
 
         ToolOutcome.Result r = search(ports, 2);
 
-        assertThat(r.json()).isEqualTo("{\"items\":[" + item("a1") + "," + item("a2") + "]}");
+        assertThat(r.json()).isEqualTo("{\"items\":[" + item("a1") + "," + item("a2") + "],\"ships_to\":{\"country\":\"US\",\"country_name\":\"United States\"}}");
     }
 
     private static String item(String id) {
         return "{\"currency\":\"USD\",\"in_stock\":true,\"item_id\":\"" + id + "\",\"merchant_id\":\"merchant-a\","
-                + "\"price_minor\":100,\"title\":" + dev.ucplab.core.json.CanonicalJson.write(
+                + "\"price\":\"$1.00\",\"price_minor\":100,\"title\":" + dev.ucplab.core.json.CanonicalJson.write(
                         dev.ucplab.runtime.ToolText.title(product(id, 100), product(id, 100).variants().getFirst()))
                 + "}";
     }
 
-    // Covers: 6.2 (no active merchant is an empty list, as before, not an error)
+    // Covers: 6.2 (no active merchant is an empty list, as before, not an error; ships_to names the run's country, US)
     @Test
     void noActiveMerchant_isAnEmptyList() {
         ToolPorts ports = new ToolPorts(Stubs.registry(List.of()), Map.of(), noOrchestrator());
 
-        assertThat(search(ports, 5).json()).isEqualTo("{\"items\":[]}");
+        assertThat(search(ports, 5).json()).isEqualTo("{\"items\":[],\"ships_to\":{\"country\":\"US\",\"country_name\":\"United States\"}}");
     }
 
     private static CallOutcome<CatalogPage> after(long millis, String... ids) {

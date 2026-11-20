@@ -66,6 +66,12 @@ final class ApiClient {
                 "Content-Type", "application/json");
     }
 
+    /** A JSON PATCH with the session's cookie and CSRF token. */
+    HttpResponse<String> patch(Session s, String path, String json) {
+        return send("PATCH", path, Optional.of(json), "Cookie", "ucplab_session=" + s.cookie(), "X-CSRF-Token", s.csrf(),
+                "Content-Type", "application/json");
+    }
+
     /** {@code POST /auth/dev-login} as JSON from the configured origin, carrying {@code cookie} if there is one. */
     HttpResponse<String> devLogin(String user, Optional<String> returnTo, Optional<String> cookie) {
         String json = "{\"user\":\"" + user + "\"" + returnTo.map(r -> ",\"return_to\":\"" + r + "\"").orElse("")

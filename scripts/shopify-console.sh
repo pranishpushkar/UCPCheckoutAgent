@@ -10,5 +10,7 @@
 # your client's token and calls no store, so it needs only AGENT_PROFILE_URL beside the Keychain's client, never the
 # buyer IP, and refuses --i-own-this-store, --with-buyer-ip and --after-payment. An approved purchase gives a link to the
 # seller's own site that you open yourself; the agent sees nothing after it.
+# --buyer-country <code> (or BUYER_COUNTRY in your environment, the option winning; DESIGN 26.7) is the console's
+# first Deliver to choice, such as IN: the catalog is searched for delivery there, in its currency. Default US.
 set -euo pipefail
 exec "$(dirname "$0")/shopify-live.sh" --console "$@"

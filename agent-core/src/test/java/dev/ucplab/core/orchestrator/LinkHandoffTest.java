@@ -10,6 +10,7 @@ import dev.ucplab.core.approval.LinkSnapshot;
 import dev.ucplab.core.approval.PendingApproval;
 import dev.ucplab.core.approval.SnapshotLine;
 import dev.ucplab.core.intent.Budget;
+import dev.ucplab.core.intent.BuyerCountry;
 import dev.ucplab.core.intent.HandoffWatch;
 import dev.ucplab.core.intent.IntentEvent;
 import dev.ucplab.core.intent.IntentId;
@@ -69,12 +70,14 @@ class LinkHandoffTest {
     /** The catalog's offer reads: each answered by {@link #answer}, each recorded. */
     static final class Offers implements LinkOffers {
         final List<String> reads = new ArrayList<>();
+        final List<BuyerCountry> countries = new ArrayList<>();
         UnaryOperator<CallOutcome<LinkOffer>> change = o -> o;
         CallOutcome<LinkOffer> answer = new CallOutcome.Ok<>(200, LinkHandoffTest.offer(LINK), List.of());
 
         @Override
-        public CallOutcome<LinkOffer> offer(MerchantId merchant, String itemId) {
+        public CallOutcome<LinkOffer> offer(MerchantId merchant, String itemId, BuyerCountry shipTo) {
             reads.add(merchant.value() + " " + itemId);
+            countries.add(shipTo);
             return change.apply(answer);
         }
     }
@@ -140,7 +143,7 @@ class LinkHandoffTest {
 
     // Covers: 7.2 quote_ready (link), I2, 9.2, 20, 26.7, I12 (propose accepts the catalog without owned; the quote is
     // one fresh read of the offer; the snapshot holds the catalog's title, price and currency and the link exactly as
-    // read; no attempt row, nothing sent to any gateway)
+    // read, with the intent's buyer country (US); no attempt row, nothing sent to any gateway)
     @Test
     void quoteReady_readsTheOfferOnce_andOpensTheApprovalOnIt() {
         Lab.Worker w = worker();
@@ -153,7 +156,7 @@ class LinkHandoffTest {
         assertThat(pending.snapshot().totalMinor()).isEqualTo(12_900);
         assertThat(pending.snapshot().sessionId().value()).isEqualTo("link:" + ITEM);
         assertThat(pending.snapshot().link()).contains(new LinkSnapshot("Example Shop A", "shop-a.myshopify.example",
-                Optional.of("www.shop-a.example"), new ContinueUrl(URI.create(LINK))));
+                Optional.of("www.shop-a.example"), Optional.of("US"), new ContinueUrl(URI.create(LINK))));
         assertThat(events(id, "transition")).contains(
                 "{\"event\":\"QUOTE_READY\",\"from\":\"QUOTING\",\"guard\":\"QUOTE_POLICY_ALLOWS\",\"to\":\"AWAITING_APPROVAL\"}");
         assertThat(events(id, "policy_decision")).filteredOn(e -> e.contains("\"stage\":\"quote\"")).singleElement()
@@ -174,6 +177,23 @@ class LinkHandoffTest {
 
         assertThat(lab.pending(w, id).snapshot().lines()).singleElement()
                 .satisfies(l -> assertThat(l.options()).containsExactly(new VariantOption("Size", "154 cm")));
+    }
+
+    // Covers: 26.7, 9.2, 23.1 (a link intent for India reads its offer for India, and its snapshot's link names the
+    // country, which the hash covers; one proposed for the default country reads for US)
+    @Test
+    void quoteReady_readsTheOfferForTheIntentsCountry_andTheSnapshotNamesIt() {
+        Lab.Worker w = worker();
+        IntentId india = w.orchestrator().propose(lab.alice(), SHOP, ONE, "a board", Optional.empty(),
+                new BuyerCountry("IN")).intentId();
+        assertThat(lab.drive(w, india)).isEqualTo(IntentState.AWAITING_APPROVAL);
+        IntentId us = quoted(w);
+
+        assertThat(offers.countries).containsExactly(new BuyerCountry("IN"), BuyerCountry.US);
+        assertThat(lab.pending(w, india).snapshot().link()).hasValueSatisfying(
+                l -> assertThat(l.shipsTo()).contains("IN"));
+        assertThat(lab.pending(w, us).snapshot().link()).hasValueSatisfying(
+                l -> assertThat(l.shipsTo()).contains("US"));
     }
 
     // Covers: 20, 26.7 (the read that prices an approval is never cached: each quote reads the catalog again)

@@ -1,6 +1,7 @@
 package dev.ucplab.runtime;
 
 import dev.ucplab.core.agent.ToolSpec;
+import dev.ucplab.core.intent.Budget;
 import dev.ucplab.core.intent.IntentState;
 import dev.ucplab.core.intent.IntentStatus;
 import dev.ucplab.core.intent.ProposalResult;
@@ -9,6 +10,7 @@ import dev.ucplab.core.json.CanonicalJson;
 import dev.ucplab.core.merchant.CheckoutView;
 import dev.ucplab.core.merchant.LineView;
 import dev.ucplab.core.merchant.MerchantId;
+import dev.ucplab.core.money.MoneyFormat;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -24,7 +26,7 @@ import java.util.Set;
  * {@code merchant_id} is not checked against the registry here; policy decides (P1). A quantity above 5 is refused
  * before any intent exists, and P4 stays the second layer behind it.
  *
- * <p>Returns {@code {intent_id, state, quote:{currency, total_minor, lines:[{item_id, quantity, unit_price_minor}]}}}
+ * <p>Returns {@code {intent_id, state, quote:{currency, total_minor, total, lines:[{item_id, quantity, unit_price_minor}]}}}
  * for AWAITING_APPROVAL, and {@code {intent_id, state, failure_reason?}} otherwise; after a P9 denial also
  * {@code reason}, {@code quoted} and {@code budget} (6.2), and after a refused link ({@code link_not_allowed}, 26.7)
  * also a fixed {@code reason}. It never returns the session id, merchant messages, the approval id or token, the
@@ -76,6 +78,10 @@ final class ProposePurchaseTool implements Tool {
     static final String LINK_NOT_ALLOWED_REASON = "the store's link is not on the seller's own site";
     /** The failure_reason of a quote P9 refused (9.1). */
     private static final String OVER_BUDGET = "policy_P9";
+    /** 6.2: the fixed reasons of the cap refusals; the caps' numbers never reach the model. */
+    private static final Map<String, String> CAP_REASONS = Map.of(
+            "policy_P2", "above the limit for one purchase, or in a currency with no limit set (P2)",
+            "policy_P3", "above your limit for the last 24 hours (P3)");
 
     @Override
     public ToolOutcome run(ToolContext context, Map<String, Object> arguments) {
@@ -95,9 +101,10 @@ final class ProposePurchaseTool implements Tool {
         } catch (Args.Invalid e) {
             return ToolOutcome.invalid(e.getMessage());
         }
-        // The budget is the run's, from its context: no argument can set, raise or clear it (6.2, P9).
+        // The budget and the buyer country are the run's, from its context: no argument can set or change either (6.2,
+        // P9, 23.1).
         ProposalResult proposal = ports.orchestrator().propose(context.auth(), merchant, lines, rationale,
-                context.budget());
+                context.budget(), context.shipTo());
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("intent_id", proposal.intentId().value());
         result.put("state", proposal.state().name());
@@ -109,14 +116,19 @@ final class ProposePurchaseTool implements Tool {
             if (status.failureReason().filter(LINK_NOT_ALLOWED::equals).isPresent()) {
                 result.put("reason", LINK_NOT_ALLOWED_REASON);
             }
+            // 6.2: a cap refusal's fixed reason, our own text, so the agent can tell the user why and stop.
+            status.failureReason().map(CAP_REASONS::get).ifPresent(r -> result.put("reason", r));
             if (status.failureReason().filter(OVER_BUDGET::equals).isPresent() && context.budget().isPresent()
                     && proposal.quote().isPresent()) {
                 // Our own text and numbers only (6.2), so the agent can try a cheaper item or say none fits.
                 result.put("reason", "over your budget of " + context.budget().get().display() + " (P9)");
-                result.put("quoted", Map.of("currency", proposal.quote().get().currency(),
-                        "total_minor", proposal.quote().get().totalMinor()));
-                result.put("budget", Map.of("amount_minor", context.budget().get().amountMinor(),
-                        "currency", context.budget().get().currency()));
+                CheckoutView quoted = proposal.quote().get();
+                Budget budget = context.budget().get();
+                // 6.2 amounts as text: each amount beside its minor units, as the agent writes it (24.3).
+                result.put("quoted", Map.of("currency", quoted.currency(), "total_minor", quoted.totalMinor(),
+                        "total", MoneyFormat.format(quoted.totalMinor(), quoted.currency())));
+                result.put("budget", Map.of("amount_minor", budget.amountMinor(), "currency", budget.currency(),
+                        "amount", budget.display()));
             }
         }
         return new ToolOutcome.Result(CanonicalJson.write(result), "ok", Optional.of(proposal.intentId()));
@@ -133,6 +145,7 @@ final class ProposePurchaseTool implements Tool {
         return Map.of(
                 "currency", view.currency(),
                 "total_minor", view.totalMinor(),
+                "total", MoneyFormat.format(view.totalMinor(), view.currency()),
                 "lines", lines);
     }
 }

@@ -57,7 +57,7 @@ final class Lab {
     private static final ApprovalSecret SECRET = ApprovalSecret.of("0123456789abcdef0123456789abcdef");
     private static final PolicyUsage NO_USAGE = new PolicyUsage() {
         @Override
-        public long committedSpendMinor(UserId user, Instant from, Instant to) {
+        public long committedSpendMinor(UserId user, String currency, Instant from, Instant to) {
             return 0;
         }
 

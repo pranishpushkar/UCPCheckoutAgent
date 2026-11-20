@@ -5,7 +5,9 @@ import dev.ucplab.core.agent.RunRecord;
 import dev.ucplab.core.agent.ToolEvent;
 import dev.ucplab.core.identity.AuthContext;
 import dev.ucplab.core.intent.Budget;
+import dev.ucplab.core.intent.BuyerCountry;
 import dev.ucplab.core.intent.IntentId;
+import dev.ucplab.service.config.ServiceProperties;
 import dev.ucplab.service.run.RunMessage;
 import dev.ucplab.service.run.RunRefused;
 import dev.ucplab.service.run.RunSupervisor;
@@ -19,6 +21,7 @@ import java.util.Optional;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -39,22 +42,28 @@ final class RunController {
     static final String BAD_MESSAGE = "message must be 1 to 2000 characters";
     static final String BAD_BUDGET = "budget_minor and currency must both be set or both left out: an integer from 1 to"
             + " 10^12 and three upper-case letters";
-    static final String BUDGET_FIXED = "the budget is fixed for the run; start a new run for a new budget";
+    static final String BUDGET_FIXED = "a message never changes the budget; set it with PATCH /api/runs/{run_id}/budget";
+    static final String BAD_COUNTRY = "ship_to_country must be two upper-case letters naming a country of /api/countries";
+    static final String COUNTRY_FIXED = "the buyer country is fixed for the run; start a new run for another country";
     static final long MAX_BUDGET = 1_000_000_000_000L;
     static final int MAX_MESSAGE = 2000;
 
     private final RunSupervisor supervisor;
+    private final BuyerCountry defaultCountry;
 
-    RunController(RunSupervisor supervisor) {
+    RunController(RunSupervisor supervisor, ServiceProperties properties) {
         this.supervisor = Objects.requireNonNull(supervisor, "supervisor");
+        this.defaultCountry = properties.buyerCountry();
     }
 
     @PostMapping("/api/runs")
     ResponseEntity<Map<String, Object>> start(AuthContext auth, @RequestBody Map<String, Object> body) {
         String message = message(body);
         Optional<Budget> budget = budget(body);
+        BuyerCountry shipTo = shipTo(body, defaultCountry);
+        checkCurrency(budget, shipTo);
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(summary(refusing(() -> supervisor.start(auth, message, budget))));
+                .body(summary(refusing(() -> supervisor.start(auth, message, budget, shipTo))));
     }
 
     @PostMapping("/api/runs/{id}/messages")
@@ -64,7 +73,31 @@ final class RunController {
         if (body.containsKey("budget_minor") || body.containsKey("currency")) {
             throw ApiException.of(ErrorCode.VALIDATION_FAILED, BUDGET_FIXED);
         }
+        if (body.containsKey("ship_to_country")) {
+            throw ApiException.of(ErrorCode.VALIDATION_FAILED, COUNTRY_FIXED);
+        }
         return summary(refusing(() -> supervisor.answer(auth, run, message)));
+    }
+
+    /**
+     * The owner's change of the run's budget (23.1, P9): {@code POST /api/runs}'s budget rule, in the run's buyer
+     * country's currency; the run's later proposals and its next model call use it. The CSRF check is the interceptor's.
+     */
+    @PatchMapping("/api/runs/{id}/budget")
+    Map<String, Object> changeBudget(AuthContext auth, @PathVariable("id") String id,
+            @RequestBody Map<String, Object> body) {
+        RunId run = runId(id);
+        Optional<Budget> budget = budget(body);
+        RunRecord record = supervisor.get(auth, run).flatMap(RunView::record)
+                .orElseThrow(() -> ApiException.of(ErrorCode.NOT_FOUND));
+        checkCurrency(budget, record.shipTo());
+        if (!supervisor.setBudget(auth, run, budget)) {
+            throw ApiException.of(ErrorCode.NOT_FOUND);
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("run_id", run.value());
+        budget.ifPresent(b -> out.put("budget", budgetJson(b)));
+        return out;
     }
 
     @GetMapping("/api/runs/{id}")
@@ -80,7 +113,22 @@ final class RunController {
         return out;
     }
 
-    /** The 201 and 200 shape of 23.1: {@code run_id, status, reason?, cause?, messages[], intent_ids[]}. */
+    /** 23.1: a budget is in the buyer country's currency. */
+    private static void checkCurrency(Optional<Budget> budget, BuyerCountry shipTo) {
+        if (budget.isPresent() && !budget.get().currency().equals(shipTo.currency())) {
+            throw ApiException.of(ErrorCode.VALIDATION_FAILED, "the budget's currency must be " + shipTo.currency()
+                    + ", the currency of " + shipTo.name());
+        }
+    }
+
+    private static Map<String, Object> budgetJson(Budget b) {
+        return Map.of("amount_minor", b.amountMinor(), "currency", b.currency());
+    }
+
+    /**
+     * The 201 and 200 shape of 23.1: {@code run_id, status, reason?, cause?, budget?, messages[], intent_ids[]}. The
+     * budget is the stored run's current one, so a page loaded again shows what the server holds.
+     */
     private static Map<String, Object> summary(RunView view) {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("run_id", view.id().value());
@@ -90,6 +138,7 @@ final class RunController {
         if (view.reason().equals(Optional.of("model_error"))) {
             view.record().flatMap(RunRecord::cause).ifPresent(c -> out.put("cause", c));
         }
+        view.record().flatMap(RunRecord::budget).ifPresent(b -> out.put("budget", budgetJson(b)));
         List<Map<String, Object>> messages = new ArrayList<>();
         for (RunMessage m : view.messages()) {
             Map<String, Object> message = new LinkedHashMap<>();
@@ -168,6 +217,24 @@ final class RunController {
             throw ApiException.of(ErrorCode.VALIDATION_FAILED, BAD_BUDGET);
         }
         return Optional.of(new Budget(minor, currency));
+    }
+
+    /**
+     * The run's buyer country (23.1), from the body's own field only, never from the message, the buyer's IP or a
+     * header: a country of {@code GET /api/countries}, or the operator's default when absent; anything else is 422.
+     */
+    private static BuyerCountry shipTo(Map<String, Object> body, BuyerCountry fallback) {
+        if (!body.containsKey("ship_to_country")) {
+            return fallback;
+        }
+        if (!(body.get("ship_to_country") instanceof String code)) {
+            throw ApiException.of(ErrorCode.VALIDATION_FAILED, BAD_COUNTRY);
+        }
+        try {
+            return new BuyerCountry(code);
+        } catch (IllegalArgumentException e) {
+            throw ApiException.of(ErrorCode.VALIDATION_FAILED, BAD_COUNTRY);
+        }
     }
 
     private static String message(Map<String, Object> body) {

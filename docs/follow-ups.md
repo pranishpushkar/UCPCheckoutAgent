@@ -23,3 +23,7 @@ owner's, and an item is done only when its condition is met.
   any shared key. Until then the scripted model stays the default for everyone else.
 - **Care needed:** the count is per user from AuthContext only (section 18) and global across the service's workers;
   it is stored, not cached (section 20), and a refused call has no side effects, like a run budget (6.3).
+
+## Deal comparison (from the #34 live re-check from India, 2026-11-20)
+
+- **What:** "Deal comparison: compare listed prices across offers for the same product and size (catalog UPID cluster) in code, show cheaper offers or up to 3 alternatives on the card, and say 'lowest listed price among N offers; shipping, tax and duties are set at each store's checkout.' Strongest first step: the same-item cheapest-offer check." (owner, 2026-11-20)

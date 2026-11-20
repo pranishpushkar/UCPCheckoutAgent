@@ -6,6 +6,7 @@ import dev.ucplab.core.merchant.CallOutcome;
 import dev.ucplab.core.merchant.CatalogProduct;
 import dev.ucplab.core.merchant.CatalogVariant;
 import dev.ucplab.core.merchant.MerchantEntry;
+import dev.ucplab.core.money.MoneyFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -16,7 +17,7 @@ import java.util.Set;
 /**
  * {@code get_product} (6.2): {@code item_id}. Asks every active merchant's catalog at once, through the same limit as
  * {@code search_catalog} ({@link FanOut}), and returns the item of the lowest registry index that has it:
- * {@code {merchant_id, item_id, title, description, price_minor, currency, in_stock, options?}} for the variant with that
+ * {@code {merchant_id, item_id, title, description, price_minor, price, currency, in_stock, options?}} for the variant with that
  * id (the featured variant when the id is a product's). {@code title}, {@code description} and the variant's own
  * {@code options} are wrapped; a product without a
  * description has an empty one. No merchant knows the id: {@code {"error":"not_found"}}; a merchant could not be
@@ -55,7 +56,8 @@ final class GetProductTool implements Tool {
             return ToolOutcome.invalid(e.getMessage());
         }
         List<MerchantEntry> active = ports.merchants().active();
-        List<Optional<CallOutcome<CatalogProduct>>> answers = FanOut.ask(ports, active, c -> c.product(itemId));
+        List<Optional<CallOutcome<CatalogProduct>>> answers = FanOut.ask(ports, active,
+                c -> c.product(itemId, context.shipTo()));
         boolean unavailable = false;
         // Registry order: the first merchant that has the item answers, whatever order they finished in (decision 5).
         for (int i = 0; i < active.size(); i++) {
@@ -87,8 +89,9 @@ final class GetProductTool implements Tool {
         item.put("merchant_id", merchant.id().value());
         item.put("item_id", variant.itemId());
         item.put("title", ToolText.title(product, variant));
-        item.put("description", UntrustedText.wrap("merchant", "description", product.description().orElse("")));
+        item.put("description", ToolText.description(product.description().orElse("")));
         item.put("price_minor", variant.price().minor());
+        item.put("price", MoneyFormat.format(variant.price().minor(), variant.price().currency()));
         item.put("currency", variant.price().currency());
         item.put("in_stock", variant.availability().available());
         if (!variant.options().isEmpty()) {

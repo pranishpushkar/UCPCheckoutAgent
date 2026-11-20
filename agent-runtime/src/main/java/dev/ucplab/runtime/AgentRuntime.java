@@ -12,9 +12,11 @@ import dev.ucplab.core.agent.ToolCall;
 import dev.ucplab.core.agent.ToolEvent;
 import dev.ucplab.core.identity.AuthContext;
 import dev.ucplab.core.intent.Budget;
+import dev.ucplab.core.intent.BuyerCountry;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentNotFoundException;
 import dev.ucplab.core.intent.IntentState;
+import dev.ucplab.core.json.CanonicalJson;
 import dev.ucplab.core.recovery.Sleeper;
 import java.time.Clock;
 import java.time.Duration;
@@ -23,6 +25,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * The agent loop (m5-plan section 4, 6.3, 6.5). For one run: the system prompt and the user's message, then model turns;
@@ -101,16 +104,24 @@ public final class AgentRuntime {
         return start(auth, id, userMessage, user, trace, Optional.empty());
     }
 
-    /**
-     * Starts a run, as {@link #run(AuthContext, RunId, String, UserChannel, RunTrace)}, and returns its conversation too.
-     * {@code userBudget} is the user's own budget for the run (23.1, P9), never anything the model said.
-     */
+    /** Starts a run with the user's budget, for US. */
     public RunSession start(AuthContext auth, RunId id, String userMessage, UserChannel user, RunTrace trace,
                             Optional<Budget> userBudget) {
+        return start(auth, id, userMessage, user, trace, userBudget, BuyerCountry.US);
+    }
+
+    /**
+     * Starts a run, as {@link #run(AuthContext, RunId, String, UserChannel, RunTrace)}, and returns its conversation too.
+     * {@code userBudget} is the user's own budget for the run (23.1, P9) and {@code shipTo} the run's buyer country
+     * (23.1, 26.7), the user's own choice or the operator's default; never anything the model said.
+     */
+    public RunSession start(AuthContext auth, RunId id, String userMessage, UserChannel user, RunTrace trace,
+                            Optional<Budget> userBudget, BuyerCountry shipTo) {
         check(auth, id, userMessage, user, trace);
         Objects.requireNonNull(userBudget, "userBudget");
-        Run run = new Run(auth, id, user, trace, Optional.empty(), userBudget);
-        runs.insert(auth.user(), RunRecord.started(id, auth.user(), run.modelId, run.start, userBudget));
+        Objects.requireNonNull(shipTo, "shipTo");
+        Run run = new Run(auth, id, user, trace, Optional.empty(), userBudget, shipTo);
+        runs.insert(auth.user(), RunRecord.started(id, auth.user(), run.modelId, run.start, userBudget, shipTo));
         return run.execute(new Conversation(SystemPrompt.text(userBudget), List.of()), userMessage);
     }
 
@@ -128,10 +139,12 @@ public final class AgentRuntime {
         Objects.requireNonNull(history, "history");
         RunRecord stored = runs.find(auth.user(), id)
                 .orElseThrow(() -> new IllegalArgumentException("no such run for this user"));
-        Run run = new Run(auth, id, user, trace, Optional.of(stored), stored.budget());
+        Run run = new Run(auth, id, user, trace, Optional.of(stored), stored.budget(), stored.shipTo());
         run.snapshot();
-        // The hint is rebuilt from the stored budget, never carried over from the history (6.4).
-        return run.execute(new Conversation(SystemPrompt.text(stored.budget()), history.messages()), userMessage);
+        // The hint is rebuilt from the stored budget, never carried over from the history (6.4); the earlier turns'
+        // tool results reach the model as one-line summaries (6.3 Earlier turns in the context).
+        return run.execute(new Conversation(SystemPrompt.text(stored.budget()), EarlierTurns.compact(history.messages())),
+                userMessage);
     }
 
     private static void check(AuthContext auth, RunId id, String userMessage, UserChannel user, RunTrace trace) {
@@ -142,10 +155,16 @@ public final class AgentRuntime {
         Objects.requireNonNull(trace, "trace");
     }
 
-    /** One run's state, confined to the run's thread. */
+    /** The refusals after which the rest of a turn's tool calls are stopped (6.2): P2, P3 and P9. */
+    private static final Set<String> STOPPING_REFUSALS = Set.of("policy_P2", "policy_P3", "policy_P9");
+
+    /** One turn of a run, confined to the run's thread: a start, or one continuation (6.2 "Stopped for the turn"). */
     private final class Run {
         private final AuthContext auth;
-        private final ToolContext context;
+        /** Its budget is the run's stored one, read again before every model call (23.1 PATCH budget). */
+        private ToolContext context;
+        /** True after a P2, P3 or P9 refusal: the turn's later tool calls are answered "stopped" without running. */
+        private boolean stopped;
         private final RunTrace trace;
         private final BudgetMeter meter;
         private final ToolRegistry tools;
@@ -163,9 +182,9 @@ public final class AgentRuntime {
         private Conversation conversation;
 
         Run(AuthContext auth, RunId id, UserChannel user, RunTrace trace, Optional<RunRecord> earlier,
-            Optional<Budget> userBudget) {
+            Optional<Budget> userBudget, BuyerCountry shipTo) {
             this.auth = auth;
-            this.context = new ToolContext(auth, id, userBudget);
+            this.context = new ToolContext(auth, id, userBudget, shipTo);
             this.trace = trace;
             this.meter = new BudgetMeter(budget, clock);
             this.tools = ToolRegistry.of(ports, (q, t) -> meter.waitingForUser(() -> user.ask(q, t)), askTimeout);
@@ -208,7 +227,7 @@ public final class AgentRuntime {
             runs.update(auth.user(), new RunRecord(context.runId(), auth.user(), modelId, start, Optional.empty(),
                     Optional.empty(), Optional.empty(), baseModelCalls + meter.modelCalls(),
                     baseToolCalls + meter.toolCalls(), baseInputTokens + meter.usage().inputTokens(),
-                    baseOutputTokens + meter.usage().outputTokens(), intents, events));
+                    baseOutputTokens + meter.usage().outputTokens(), intents, events).withShipTo(context.shipTo()));
         }
 
         RunOutcome loop(Conversation initial) {
@@ -219,10 +238,13 @@ public final class AgentRuntime {
                 if (refused.isPresent()) {
                     return new RunOutcome.BudgetExceeded(refused.get(), intents);
                 }
+                refreshBudget();
                 Instant before = clock.instant();
                 ModelTurn turn;
                 try {
-                    turn = model.generate(conversation, tools.specs());
+                    // 6.3: a search the run has moved past is sent as its summary and ids; the record keeps it whole.
+                    turn = model.generate(new Conversation(conversation.systemPrompt(),
+                            EarlierTurns.superseded(conversation.messages())), tools.specs());
                 } catch (ScriptDriftException e) {
                     throw e;
                 } catch (RuntimeException e) {
@@ -255,7 +277,8 @@ public final class AgentRuntime {
                     Instant called = clock.instant();
                     ToolOutcome outcome;
                     try {
-                        outcome = tool.isPresent() ? tool.get().run(context, call.arguments())
+                        outcome = stopped ? ToolOutcome.stopped()
+                                : tool.isPresent() ? tool.get().run(context, call.arguments())
                                 : ToolOutcome.error("unknown_tool");
                     } catch (RuntimeException e) {
                         // 11: the line names the tool, the exception's class and where it was thrown; never its message.
@@ -270,6 +293,7 @@ public final class AgentRuntime {
                         intents.add(r.intent().get());
                     }
                     conversation = conversation.append(new Message.ToolResult(call.id(), call.name(), outcome.json()));
+                    stopped = stopped || refusedByPolicy(call.name(), outcome);
                     snapshot();
                     if (outcome instanceof ToolOutcome.NoAnswer) {
                         return new RunOutcome.UserTimedOut(
@@ -280,10 +304,32 @@ public final class AgentRuntime {
         }
 
         /**
+         * 23.1, 6.4: the run's stored budget, which the owner may have changed since the last model call, for the tools
+         * and the hint; read fresh every time (20 caches nothing). A run the store no longer returns keeps its budget.
+         */
+        private void refreshBudget() {
+            Optional<Budget> stored = runs.find(auth.user(), context.runId()).map(RunRecord::budget)
+                    .orElse(context.budget());
+            if (!stored.equals(context.budget())) {
+                context = new ToolContext(auth, context.runId(), stored, context.shipTo());
+                conversation = new Conversation(SystemPrompt.text(stored), conversation.messages());
+            }
+        }
+
+        /** 6.2: a propose_purchase answer whose intent a P2, P3 or P9 refusal ended. */
+        private static boolean refusedByPolicy(String tool, ToolOutcome outcome) {
+            if (!tool.equals("propose_purchase") || !(outcome instanceof ToolOutcome.Result r)) {
+                return false;
+            }
+            return CanonicalJson.readObject(r.json()).get("failure_reason") instanceof String reason
+                    && STOPPING_REFUSALS.contains(reason);
+        }
+
+        /**
          * 6.3: how long to wait before trying a failed model call once more, or empty when it is not tried again: only
-         * a retryable failure (HTTP 429, 503 or 504), only with a model call left, and only when the wait, the API's
-         * {@code retryDelay} or {@link AgentRuntime#RETRY_WAIT}, plus {@link AgentRuntime#RETRY_CALL} for the call, still
-         * fits in the wall clock left.
+         * a retryable failure (HTTP 429, 503 or 504, or the client's own timeout), only with a model call left, and only
+         * when the wait, the API's {@code retryDelay} or {@link AgentRuntime#RETRY_WAIT}, plus
+         * {@link AgentRuntime#RETRY_CALL} for the call, still fits in the wall clock left.
          */
         private Optional<Duration> retryWait(RuntimeException failure) {
             if (!(failure instanceof ModelFailure f) || !f.retryable() || !meter.modelCallLeft()) {
@@ -339,7 +385,7 @@ public final class AgentRuntime {
             runs.update(auth.user(), new RunRecord(context.runId(), auth.user(), modelId, start, Optional.of(ended),
                     Optional.of(status), reason, baseModelCalls + meter.modelCalls(), baseToolCalls + meter.toolCalls(),
                     baseInputTokens + meter.usage().inputTokens(), baseOutputTokens + meter.usage().outputTokens(),
-                    intents, events).withCause(cause));
+                    intents, events).withCause(cause).withShipTo(context.shipTo()));
             trace.run(status, detail, cause, baseModelCalls + meter.modelCalls(), baseToolCalls + meter.toolCalls(),
                     baseInputTokens + meter.usage().inputTokens(), baseOutputTokens + meter.usage().outputTokens(),
                     Duration.between(begun, ended));

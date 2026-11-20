@@ -7,6 +7,7 @@ import dev.ucplab.core.agent.RunRecord;
 import dev.ucplab.core.identity.AuthContext;
 import dev.ucplab.core.identity.UserId;
 import dev.ucplab.core.intent.Budget;
+import dev.ucplab.core.intent.BuyerCountry;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentStatus;
 import dev.ucplab.core.intent.Orchestrator;
@@ -108,7 +109,8 @@ class RunStoreNoTextTest {
 
     private static final Orchestrator NO_ORCHESTRATOR = new Orchestrator() {
         @Override
-        public ProposalResult propose(AuthContext auth, MerchantId merchant, List<ProposedLine> lines, String why, Optional<Budget> budget) {
+        public ProposalResult propose(AuthContext auth, MerchantId merchant, List<ProposedLine> lines, String why, Optional<Budget> budget,
+                BuyerCountry shipTo) {
             throw new UnsupportedOperationException();
         }
 

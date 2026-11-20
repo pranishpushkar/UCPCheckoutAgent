@@ -202,7 +202,7 @@ class GetProductFanOutTest {
 
         assertThat(r.json()).isEqualTo("{\"currency\":\"USD\",\"description\":"
                 + dev.ucplab.core.json.CanonicalJson.write(UntrustedText.wrap("merchant", "description", "About Blue Mug"))
-                + ",\"in_stock\":true,\"item_id\":\"item_456\",\"merchant_id\":\"merchant-a\",\"price_minor\":1200,\"title\":"
+                + ",\"in_stock\":true,\"item_id\":\"item_456\",\"merchant_id\":\"merchant-a\",\"price\":\"$12.00\",\"price_minor\":1200,\"title\":"
                 + dev.ucplab.core.json.CanonicalJson.write(ToolText.title(p, p.variants().getFirst())) + "}");
     }
 

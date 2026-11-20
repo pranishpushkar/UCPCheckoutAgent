@@ -1,6 +1,7 @@
 package dev.ucplab.core.agent;
 
 import dev.ucplab.core.identity.UserId;
+import dev.ucplab.core.intent.Budget;
 import dev.ucplab.core.intent.IntentId;
 import java.time.Clock;
 import java.time.Instant;
@@ -49,6 +50,25 @@ public final class InMemoryRunRepository implements RunRepository {
     }
 
     @Override
+    public boolean setBudget(UserId owner, RunId id, Optional<Budget> budget) {
+        Objects.requireNonNull(owner, "owner");
+        Objects.requireNonNull(id, "id");
+        Objects.requireNonNull(budget, "budget");
+        lock.lock();
+        try {
+            RunRecord stored = runs.get(id);
+            if (stored == null || !stored.owner().equals(owner)) {
+                return false;
+            }
+            runs.put(id, stored.withBudget(budget));
+            updated.put(id, clock.instant());
+            return true;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
     public boolean update(UserId owner, RunRecord run) {
         checkOwner(owner, run);
         lock.lock();
@@ -57,7 +77,7 @@ public final class InMemoryRunRepository implements RunRepository {
             if (stored == null || !stored.owner().equals(owner)) {
                 return false;
             }
-            runs.put(run.id(), run.withBudget(stored.budget()));
+            runs.put(run.id(), run.withBudget(stored.budget()).withShipTo(stored.shipTo()));
             updated.put(run.id(), clock.instant());
             return true;
         } finally {

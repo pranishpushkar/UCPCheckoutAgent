@@ -111,7 +111,22 @@ public abstract class PolicyUsageContract {
     }
 
     private long spendOver24h(UserId user) {
-        return usage.committedSpendMinor(user, NOW.minus(DAY), NOW);
+        return usage.committedSpendMinor(user, "USD", NOW.minus(DAY), NOW);
+    }
+
+    // Covers: P3, 9.1 caps per currency, 26.7 (spend is counted per currency: an intent approved in INR adds to INR's
+    // spend only, a USD one to USD's only, and a currency with no spend counts 0; nothing is converted)
+    @Test
+    void spend_isCountedInTheAskedCurrencyOnly() {
+        spent(ALICE, IntentState.COMPLETED, NOW.minusSeconds(60), 700);
+        IntentId inr = intent(ALICE, IntentState.APPROVED, NOW.minusSeconds(30));
+        insert(inr, ALICE, new ApprovalSnapshot(inr, SHOP, new SessionId("s-" + inr.value()),
+                List.of(new SnapshotLine("item_123", 1, 1_500_000)), "INR", 1_500_000, 1_500_000,
+                NOW.plus(Duration.ofMinutes(10))), ApprovalStatus.APPROVED);
+
+        assertThat(usage.committedSpendMinor(ALICE, "USD", NOW.minus(DAY), NOW)).isEqualTo(700);
+        assertThat(usage.committedSpendMinor(ALICE, "INR", NOW.minus(DAY), NOW)).isEqualTo(1_500_000);
+        assertThat(usage.committedSpendMinor(ALICE, "EUR", NOW.minus(DAY), NOW)).isZero();
     }
 
     // Covers: P3, 9.1 (each of the six counted states adds its approved total; the four others add nothing)

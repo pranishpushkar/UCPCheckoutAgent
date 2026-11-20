@@ -149,11 +149,13 @@ class RunsBudgetApiTest {
             assertThat(r.body()).contains("validation_failed");
         }
         assertThat(api.post(alice, "/api/runs", budgeted("hi", 1, "USD")).statusCode()).isEqualTo(201);
-        assertThat(api.post(alice, "/api/runs", budgeted("hi", 1_000_000_000_000L, "EUR")).statusCode()).isEqualTo(201);
+        // 23.1: a budget is in the buyer country's currency, so a EUR budget goes with a country that uses it.
+        assertThat(api.post(alice, "/api/runs", "{\"message\":\"hi\",\"budget_minor\":1000000000000,\"currency\":\"EUR\","
+                + "\"ship_to_country\":\"DE\"}").statusCode()).isEqualTo(201);
         assertThat(api.post(alice, "/api/runs", message("hi")).statusCode()).isEqualTo(201);
     }
 
-    // Covers: 23.1, P9, 6.2 (the budget is fixed for the run: a budget field on a continuation is 422, and the run keeps its
+    // Covers: 23.1, P9, 6.2 (a message never changes the budget, only PATCH does: a budget field on a continuation is 422, and the run keeps its
     // budget, so the next proposal is still refused under it. The budget is the mug's own price: since 6.2 filters the
     // search by the budget, the mug is still found, and its quote, with the lab's tax, is above it)
     @Test

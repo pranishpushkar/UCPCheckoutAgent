@@ -8,6 +8,7 @@ import dev.ucplab.core.id.IdGenerator;
 import dev.ucplab.core.identity.AuthContext;
 import dev.ucplab.core.identity.UserId;
 import dev.ucplab.core.intent.Budget;
+import dev.ucplab.core.intent.BuyerCountry;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentRepository;
 import dev.ucplab.core.intent.IntentState;
@@ -183,6 +184,15 @@ public final class RunSupervisor implements AutoCloseable {
      * the user's own budget for the run, from the request body only (P9).
      */
     public RunView start(AuthContext auth, String message, Optional<Budget> budget) {
+        return start(auth, message, budget, BuyerCountry.US);
+    }
+
+    /**
+     * As above, for the run's buyer country {@code shipTo} (23.1): the request body's, or the operator's default; fixed
+     * for the run.
+     */
+    public RunView start(AuthContext auth, String message, Optional<Budget> budget, BuyerCountry shipTo) {
+        Objects.requireNonNull(shipTo, "shipTo");
         Objects.requireNonNull(auth, "auth");
         Objects.requireNonNull(message, "message");
         refuseWhenClosing();
@@ -202,7 +212,7 @@ public final class RunSupervisor implements AutoCloseable {
         CompletableFuture<Phase> first = run.settled.get();
         RunTrace trace = new RunTrace(id);
         Objects.requireNonNull(budget, "budget");
-        launch(run, trace, () -> runtime.start(auth, id, message, run.channel(), trace, budget));
+        launch(run, trace, () -> runtime.start(auth, id, message, run.channel(), trace, budget, shipTo));
         return await(run, first);
     }
 
@@ -368,6 +378,17 @@ public final class RunSupervisor implements AutoCloseable {
             Thread.currentThread().interrupt();
         }
         return liveView(run);
+    }
+
+    /**
+     * The owner's change of the run's budget (23.1 {@code PATCH /api/runs/{run_id}/budget}, P9): stored at once, also while
+     * the run works or waits, and read by the run before its next model call. False when the run is not the caller's or
+     * does not exist (T6). An intent already proposed keeps the budget it was proposed under.
+     */
+    public boolean setBudget(AuthContext auth, RunId id, Optional<Budget> budget) {
+        Objects.requireNonNull(auth, "auth");
+        Objects.requireNonNull(id, "id");
+        return runs.setBudget(auth.user(), id, budget);
     }
 
     /** The run as the caller sees it, or empty when it is not theirs or does not exist (T6). */

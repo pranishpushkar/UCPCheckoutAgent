@@ -16,6 +16,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
 /**
@@ -37,12 +38,18 @@ final class FanOut {
     /** The outcome of each merchant in {@code active}'s order, whatever order they finished in; empty if it was not had. */
     static <T> List<Optional<CallOutcome<T>>> ask(ToolPorts ports, List<MerchantEntry> active,
                                                   Function<CatalogGateway, CallOutcome<T>> call) {
+        return ask(ports, active, (merchant, catalog) -> call.apply(catalog));
+    }
+
+    /** As {@link #ask(ToolPorts, List, Function)}, with a call that may differ by merchant. */
+    static <T> List<Optional<CallOutcome<T>>> ask(ToolPorts ports, List<MerchantEntry> active,
+                                                  BiFunction<MerchantEntry, CatalogGateway, CallOutcome<T>> call) {
         ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
         try {
             List<Future<CallOutcome<T>>> futures = new ArrayList<>();
             for (MerchantEntry merchant : active) {
                 CatalogGateway catalog = ports.catalogs().get(merchant.id());
-                futures.add(catalog == null ? null : pool.submit(() -> call.apply(catalog)));
+                futures.add(catalog == null ? null : pool.submit(() -> call.apply(merchant, catalog)));
             }
             long started = System.nanoTime();
             // Awaited in deadline order, so each merchant is held to its own limit: a store is cancelled at the store

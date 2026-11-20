@@ -88,10 +88,14 @@ public final class GeminiException extends RuntimeException implements ModelFail
         return cause;
     }
 
-    /** 6.3: only an HTTP 429, 503 or 504 may succeed when tried again. */
+    /**
+     * 6.3: only an HTTP 429, 503 or 504, or our own client's timeout (the 504's deadline seen from our side, when the API's
+     * answer does not arrive first), may succeed when tried again. A dropped connection is not tried again.
+     */
     @Override
     public boolean retryable() {
-        return cause.equals("http_429") || cause.equals("http_503") || cause.equals("http_504");
+        return cause.equals("http_429") || cause.equals("http_503") || cause.equals("http_504")
+                || cause.equals("timeout");
     }
 
     @Override

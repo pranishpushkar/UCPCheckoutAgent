@@ -214,6 +214,7 @@ public final class SqlApprovalRepository implements ApprovalRepository {
             link.put("sellerName", l.sellerName());
             link.put("sellerDomain", l.sellerDomain());
             l.sellerSite().ifPresent(site -> link.put("sellerSite", site));
+            l.shipsTo().ifPresent(country -> link.put("shipsTo", country));
             link.put("url", l.url().value().toString());
             m.put("link", link);
         });
@@ -250,13 +251,16 @@ public final class SqlApprovalRepository implements ApprovalRepository {
                 link(m.get("link")));
     }
 
-    /** A stored link, or none for a snapshot without one (every snapshot stored before 26.7). */
+    /**
+     * A stored link, or none for a snapshot without one (every snapshot stored before 26.7); its shipsTo only when it
+     * was stored with one.
+     */
     private static Optional<LinkSnapshot> link(Object stored) {
         if (!(stored instanceof Map<?, ?> l)) {
             return Optional.empty();
         }
         return Optional.of(new LinkSnapshot((String) l.get("sellerName"), (String) l.get("sellerDomain"),
-                Optional.ofNullable((String) l.get("sellerSite")),
+                Optional.ofNullable((String) l.get("sellerSite")), Optional.ofNullable((String) l.get("shipsTo")),
                 ContinueUrl.parse((String) l.get("url")).orElseThrow(
                         () -> new IllegalStateException("a stored link snapshot's url does not parse"))));
     }

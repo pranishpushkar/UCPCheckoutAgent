@@ -1,5 +1,6 @@
 package dev.ucplab.core.merchant;
 
+import dev.ucplab.core.intent.BuyerCountry;
 import java.util.List;
 
 /**
@@ -31,4 +32,12 @@ public interface CatalogGateway {
      * (the merchant answers it with HTTP 200 and {@code ucp.status} error, an unrecoverable business outcome).
      */
     CallOutcome<CatalogProduct> product(String id);
+
+    /**
+     * One product, read for the run's buyer country (23.1). A merchant that reads no country answers as
+     * {@link #product(String)}; the Global Catalog reads it (26.7).
+     */
+    default CallOutcome<CatalogProduct> product(String id, BuyerCountry shipTo) {
+        return product(id);
+    }
 }

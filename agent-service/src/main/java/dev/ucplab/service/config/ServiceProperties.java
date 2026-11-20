@@ -3,6 +3,7 @@ package dev.ucplab.service.config;
 import dev.ucplab.core.agent.ModelKey;
 import dev.ucplab.core.approval.ApprovalSecret;
 import dev.ucplab.core.config.AgentProfile;
+import dev.ucplab.core.intent.BuyerCountry;
 import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantStatus;
@@ -79,6 +80,9 @@ public final class ServiceProperties {
     static final String MODEL_KEY_UNSAFE = "GEMINI_API_KEY holds a character an HTTP header cannot carry (only visible ASCII)";
     static final String MODEL_URL_INVALID = "GEMINI_BASE_URL must be an http URL on a loopback address";
     static final String ORIGIN_INVALID = "PUBLIC_ORIGIN must be a scheme, host and optional port, with no path";
+    /** 23.1: fixed, as every refusal here is. */
+    static final String BUYER_COUNTRY_INVALID =
+            "BUYER_COUNTRY must be two upper-case letters naming a country with one currency (ISO 3166-1, ISO 4217)";
 
     /** Which model drives the agent (25.4 {@code AGENT_MODEL}); {@code scripted} needs no key and no network. */
     public enum AgentModel { SCRIPTED, GEMINI }
@@ -112,13 +116,15 @@ public final class ServiceProperties {
     private final URI shopifyTokenEndpoint;
     private final URI ucpAgentProfile;
     private final String ucpAgentVersion;
+    private final BuyerCountry buyerCountry;
 
     private ServiceProperties(AgentProfile profile, Path databaseFile, byte[] approvalSecret, ApprovalSecret approvalKey,
                               PolicyConfig policy, MerchantEntry merchant, List<MerchantSettings> merchants,
                               List<String> localUsers,
                               List<String> publicOrigins, AgentModel agentModel, Optional<ModelKey> modelKey,
                               Optional<URI> modelBaseUrl, URI merchantLabUrl, Optional<BuyerIp> buyerIp,
-                              URI shopifyTokenEndpoint, URI ucpAgentProfile, String ucpAgentVersion) {
+                              URI shopifyTokenEndpoint, URI ucpAgentProfile, String ucpAgentVersion,
+                              BuyerCountry buyerCountry) {
         this.profile = profile;
         this.databaseFile = databaseFile;
         this.approvalSecret = approvalSecret;
@@ -136,6 +142,7 @@ public final class ServiceProperties {
         this.shopifyTokenEndpoint = shopifyTokenEndpoint;
         this.ucpAgentProfile = ucpAgentProfile;
         this.ucpAgentVersion = ucpAgentVersion;
+        this.buyerCountry = buyerCountry;
     }
 
     /** Reads and checks every setting; throws {@link IllegalStateException} with a fixed message on the first refusal. */
@@ -269,7 +276,20 @@ public final class ServiceProperties {
         return new ServiceProperties(profile, databaseFile, secretBytes, approvalKey, policy, first.entry(first.fileStatus()), merchants, localUsers,
                 origins(env.get("PUBLIC_ORIGIN").orElse(DEFAULT_ORIGINS)), agentModel,
                 agentModel == AgentModel.GEMINI ? modelKey : Optional.empty(), modelBaseUrl, first.labUrl().orElse(fallbackLab), buyerIp, tokenEndpoint,
-                agentProfile, agentVersion);
+                agentProfile, agentVersion, buyerCountry(env));
+    }
+
+    /** 23.1, 26.7: the operator's default buyer country, US when unset; a code BuyerCountry refuses stops startup. */
+    private static BuyerCountry buyerCountry(Environment env) {
+        Optional<String> code = env.get("BUYER_COUNTRY");
+        if (code.isEmpty()) {
+            return BuyerCountry.US;
+        }
+        try {
+            return new BuyerCountry(code.get());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalStateException(BUYER_COUNTRY_INVALID);
+        }
     }
 
     /**
@@ -431,6 +451,11 @@ public final class ServiceProperties {
     /** The merchant as the lab reaches it directly, for ground-truth reads and resets (local profile only). */
     public URI merchantLabUrl() {
         return merchantLabUrl;
+    }
+
+    /** The operator's default buyer country (23.1 {@code BUYER_COUNTRY}), US when unset. */
+    public BuyerCountry buyerCountry() {
+        return buyerCountry;
     }
 
     public AgentModel agentModel() {

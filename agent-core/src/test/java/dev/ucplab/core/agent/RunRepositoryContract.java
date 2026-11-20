@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.ucplab.core.identity.UserId;
 import dev.ucplab.core.intent.Budget;
+import dev.ucplab.core.intent.BuyerCountry;
 import dev.ucplab.core.intent.IntentId;
 import java.time.Duration;
 import java.time.Instant;
@@ -80,6 +81,48 @@ public abstract class RunRepositoryContract {
 
         repo.insert(ALICE, RunRecord.started(new RunId("r2"), ALICE, "scripted", T0));
         assertThat(repo.find(ALICE, new RunId("r2"))).hasValueSatisfying(r -> assertThat(r.budget()).isEmpty());
+    }
+
+    // Covers: 23.1, 10 (V13) (a run's buyer country is stored at insert and kept by an update; a run started without one
+    // reads back as US)
+    @Test
+    void theRunsBuyerCountry_isStoredAtInsert_andKeptByUpdates() {
+        BuyerCountry india = new BuyerCountry("IN");
+        repo.insert(ALICE, RunRecord.started(new RunId("r1"), ALICE, "scripted", T0, Optional.empty(), india));
+
+        assertThat(repo.find(ALICE, new RunId("r1"))).hasValueSatisfying(r -> assertThat(r.shipTo()).isEqualTo(india));
+        assertThat(repo.update(ALICE, ended("r1", ALICE, List.of(I1)))).isTrue();
+        assertThat(repo.findForSystem(new RunId("r1"))).hasValueSatisfying(r -> {
+            assertThat(r.shipTo()).isEqualTo(india);
+            assertThat(r.outcome()).isPresent();
+        });
+
+        repo.insert(ALICE, RunRecord.started(new RunId("r2"), ALICE, "scripted", T0));
+        assertThat(repo.find(ALICE, new RunId("r2"))).hasValueSatisfying(
+                r -> assertThat(r.shipTo()).isEqualTo(BuyerCountry.US));
+    }
+
+    // Covers: 23.1 PATCH budget, P9, T6 (the owner's setBudget changes the run's budget and an update keeps it; an empty
+    // budget clears it; another owner's call, or an unknown run, is false and changes nothing)
+    @Test
+    void setBudget_changesTheOwnersRunsBudget_andAnUpdateKeepsIt() {
+        repo.insert(ALICE, RunRecord.started(new RunId("r1"), ALICE, "scripted", T0, Optional.of(new Budget(50_000, "INR")),
+                new BuyerCountry("IN")));
+
+        assertThat(repo.setBudget(ALICE, new RunId("r1"), Optional.of(new Budget(1_500_000, "INR")))).isTrue();
+        assertThat(repo.find(ALICE, new RunId("r1"))).hasValueSatisfying(
+                r -> assertThat(r.budget()).contains(new Budget(1_500_000, "INR")));
+        assertThat(repo.update(ALICE, ended("r1", ALICE, List.of(I1)))).isTrue();
+        assertThat(repo.find(ALICE, new RunId("r1"))).hasValueSatisfying(
+                r -> assertThat(r.budget()).contains(new Budget(1_500_000, "INR")));
+
+        assertThat(repo.setBudget(BOB, new RunId("r1"), Optional.empty())).isFalse();
+        assertThat(repo.setBudget(ALICE, new RunId("missing"), Optional.empty())).isFalse();
+        assertThat(repo.findForSystem(new RunId("r1"))).hasValueSatisfying(
+                r -> assertThat(r.budget()).contains(new Budget(1_500_000, "INR")));
+
+        assertThat(repo.setBudget(ALICE, new RunId("r1"), Optional.empty())).isTrue();
+        assertThat(repo.find(ALICE, new RunId("r1"))).hasValueSatisfying(r -> assertThat(r.budget()).isEmpty());
     }
 
     // Covers: 6.5, 23.1, 10 (V12) (a model_error's cause is stored by the update that ends the run and read back; a

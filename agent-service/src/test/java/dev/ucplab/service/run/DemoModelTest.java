@@ -44,7 +44,7 @@ class DemoModelTest {
         assertThat(after("{\"budget\":{\"amount_minor\":75000,\"currency\":\"USD\"},\"failure_reason\":\"policy_P9\","
                 + "\"intent_id\":\"i1\",\"quoted\":{\"currency\":\"EUR\",\"total_minor\":78595},"
                 + "\"state\":\"FAILED_NOT_CHARGED\"}"))
-                .isEqualTo("Over your budget of $750.00; the closest I found was EUR 785.95");
+                .isEqualTo("Over your budget of $750.00; the closest I found was €785.95");
     }
 
     // Covers: 24.3, 6.2, 6.4 (after any other state, or a P9 result without both numbers, a fixed line: no approval

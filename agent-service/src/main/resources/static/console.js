@@ -42,10 +42,66 @@ function setStatus(text, isError) {
   node.className = isError ? "status error" : "status";
 }
 
-function money(minor, currency) {
-  const amount = (Number(minor) / 100).toFixed(2);
-  return (currency === "USD" || !currency ? "$" : currency + " ") + amount;
+// <money>
+// 24.3 money format: an amount from its minor units as a string of digits, never through floating point. The currency's
+// own minor digits (JPY 0, INR 2, KWD 3) and English symbol come from the browser's CLDR en data, as the service's come
+// from the JDK's; 2 digits and the code itself for a code it does not know. The whole part is grouped, Indian grouping
+// for INR and threes otherwise: ₹1,50,000.00, $224.98.
+function minorDigits(currency) {
+  try {
+    return new Intl.NumberFormat("en", {style: "currency", currency: currency}).resolvedOptions().maximumFractionDigits;
+  } catch (e) {
+    return 2;
+  }
 }
+
+// The currency's symbol, formatted from zero only to read it; one that ends in a letter (CHF) takes a space.
+function currencySymbol(currency) {
+  let symbol = currency;
+  try {
+    symbol = new Intl.NumberFormat("en", {style: "currency", currency: currency})
+        .formatToParts(0).find((part) => part.type === "currency").value;
+  } catch (e) {
+    symbol = currency;
+  }
+  return /[A-Za-z]$/.test(symbol) ? symbol + " " : symbol;
+}
+
+// The whole part's digits grouped: the last three, then pairs for INR and threes for every other currency.
+function grouped(whole, currency) {
+  if (whole.length <= 3) {
+    return whole;
+  }
+  const size = currency === "INR" ? 2 : 3;
+  let rest = whole.slice(0, -3);
+  const groups = [whole.slice(-3)];
+  while (rest.length > size) {
+    groups.unshift(rest.slice(-size));
+    rest = rest.slice(0, -size);
+  }
+  groups.unshift(rest);
+  return groups.join(",");
+}
+
+// A string of minor units as an amount with its point, no symbol and no grouping: "12000.00" for "1200000" at 2 digits.
+function plainAmount(minorText, digits) {
+  const negative = minorText.startsWith("-");
+  const magnitude = (negative ? minorText.slice(1) : minorText).padStart(digits + 1, "0");
+  const whole = magnitude.slice(0, magnitude.length - digits);
+  return (negative ? "-" : "") + whole + (digits > 0 ? "." + magnitude.slice(magnitude.length - digits) : "");
+}
+
+function money(minor, currency) {
+  if (!currency) {
+    return money(minor, "USD");
+  }
+  const plain = plainAmount(String(minor), minorDigits(currency));
+  const negative = plain.startsWith("-");
+  const [whole, fraction] = (negative ? plain.slice(1) : plain).split(".");
+  return (negative ? "-" : "") + currencySymbol(currency) + grouped(whole, currency)
+      + (fraction === undefined ? "" : "." + fraction);
+}
+// </money>
 
 // One request. A 401 goes to the sign-in page, as 24.3 says; every other error comes back as {code, message}.
 async function api(method, path, body) {
@@ -125,6 +181,7 @@ async function boot() {
   csrf = me.headers.get("X-CSRF-Token") || "";
   $("who").textContent = me.data.email;
   showModel(me.data);
+  loadCountries(me.data);
   $("sign-out").hidden = false;
   $("sign-out").addEventListener("click", signOut);
   $("send").addEventListener("submit", send);
@@ -135,6 +192,7 @@ async function boot() {
   $("budget-currency").addEventListener("change", () => {
     budgetTouched = true;
   });
+  $("ship-to").addEventListener("change", onShipToChange);
   document.querySelectorAll("[data-preset]").forEach((button) => {
     button.addEventListener("click", () => preset(button.getAttribute("data-preset")));
   });
@@ -149,8 +207,34 @@ async function boot() {
     setStatus("Signed in again. Review the approval and decide.");
   } else {
     setStatus("Ready.");
+    await restoreRun();
   }
 }
+
+// <restore>
+// 24.3, 21: a page loaded again shows its run. The run's id is in the URL fragment (#run=<run_id>), never in browser
+// storage, and everything shown, the Budget field included, comes from GET /api/runs/{run_id}: another user's run or a
+// gone one is 404 and the page starts empty.
+async function restoreRun() {
+  const m = /^#run=([^&#]{1,128})$/.exec(location.hash);
+  if (!m) {
+    return;
+  }
+  let id;
+  try {
+    id = decodeURIComponent(m[1]);
+  } catch (e) {
+    return;
+  }
+  const result = await api("GET", "/api/runs/" + encodeURIComponent(id));
+  if (!result.ok) {
+    history.replaceState(null, "", location.pathname);
+    return;
+  }
+  showRun(result.data);
+  showRunBudget(result.data.budget);
+}
+// </restore>
 
 async function signOut() {
   await api("POST", "/auth/logout", {});
@@ -160,69 +244,169 @@ async function signOut() {
 // ---- the agent panel --------------------------------------------------------------------------------------------
 
 // <budget>
-// 24.3: the optional Budget field. As the user types a first message, the console fills the field, visibly, from an
-// amount with a limit word, until the user edits or clears the field or changes its currency. Only what the field holds
-// when the user presses Send is sent (23.1); the server never parses the message, and neither does send().
+// 24.3: the optional Budget field. As the user types, the console fills the field, visibly, from an amount with a limit
+// word, until the user edits or clears the field or changes its currency; on a follow-up it only ever fills it. Only what
+// the field holds when the user presses Send is sent (23.1); the server never parses the message, and neither does
+// send(). While a run continues, the field shows the run's current budget, from the server's run answers only
+// (runBudget), and a field that differs from it is sent as PATCH /api/runs/{run_id}/budget before the message.
 let budgetTouched = false;
+let runBudget = null;
+let budgetNote = "";
 
-const BUDGET_AMOUNT = "([$€£]|USD|EUR|GBP)?\\s*((?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d{1,2})?)\\s*(USD|EUR|GBP)?";
-const BUDGET_LIMIT = new RegExp(
-    "\\b(?:under|below|maximum|max|no more than|at most|less than)\\s+" + BUDGET_AMOUNT
-    + "|" + BUDGET_AMOUNT + "\\s+or less\\b", "i");
-const BUDGET_SIGNS = {"$": "USD", "€": "EUR", "£": "GBP"};
+// One pattern, three forms, each an optional sign or code, an amount (Indian grouping 1,50,000 too) and an optional
+// code: a limit word before it (groups 1-3), "or less" after it (4-6), or a budget word before it (7-9), the only form
+// that may leave out the currency and take the field's.
+const BUDGET_LIMIT = /\b(?:under|below|maximum|max|no more than|at most|less than|up to)\s+((?<![a-z])(?:[$€£₹]|USD|EUR|GBP|INR|rs\.?))?\s*((?:\d{1,3}(?:,\d{2})+,\d{3}|\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)\s*((?:USD|EUR|GBP|INR|rupees|rupee|rs)(?![a-z])\.?)?|((?<![a-z])(?:[$€£₹]|USD|EUR|GBP|INR|rs\.?))?\s*((?:\d{1,3}(?:,\d{2})+,\d{3}|\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)\s*((?:USD|EUR|GBP|INR|rupees|rupee|rs)(?![a-z])\.?)?\s+or less\b|\bbudget(?:\s+(?:of|to|is))?\s+((?<![a-z])(?:[$€£₹]|USD|EUR|GBP|INR|rs\.?))?\s*((?:\d{1,3}(?:,\d{2})+,\d{3}|\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)\s*((?:USD|EUR|GBP|INR|rupees|rupee|rs)(?![a-z])\.?)?/i;
+const BUDGET_SIGNS = {"$": "USD", "€": "EUR", "£": "GBP", "₹": "INR", "rs": "INR", "rs.": "INR", "rupee": "INR",
+  "rupees": "INR"};
 
-// An amount with a limit word and a sign or code ("under $500", "max 80 EUR", "£40 or less"), or null.
+// A word after a sign-less amount that says it is not money ("under 2 kg", "under 3 days", "under 700 UK").
+const BUDGET_NOT_MONEY = /^\s*(?:kg|g|cm|mm|years?|yrs?|days?|months?|size|uk|us|eu|pack|pcs|%|x)(?![a-z])/i;
+
+function budgetCurrency(sign) {
+  return BUDGET_SIGNS[sign.toLowerCase()] || sign.toUpperCase();
+}
+
+// An amount with a limit word and a sign or code ("under $500", "max 80 EUR", "£40 or less", "under 500 rupees",
+// "Rs.500 or less"), or after a budget word with or without one ("budget to 15000"), or null. Without a sign or code it
+// takes the field's currency; after a limit word it must then be 100 or more with no unit after it ("shoes under 15000",
+// not "kids under 10" or "under 2 kg").
 function budgetFromMessage(text) {
   const m = BUDGET_LIMIT.exec(text);
   if (!m) {
     return null;
   }
-  const sign = m[1] || m[3] || m[4] || m[6];
-  const amount = m[2] || m[5];
-  if (!sign) {
+  const sign = m[1] || m[3] || m[4] || m[6] || m[7] || m[9];
+  const amount = m[2] || m[5] || m[8];
+  const named = Boolean(m[8]);
+  if (!sign && !named && (Number(amount.replace(/,/g, "")) < 100
+      || BUDGET_NOT_MONEY.test(text.slice(m.index + m[0].length)))) {
     return null;
   }
-  return {amount: amount.replace(/,/g, ""), currency: BUDGET_SIGNS[sign] || sign.toUpperCase()};
+  return {amount: amount.replace(/,/g, ""),
+    currency: sign ? budgetCurrency(sign) : $("budget-currency").value};
 }
 
 function continuingRun() {
   return Boolean(currentRun && RUN_WAITING.includes(currentRun.status));
 }
 
+// The field's currency, added as a choice when the list does not have it.
+function showCurrency(currency) {
+  const known = Array.from($("budget-currency").options).some((o) => o.value === currency);
+  if (!known) {
+    $("budget-currency").appendChild(el("option", currency));
+  }
+  $("budget-currency").value = currency;
+}
+
 function onMessageInput() {
-  if (budgetTouched || continuingRun()) {
+  if (budgetTouched) {
     return;
   }
   const found = budgetFromMessage($("message").value);
-  $("budget").value = found ? found.amount : "";
   if (found) {
-    $("budget-currency").value = found.currency;
+    $("budget").value = found.amount;
+    showCurrency(found.currency);
+  } else if (!continuingRun()) {
+    $("budget").value = "";
   }
 }
 
-// The field as budget_minor and currency: {} when it is empty, null when it is not an amount of at least 0.01.
+// The run's budget from the server, in the field: an amount in the currency's own minor digits, or empty.
+function showRunBudget(budget) {
+  if (!budget) {
+    $("budget").value = "";
+    return;
+  }
+  $("budget").value = plainAmount(String(budget.amount_minor), minorDigits(budget.currency));
+  showCurrency(budget.currency);
+}
+
+// True when the field, as budgetToSend gives it, is the run's current budget.
+function fieldMatchesRun(field) {
+  if (!runBudget) {
+    return field.budget_minor === undefined;
+  }
+  return field.budget_minor === runBudget.amount_minor && field.currency === runBudget.currency;
+}
+
+// 24.3: after a PATCH, the status line names the change ahead of the run's own status, once the run has settled.
+function showBudgetNote(run, statusText) {
+  if (budgetNote && run.status !== "running") {
+    setStatus(budgetNote + " " + statusText);
+    budgetNote = "";
+  }
+}
+
+// 23.2: a card's budget differs from the run's current one, so it was proposed under an earlier budget.
+function budgetChanged(budget) {
+  return Boolean(currentRun) && !(runBudget && runBudget.amount_minor === budget.amount_minor
+      && runBudget.currency === budget.currency);
+}
+
+// The field as budget_minor and currency, in the currency's own minor digits: {} when it is empty, null when it is not an
+// amount of at least one minor unit.
 function budgetToSend() {
   const raw = $("budget").value.trim().replace(/,/g, "");
   if (raw === "") {
     return {};
   }
-  const m = /^(\d{1,10})(?:\.(\d{1,2}))?$/.exec(raw);
+  const currency = $("budget-currency").value;
+  const digits = minorDigits(currency);
+  const m = new RegExp("^(\\d{1,10})" + (digits > 0 ? "(?:\\.(\\d{1," + digits + "}))?" : "") + "$").exec(raw);
   if (!m) {
     return null;
   }
-  const minor = Number(m[1]) * 100 + Number((m[2] || "0").padEnd(2, "0"));
+  // The digits joined as a string, then read once as an integer below 2^53: no floating-point arithmetic (24.3).
+  const minor = Number(m[1] + (m[2] || "").padEnd(digits, "0"));
   if (minor < 1) {
     return null;
   }
-  return {budget_minor: minor, currency: $("budget-currency").value};
+  return {budget_minor: minor, currency: currency};
 }
 
-// While a run continues, the field keeps the run's budget and cannot change: the budget is fixed for the run.
+// While a run continues, Deliver to keeps the run's country and cannot change; the Budget field stays editable (23.1).
 function showBudgetField() {
-  $("budget").disabled = continuingRun();
-  $("budget-currency").disabled = continuingRun();
+  $("ship-to").disabled = continuingRun();
 }
 // </budget>
+
+// <ship-to>
+// 24.3, 23.1: Deliver to, always visible. Its choices are GET /api/countries by name, set as text; it starts at the
+// operator's default from /api/me and is sent as ship_to_country on a new run only. Changing it sets the Budget field's
+// currency to the country's, so a budget the server refuses for its currency is rare. Nothing is kept in browser storage.
+let countries = [];
+
+async function loadCountries(me) {
+  const answer = await api("GET", "/api/countries");
+  if (!answer.ok) {
+    return;
+  }
+  countries = answer.data.countries;
+  const select = $("ship-to");
+  clear(select);
+  countries.forEach((country) => {
+    const option = el("option", country.name);
+    option.value = country.country;
+    select.appendChild(option);
+  });
+  $("ship-to").value = me.buyer_country.country;
+  onShipToChange();
+}
+
+function onShipToChange() {
+  const country = countries.find((c) => c.country === $("ship-to").value);
+  if (!country) {
+    return;
+  }
+  const known = Array.from($("budget-currency").options).some((o) => o.value === country.currency);
+  if (!known) {
+    $("budget-currency").appendChild(el("option", country.currency));
+  }
+  $("budget-currency").value = country.currency;
+}
+// </ship-to>
 
 // <working>
 // 24.3: while a run works. Send is disabled and reads "Working…", and an agent bubble reads "Thinking…", then the step
@@ -310,11 +494,13 @@ async function send(event) {
     return;
   }
   const continuing = continuingRun();
-  const budget = continuing ? {} : budgetToSend();
+  const budget = budgetToSend();
+  const shipTo = continuing ? {} : {ship_to_country: $("ship-to").value};
   if (budget === null) {
     setStatus("Enter the budget as an amount such as 500 or 499.99, or leave it empty.", true);
     return;
   }
+  budgetNote = "";
   input.value = "";
   if (!continuing) {
     clear($("chat"));
@@ -322,9 +508,22 @@ async function send(event) {
   }
   $("chat").appendChild(el("li", text, "user"));
   startWorking();
+  // 23.1: a changed field goes first, as the owner's PATCH; a refused change sends no message.
+  if (continuing && !fieldMatchesRun(budget)) {
+    const changed = await api("PATCH", "/api/runs/" + currentRun.id + "/budget", budget);
+    if (!changed.ok) {
+      stopWorking();
+      setStatus(errorText(changed), true);
+      return;
+    }
+    budgetNote = changed.data.budget
+        ? "Budget updated to " + money(changed.data.budget.amount_minor, changed.data.budget.currency)
+            + " for new proposals."
+        : "Budget removed for new proposals.";
+  }
   const result = continuing
       ? await api("POST", "/api/runs/" + currentRun.id + "/messages", {message: text})
-      : await api("POST", "/api/runs", Object.assign({message: text}, budget));
+      : await api("POST", "/api/runs", Object.assign({message: text}, budget, shipTo));
   if (!result.ok) {
     stopWorking();
     setStatus(errorText(result), true);
@@ -386,7 +585,14 @@ function runEnd(run) {
 // </run-end>
 
 function showRun(run) {
+  const sameRun = Boolean(currentRun) && currentRun.id === run.run_id;
+  const before = runBudget;
   currentRun = {id: run.run_id, status: run.status, intents: run.intent_ids || []};
+  runBudget = run.budget || null;
+  if (sameRun && JSON.stringify(before) !== JSON.stringify(runBudget)) {
+    showRunBudget(runBudget);
+  }
+  history.replaceState(null, "", "#run=" + encodeURIComponent(run.run_id));
   clear($("chat"));
   (run.messages || []).forEach((m) => {
     const item = el("li", m.text, m.role + (m.kind === "question" ? " question" : ""));
@@ -402,6 +608,7 @@ function showRun(run) {
     stopWorking();
     setStatus(statusText);
   }
+  showBudgetNote(run, statusText);
   if (run.tool_events) {
     showChips(run.tool_events);
   }
@@ -524,6 +731,9 @@ function showApprovalCard(id, approvalResponse) {
   if (linked) {
     heading.appendChild(el("p", "From " + approval.seller.name, "muted"));
     heading.appendChild(el("span", "Shopify catalog", "pill"));
+    if (approval.ships_to) {
+      heading.appendChild(el("p", "Listed as shipping to " + approval.ships_to.name, "muted"));
+    }
   } else {
     heading.appendChild(el("p", "From " + snapshot.merchant_id, "muted"));
   }
@@ -581,7 +791,10 @@ function showApprovalCard(id, approvalResponse) {
   table.appendChild(body);
   table.appendChild(foot);
   card.appendChild(table);
-  if (linked && approval.budget) {
+  if (approval.budget && budgetChanged(approval.budget)) {
+    card.appendChild(el("p", "Proposed under your earlier budget of "
+        + money(approval.budget.amount_minor, approval.budget.currency), "budget-line"));
+  } else if (linked && approval.budget) {
     card.appendChild(el("p", "Your budget: " + money(approval.budget.amount_minor, approval.budget.currency)
         + " (before the store's shipping and tax)", "budget-line"));
   } else if (approval.budget) {
@@ -838,7 +1051,7 @@ const REASON_TEXT = new Map([
   ["handoff_timeout", "The handoff to the store timed out: no order was placed"],
   ["price_unstable", "The store's price kept changing: no order was placed"],
   ["policy_P1", "This store is not allowed: no order was placed"],
-  ["policy_P2", "Above the limit for one purchase: no order was placed"],
+  ["policy_P2", "Above the limit for one purchase, or in a currency with no limit set: no order was placed"],
   ["policy_P3", "Above your limit for the last 24 hours: no order was placed"],
   ["policy_P4", "Too many items or too large a quantity: no order was placed"],
   ["policy_P5", "Too many proposals in the last hour: no order was placed"],

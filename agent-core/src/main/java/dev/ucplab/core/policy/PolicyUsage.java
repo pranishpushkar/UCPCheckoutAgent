@@ -13,12 +13,13 @@ public interface PolicyUsage {
 
     /**
      * P3, called with the last 24 hours as a rolling window, not a calendar day.
-     * Total in minor units of the user's intents created in the window whose spend is committed
-     * or may have happened: AWAITING_APPROVAL, APPROVED, COMPLETING, RECONCILING, COMPLETED or
-     * ESCALATED. An intent in PROPOSED or QUOTING, which includes the one being evaluated, is not
-     * counted, so a re-quote is not counted twice.
+     * Total in minor units of {@code currency} of the user's intents created in the window whose
+     * spend is committed or may have happened: AWAITING_APPROVAL, APPROVED, COMPLETING, RECONCILING,
+     * COMPLETED or ESCALATED, and whose newest approval is in {@code currency}; another currency's
+     * spend is never added or converted (9.1). An intent in PROPOSED or QUOTING, which includes the
+     * one being evaluated, is not counted, so a re-quote is not counted twice.
      */
-    long committedSpendMinor(UserId user, Instant from, Instant to);
+    long committedSpendMinor(UserId user, String currency, Instant from, Instant to);
 
     /** P5. Number of proposals the user made in the window. */
     int proposalCount(UserId user, Instant from, Instant to);

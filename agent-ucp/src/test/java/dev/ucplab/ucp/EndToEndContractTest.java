@@ -66,7 +66,7 @@ class EndToEndContractTest extends ContractTestBase {
                         : Optional.empty(),
                 new PolicyUsage() {
                     @Override
-                    public long committedSpendMinor(UserId user, Instant from, Instant to) {
+                    public long committedSpendMinor(UserId user, String currency, Instant from, Instant to) {
                         return 0;
                     }
 

@@ -53,8 +53,63 @@ class RuleBasedPolicyEngineTest {
     }
 
     private static CheckoutView quote(long totalMinor, List<LineView> lines) {
-        return new CheckoutView(new SessionId("chk_1"), CheckoutStatus.READY_FOR_COMPLETE, "USD", lines,
+        return quote(totalMinor, "USD", lines);
+    }
+
+    private static CheckoutView quote(long totalMinor, String currency, List<LineView> lines) {
+        return new CheckoutView(new SessionId("chk_1"), CheckoutStatus.READY_FOR_COMPLETE, currency, lines,
                 totalMinor, 0, totalMinor, Optional.empty(), List.of());
+    }
+
+    private static CheckoutView inr(long totalMinor) {
+        return quote(totalMinor, "INR", List.of(new LineView("item_123", 1, totalMinor)));
+    }
+
+    private PolicyEngine withCaps(Map<String, CurrencyCaps> caps) {
+        return new RuleBasedPolicyEngine(new PolicyConfig(caps, 5, 5, 10, true, 2),
+                RuleBasedPolicyEngineTest::registry, usage, Clock.fixed(NOW, ZoneOffset.UTC));
+    }
+
+    private static final Map<String, CurrencyCaps> USD_AND_INR = Map.of("USD", new CurrencyCaps(20_000, 50_000),
+            "INR", new CurrencyCaps(2_000_000, 5_000_000));
+
+    // Covers: P2, 9.1 caps per currency, 26.7 (an INR quote of 15,000.00 is under INR's cap of 20,000.00 and allowed,
+    // though its minor units are far above USD's cap; one paisa over INR's cap is refused by P2)
+    @Test
+    void evaluateQuote_checksAnInrQuote_againstTheInrCap() {
+        PolicyEngine engine = withCaps(USD_AND_INR);
+
+        assertThat(engine.evaluateQuote(ALICE, inr(1_500_000), Optional.empty()).allowed()).isTrue();
+        assertThat(engine.evaluateQuote(ALICE, inr(2_000_000), Optional.empty()).allowed()).isTrue();
+        PolicyDecision over = engine.evaluateQuote(ALICE, inr(2_000_001), Optional.empty());
+        assertThat(over.ruleId()).contains(PolicyRule.P2);
+        assertThat(over.reason()).contains("INR").contains("2000000");
+        assertThat(engine.evaluateQuote(ALICE, quote(20_001), Optional.empty()).ruleId()).contains(PolicyRule.P2);
+    }
+
+    // Covers: P2, 9.1 caps per currency (an INR quote under a USD-sized cap, with caps set for USD only, is refused by
+    // P2 with a reason that names both currencies; it is never converted, however small)
+    @Test
+    void evaluateQuote_refusesAQuoteInACurrencyWithNoCaps_neverConverting() {
+        PolicyDecision d = engine.evaluateQuote(ALICE, inr(100), Optional.empty());
+
+        assertThat(d.allowed()).isFalse();
+        assertThat(d.ruleId()).contains(PolicyRule.P2);
+        assertThat(d.reason()).isEqualTo("no per-purchase cap is set for INR; caps are set for USD");
+    }
+
+    // Covers: P3, 9.1 caps per currency (the daily cap is the quote's currency's, against that currency's spend only:
+    // 4,000,000 paise spent leaves 1,000,000 under INR's 5,000,000; the USD quote is checked against USD's spend)
+    @Test
+    void evaluateQuote_checksP3_inTheQuotesCurrency() {
+        PolicyEngine engine = withCaps(USD_AND_INR);
+        usage.spendIn.put("INR", 4_000_000L);
+        usage.spendIn.put("USD", 45_000L);
+
+        assertThat(engine.evaluateQuote(ALICE, inr(1_000_000), Optional.empty()).allowed()).isTrue();
+        assertThat(engine.evaluateQuote(ALICE, inr(1_000_001), Optional.empty()).ruleId()).contains(PolicyRule.P3);
+        assertThat(engine.evaluateQuote(ALICE, quote(5_001), Optional.empty()).ruleId()).contains(PolicyRule.P3);
+        assertThat(usage.currencies).containsExactly("INR", "INR", "USD");
     }
 
     private static CheckoutView quote(long totalMinor) {
@@ -279,11 +334,15 @@ class RuleBasedPolicyEngineTest {
         final Map<UserId, Long> spend = new HashMap<>();
         final Map<UserId, Integer> proposals = new HashMap<>();
         final List<Window> windows = new ArrayList<>();
+        /** When set, the spend of each currency asked for, for every user; else {@link #spend}. */
+        final Map<String, Long> spendIn = new HashMap<>();
+        final List<String> currencies = new ArrayList<>();
 
         @Override
-        public long committedSpendMinor(UserId user, Instant from, Instant to) {
+        public long committedSpendMinor(UserId user, String currency, Instant from, Instant to) {
             windows.add(new Window(user, from, to));
-            return spend.getOrDefault(user, 0L);
+            currencies.add(currency);
+            return spendIn.isEmpty() ? spend.getOrDefault(user, 0L) : spendIn.getOrDefault(currency, 0L);
         }
 
         @Override

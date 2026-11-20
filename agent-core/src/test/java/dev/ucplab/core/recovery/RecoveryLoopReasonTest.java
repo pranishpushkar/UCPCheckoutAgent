@@ -7,6 +7,7 @@ import dev.ucplab.core.approval.InMemoryApprovalRepository;
 import dev.ucplab.core.identity.AuthContext;
 import dev.ucplab.core.identity.UserId;
 import dev.ucplab.core.intent.Budget;
+import dev.ucplab.core.intent.BuyerCountry;
 import dev.ucplab.core.intent.InMemoryIntentRepository;
 import dev.ucplab.core.intent.InMemoryRecoveryScan;
 import dev.ucplab.core.intent.IntentId;
@@ -104,7 +105,7 @@ class RecoveryLoopReasonTest {
     private static Orchestrator throwingAdvance(Supplier<RuntimeException> failure) {
         return new Orchestrator() {
             @Override
-            public ProposalResult propose(AuthContext auth, MerchantId merchant, List<ProposedLine> lines, String why, Optional<Budget> budget) {
+            public ProposalResult propose(AuthContext auth, MerchantId merchant, List<ProposedLine> lines, String why, Optional<Budget> budget, BuyerCountry shipTo) {
                 throw new UnsupportedOperationException();
             }
 

@@ -47,6 +47,12 @@ public sealed interface ToolOutcome {
         return new Result(CanonicalJson.write(Map.of("error", code)), code, Optional.empty());
     }
 
+    /** 6.2: the answer to every tool call of a turn after a P2, P3 or P9 refusal, without running the tool. */
+    static ToolOutcome stopped() {
+        return new Result(CanonicalJson.write(Map.of("error", "stopped",
+                "detail", "a purchase was refused by policy: tell the user why, and stop")), "stopped", Optional.empty());
+    }
+
     /** {@code {"error":"invalid_argument","detail":...}}, with our fixed wording as the detail. */
     static ToolOutcome invalid(String detail) {
         return new Result(CanonicalJson.write(Map.of("error", "invalid_argument", "detail", detail)),

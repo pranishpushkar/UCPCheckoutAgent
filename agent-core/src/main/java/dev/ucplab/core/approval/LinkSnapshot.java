@@ -9,12 +9,19 @@ import java.util.Optional;
  * {@code seller.url} ({@code sellerSite}, when it has one), and the {@code checkout_url} exactly as the quote's read
  * returned it. {@code url} shows its host only (I8); it reaches the owner only as {@code handoff_url} (23.2).
  */
-public record LinkSnapshot(String sellerName, String sellerDomain, Optional<String> sellerSite, ContinueUrl url) {
+public record LinkSnapshot(String sellerName, String sellerDomain, Optional<String> sellerSite, Optional<String> shipsTo,
+        ContinueUrl url) {
+
+    /** A link snapshot made before the buyer country (9.2): no shipsTo. */
+    public LinkSnapshot(String sellerName, String sellerDomain, Optional<String> sellerSite, ContinueUrl url) {
+        this(sellerName, sellerDomain, sellerSite, Optional.empty(), url);
+    }
 
     public LinkSnapshot {
         Objects.requireNonNull(sellerName, "sellerName");
         Objects.requireNonNull(sellerDomain, "sellerDomain");
         Objects.requireNonNull(sellerSite, "sellerSite");
+        Objects.requireNonNull(shipsTo, "shipsTo");
         Objects.requireNonNull(url, "url");
     }
 }
