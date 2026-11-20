@@ -40,6 +40,8 @@ final class IntentController {
     static final String BAD_CURSOR = "cursor is not valid";
     /** The failure_reason of a quote P9 refused (9.1). */
     private static final String OVER_BUDGET = "policy_P9";
+    /** A link intent's completion, as its stored fingerprint names it (19, 26.7). */
+    private static final String LINK = "link";
 
     private final IntentRepository intents;
     private final ApprovalRepository approvals;
@@ -85,7 +87,7 @@ final class IntentController {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("id", intent.id().value());
         body.put("merchant_id", intent.merchantId().value());
-        body.put("merchant", merchant(intent));
+        body.put("merchant", merchant(intent, latest));
         body.put("state", intent.state().name());
         intent.failureReason().ifPresent(r -> body.put("failure_reason", r));
         intent.orderId().ifPresent(o -> body.put("order_id", o));
@@ -129,15 +131,19 @@ final class IntentController {
 
     /**
      * 23.2, 19: the merchant as the values stored on the intent at creation describe it, never re-read from the
-     * merchants file: its completion, and its shop_domain only for a live store (LiveStore).
+     * merchants file: its completion, its shop_domain only for a live store (LiveStore), and for a link intent with an
+     * approval its seller, from the newest approval's snapshot (26.7).
      */
-    private static Map<String, Object> merchant(PurchaseIntent intent) {
+    private static Map<String, Object> merchant(PurchaseIntent intent, Optional<ApprovalRecord> latest) {
         Map<String, Object> stored = LenientJson.readObject(intent.merchantFingerprint());
         Map<String, Object> merchant = new LinkedHashMap<>();
         merchant.put("completion", stored.get("completion") instanceof String c ? c : "agent");
         Optional<String> shopDomain = stored.get("shop_domain") instanceof String d ? Optional.of(d) : Optional.empty();
         LiveStore.domain(Boolean.TRUE.equals(stored.get("owned")), shopDomain)
                 .ifPresent(d -> merchant.put("shop_domain", d));
+        if (LINK.equals(merchant.get("completion")) && latest.isPresent() && latest.get().snapshot().link().isPresent()) {
+            merchant.put("seller", QuoteCard.seller(latest.get().snapshot().link().get()));
+        }
         return merchant;
     }
 
@@ -148,6 +154,11 @@ final class IntentController {
      * neither.
      */
     private void putFollowUp(AuthContext auth, PurchaseIntent intent, Map<String, Object> body) {
+        // 26.7: a link intent is never followed up and never has a store order.
+        if (LINK.equals(LenientJson.readObject(intent.merchantFingerprint()).get("completion"))) {
+            body.put("follow_up", Map.of("watching", false));
+            return;
+        }
         HandoffWatch watch = intent.handoffWatch();
         watch.storeOrder().ifPresent(o -> {
             Map<String, Object> order = new LinkedHashMap<>();

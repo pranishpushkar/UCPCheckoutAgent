@@ -8,6 +8,7 @@ import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.MerchantStatus;
 import dev.ucplab.core.merchant.Transport;
 import dev.ucplab.core.policy.PolicyConfig;
+import dev.ucplab.ucp.GlobalCatalogGateway;
 import dev.ucplab.ucp.UcpHttpGateway;
 import dev.ucplab.ucp.auth.ClientCredentials;
 import dev.ucplab.ucp.registry.BuyerIp;
@@ -61,6 +62,8 @@ public final class ServiceProperties {
     static final String AGENT_VERSION_UNSUPPORTED = "UCP_AGENT_VERSION is not a version the agent supports";
     static final String AGENT_PROFILE_DEFAULT =
             "UCP_AGENT_PROFILE must be set, and not to its default, for an MCP merchant or one off loopback";
+    /** 19, 26.7: the Global Catalog answers at the version of Shopify's sample profile. */
+    static final String CATALOG_VERSION = "UCP_AGENT_VERSION must be 2026-04-08 for a transport: catalog merchant";
     static final String AGENT_PROFILE_INVALID = "UCP_AGENT_PROFILE must be an https URL with a host, and no user info";
     /** The agent profile's URL (26.2, 8.4) unless UCP_AGENT_PROFILE says otherwise. */
     static final URI DEFAULT_AGENT_PROFILE = URI.create("https://ucplab.dev/agent");
@@ -72,6 +75,8 @@ public final class ServiceProperties {
     static final String LAB_URL_INVALID = "MERCHANT_LAB_URL must be an http URL";
     static final String MODEL_INVALID = "AGENT_MODEL must be scripted or gemini";
     static final String MODEL_KEY_REQUIRED = "AGENT_MODEL=gemini needs GEMINI_API_KEY";
+    /** 6.5: a key the API's authentication header cannot carry; fixed, so it never shows the key. */
+    static final String MODEL_KEY_UNSAFE = "GEMINI_API_KEY holds a character an HTTP header cannot carry (only visible ASCII)";
     static final String MODEL_URL_INVALID = "GEMINI_BASE_URL must be an http URL on a loopback address";
     static final String ORIGIN_INVALID = "PUBLIC_ORIGIN must be a scheme, host and optional port, with no path";
 
@@ -203,6 +208,9 @@ public final class ServiceProperties {
         if (agentModel == AgentModel.GEMINI && modelKey.isEmpty()) {
             throw new IllegalStateException(MODEL_KEY_REQUIRED);
         }
+        if (agentModel == AgentModel.GEMINI && !modelKey.get().visibleAscii()) {
+            throw new IllegalStateException(MODEL_KEY_UNSAFE);
+        }
         URI labUrl;
         try {
             labUrl = URI.create(env.get("MERCHANT_LAB_URL").orElse(DEFAULT_LAB_URL));
@@ -243,13 +251,18 @@ public final class ServiceProperties {
         URI agentProfile = agentProfile(env);
         // 19, 26.2: the default's host is not ours, so it serves the loopback lab merchants only.
         boolean realStore = merchants.stream()
-                .anyMatch(m -> m.transport() == Transport.MCP || !MerchantEntry.isLoopback(m.url()));
+                .anyMatch(m -> m.transport() != Transport.REST || !MerchantEntry.isLoopback(m.url()));
         if (realStore && agentProfile.equals(DEFAULT_AGENT_PROFILE)) {
             throw new IllegalStateException(AGENT_PROFILE_DEFAULT);
         }
         String agentVersion = env.get("UCP_AGENT_VERSION").orElse(DEFAULT_AGENT_VERSION);
         if (!UcpHttpGateway.SUPPORTED_VERSIONS.contains(agentVersion)) {
             throw new IllegalStateException(AGENT_VERSION_UNSUPPORTED);
+        }
+        // 19, 26.7: the Global Catalog answers at the version of Shopify's sample profile only.
+        if (merchants.stream().anyMatch(m -> m.transport() == Transport.CATALOG)
+                && !GlobalCatalogGateway.VERSION.equals(agentVersion)) {
+            throw new IllegalStateException(CATALOG_VERSION);
         }
         MerchantSettings first = merchants.getFirst();
 

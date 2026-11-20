@@ -153,13 +153,14 @@ class RunsBudgetApiTest {
         assertThat(api.post(alice, "/api/runs", message("hi")).statusCode()).isEqualTo(201);
     }
 
-    // Covers: 23.1, P9 (the budget is fixed for the run: a budget field on a continuation is 422, and the run keeps its
-    // budget, so the next proposal is still refused under it)
+    // Covers: 23.1, P9, 6.2 (the budget is fixed for the run: a budget field on a continuation is 422, and the run keeps its
+    // budget, so the next proposal is still refused under it. The budget is the mug's own price: since 6.2 filters the
+    // search by the budget, the mug is still found, and its quote, with the lab's tax, is above it)
     @Test
     void aBudgetOnAContinuation_is422_andTheRunKeepsItsBudget() throws IOException {
         start(Map.of());
         Session alice = api.signIn("alice");
-        String run = (String) LenientJson.readObject(api.post(alice, "/api/runs", budgeted("hi", 1, "USD")).body())
+        String run = (String) LenientJson.readObject(api.post(alice, "/api/runs", budgeted("hi", 1200, "USD")).body())
                 .get("run_id");
 
         for (String body : List.of(budgeted("a blue mug", 1_000_000, "USD"),

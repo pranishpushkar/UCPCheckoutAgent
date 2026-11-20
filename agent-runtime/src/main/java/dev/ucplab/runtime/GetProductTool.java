@@ -16,8 +16,9 @@ import java.util.Set;
 /**
  * {@code get_product} (6.2): {@code item_id}. Asks every active merchant's catalog at once, through the same limit as
  * {@code search_catalog} ({@link FanOut}), and returns the item of the lowest registry index that has it:
- * {@code {merchant_id, item_id, title, description, price_minor, currency, in_stock}} for the variant with that id (the
- * featured variant when the id is a product's). {@code title} and {@code description} are wrapped; a product without a
+ * {@code {merchant_id, item_id, title, description, price_minor, currency, in_stock, options?}} for the variant with that
+ * id (the featured variant when the id is a product's). {@code title}, {@code description} and the variant's own
+ * {@code options} are wrapped; a product without a
  * description has an empty one. No merchant knows the id: {@code {"error":"not_found"}}; a merchant could not be
  * asked and none had it: {@code {"error":"unavailable"}}.
  */
@@ -90,6 +91,9 @@ final class GetProductTool implements Tool {
         item.put("price_minor", variant.price().minor());
         item.put("currency", variant.price().currency());
         item.put("in_stock", variant.availability().available());
+        if (!variant.options().isEmpty()) {
+            item.put("options", ToolText.options(variant));
+        }
         return item;
     }
 }

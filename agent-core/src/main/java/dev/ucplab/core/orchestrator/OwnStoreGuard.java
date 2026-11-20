@@ -1,5 +1,6 @@
 package dev.ucplab.core.orchestrator;
 
+import dev.ucplab.core.merchant.Completion;
 import dev.ucplab.core.merchant.ContinueUrl;
 import dev.ucplab.core.merchant.MerchantEntry;
 import java.net.URI;
@@ -61,5 +62,30 @@ final class OwnStoreGuard {
                 && host != null
                 && host.toLowerCase(Locale.ROOT).equals(shop.get())
                 && (u.getPort() == -1 || u.getPort() == 443);
+    }
+
+    /**
+     * I12 at propose (26.7): an entry {@link #entryAllows} allows, or a link entry, the one entry that needs no
+     * {@code owned} because nothing mutating is ever sent to it. Every mutating call still asks {@link #entryAllows}.
+     */
+    static boolean proposalAllows(Optional<MerchantEntry> entry) {
+        return entryAllows(entry) || entry.map(MerchantEntry::completion).equals(Optional.of(Completion.LINK));
+    }
+
+    /**
+     * I12's link rule (26.7, C3): a catalog {@code checkout_url} is accepted only if it is {@code https}, has no user
+     * info and no port but 443, and its host equals the seller's site (the host of its {@code seller.url}) or its
+     * {@code seller.domain}, in any case. It reads only the offer and does no I/O.
+     */
+    static boolean linkAllowed(String sellerDomain, Optional<String> sellerSite, ContinueUrl url) {
+        URI u = url.value();
+        String host = u.getHost();
+        if (!"https".equalsIgnoreCase(u.getScheme()) || host == null || u.getRawUserInfo() != null
+                || (u.getPort() != -1 && u.getPort() != 443)) {
+            return false;
+        }
+        String h = host.toLowerCase(Locale.ROOT);
+        return h.equals(sellerDomain.toLowerCase(Locale.ROOT))
+                || (sellerSite.isPresent() && h.equals(sellerSite.get().toLowerCase(Locale.ROOT)));
     }
 }

@@ -224,8 +224,86 @@ function showBudgetField() {
 }
 // </budget>
 
+// <working>
+// 24.3: while a run works. Send is disabled and reads "Working…", and an agent bubble reads "Thinking…", then the step
+// of the run's newest tool event: a fixed text of the page chosen by the tool's name, never a message or the model's
+// text. From 10 s it adds "Still working · <n> s". The bubble is outside the aria-live region, so the status line
+// alone speaks, once.
+const THINKING = "Thinking…";
+const STEP_TEXTS = new Map([
+  ["search_catalog", "Searching the catalog…"],
+  ["propose_purchase", "Preparing your approval…"],
+  ["get_purchase_status", "Checking the purchase…"],
+]);
+const STILL_AFTER_MS = 10000;
+let working = null;   // {bubble, step, still, since, timer} while a run works
+
+// The one merchant's own name, from the lab list, when there is exactly one and it is not the catalog.
+function priceStep() {
+  const only = labMerchants.length === 1 ? labMerchants[0] : null;
+  return only && only.completion !== "link" && only.name ? "Checking the price at " + only.name + "…" : "Checking the price…";
+}
+
+function stepText(events) {
+  const newest = events.length > 0 ? events[events.length - 1].tool : "";
+  if (newest === "get_product") {
+    return priceStep();
+  }
+  return STEP_TEXTS.get(newest) || THINKING;
+}
+
+function startWorking() {
+  const button = $("send-button");
+  button.disabled = true;
+  button.textContent = "Working…";
+  const bubble = el("li", null, "agent working");
+  const step = el("span", THINKING, "working-step");
+  const dots = el("span", null, "working-dots");
+  dots.setAttribute("aria-hidden", "true");
+  const still = el("span", "", "working-still");
+  bubble.appendChild(step);
+  bubble.appendChild(dots);
+  bubble.appendChild(still);
+  working = {bubble: bubble, step: step, still: still, since: Date.now(), timer: window.setInterval(tickWorking, 1000)};
+  setStatus("Working on it.");
+  $("chat").appendChild(bubble);
+}
+
+function tickWorking() {
+  if (!working) {
+    return;
+  }
+  const ms = Date.now() - working.since;
+  working.still.textContent = ms >= STILL_AFTER_MS ? "Still working · " + Math.floor(ms / 1000) + " s" : "";
+}
+
+// A poll of a running run: the bubble, last in the chat, takes the newest step.
+function showWorking(run) {
+  if (!working) {
+    startWorking();
+  }
+  working.step.textContent = stepText(run.tool_events || []);
+  tickWorking();
+  $("chat").appendChild(working.bubble);
+}
+
+function stopWorking() {
+  if (working) {
+    window.clearInterval(working.timer);
+    working.bubble.remove();
+    working = null;
+  }
+  const button = $("send-button");
+  button.disabled = false;
+  button.textContent = "Send";
+}
+// </working>
+
 async function send(event) {
   event.preventDefault();
+  if (working) {
+    return;
+  }
   const input = $("message");
   const text = input.value.trim();
   if (!text) {
@@ -238,15 +316,74 @@ async function send(event) {
     return;
   }
   input.value = "";
+  if (!continuing) {
+    clear($("chat"));
+    clear($("tools"));
+  }
+  $("chat").appendChild(el("li", text, "user"));
+  startWorking();
   const result = continuing
       ? await api("POST", "/api/runs/" + currentRun.id + "/messages", {message: text})
       : await api("POST", "/api/runs", Object.assign({message: text}, budget));
   if (!result.ok) {
+    stopWorking();
     setStatus(errorText(result), true);
     return;
   }
   showRun(result.data);
 }
+
+// <run-end>
+// 24.3: the run's status and reason in words, and the chat text of a run that ended without an answer: fixed texts of
+// the page, chosen from the fields, never the codes themselves. A reason the table does not list takes its status's
+// "" row; a status it does not list reads "Stopped.". A model_error whose cause is a 429 or a 503 (6.3: tried once
+// more already) reads as a busy model.
+const STEPS = ["Stopped: ran out of steps.",
+  "I looked at several options but ran out of steps before choosing. Try a narrower request."];
+const RUN_ENDS = new Map([
+  ["budget_exceeded", new Map([
+    ["MODEL_CALLS", STEPS],
+    ["TOOL_CALLS", STEPS],
+    ["WALL_CLOCK", ["Stopped: ran out of time.", "I ran out of time before choosing. Try a narrower request."]],
+    ["TOKENS", ["Stopped: too much to read.", "I had too much to read before choosing. Try a narrower request."]],
+    ["", STEPS],
+  ])],
+  ["user_timeout", new Map([
+    ["", ["Stopped: no answer from you.", "I stopped waiting for your answer. Send a new message to start again."]],
+  ])],
+  ["failed", new Map([
+    ["model_error", ["Stopped: the model could not be reached.",
+      "I couldn't reach the model, so I stopped. Try again in a moment."]],
+    ["tool_error", ["Stopped: a step failed.", "A step failed, so I stopped. Try again in a moment."]],
+    ["internal_error", ["Stopped: something went wrong.",
+      "Something went wrong on our side, so I stopped. Try again in a moment."]],
+    ["interrupted", ["Stopped: the service restarted.",
+      "The service restarted while I was working, so I stopped. Send your request again."]],
+    ["", ["Stopped.", "I stopped before finishing. Try again in a moment."]],
+  ])],
+]);
+const BUSY = ["Stopped: the model is busy.",
+  "The model is busy right now; try again in a minute."];
+const BUSY_CAUSES = new Set(["http_429", "http_503"]);
+const RUN_STATUSES = new Map([
+  ["running", "Working on it."],
+  ["waiting_for_user", "Waiting for your answer."],
+  ["waiting_for_approval", "Waiting for your approval."],
+  ["done", "Done."],
+]);
+
+// [status line, chat text]; the chat text is "" when the run has its own answer or is not over.
+function runEnd(run) {
+  if (run.status === "failed" && run.reason === "model_error" && BUSY_CAUSES.has(run.cause)) {
+    return BUSY;
+  }
+  const ends = RUN_ENDS.get(run.status);
+  if (ends) {
+    return ends.get(run.reason) || ends.get("");
+  }
+  return [RUN_STATUSES.get(run.status) || "Stopped.", ""];
+}
+// </run-end>
 
 function showRun(run) {
   currentRun = {id: run.run_id, status: run.status, intents: run.intent_ids || []};
@@ -255,7 +392,19 @@ function showRun(run) {
     const item = el("li", m.text, m.role + (m.kind === "question" ? " question" : ""));
     $("chat").appendChild(item);
   });
-  setStatus("Run " + run.status.replace(/_/g, " ") + (run.reason ? " (" + run.reason + ")" : "") + ".");
+  const [statusText, chatText] = runEnd(run);
+  if (chatText) {
+    $("chat").appendChild(el("li", chatText, "agent"));
+  }
+  if (run.status === "running") {
+    showWorking(run);
+  } else {
+    stopWorking();
+    setStatus(statusText);
+  }
+  if (run.tool_events) {
+    showChips(run.tool_events);
+  }
   const intents = run.intent_ids || [];
   if (intents.length > 0) {
     const newest = intents[intents.length - 1];
@@ -282,9 +431,12 @@ async function pollRun() {
     return;
   }
   const result = await api("GET", "/api/runs/" + currentRun.id);
-  if (result.ok) {
-    showRun(result.data);
+  if (!result.ok) {
+    stopWorking();
+    setStatus(errorText(result), true);
+    return;
   }
+  showRun(result.data);
 }
 
 async function loadRunDetails() {
@@ -295,9 +447,13 @@ async function loadRunDetails() {
   if (!result.ok) {
     return;
   }
+  showChips(result.data.tool_events || []);
+}
+
+// 24.3: one chip per call, with a dot for its outcome; a summary other than ok is also shown as text.
+function showChips(events) {
   clear($("tools"));
-  // 24.3: one chip per call, with a dot for its outcome; a summary other than ok is also shown as text.
-  (result.data.tool_events || []).forEach((e) => {
+  events.forEach((e) => {
     const chip = el("li", null, "chip");
     chip.appendChild(el("span", null, e.summary === "ok" ? "dot ok" : "dot warn")).setAttribute("aria-hidden", "true");
     chip.appendChild(el("span", e.tool + " · " + e.took_ms + " ms" + (e.summary === "ok" ? "" : " · " + e.summary)));
@@ -355,7 +511,14 @@ function showApprovalCard(id, approvalResponse) {
   const head = el("div", null, "card-head");
   const heading = el("div");
   heading.appendChild(el("h3", "Approval needed"));
-  heading.appendChild(el("p", "From " + snapshot.merchant_id, "muted"));
+  // 24.3, 26.7: at a link merchant the card names the seller, by the answer's seller name, set as text.
+  const linked = approval.completion === "link";
+  if (linked) {
+    heading.appendChild(el("p", "From " + approval.seller.name, "muted"));
+    heading.appendChild(el("span", "Shopify catalog", "pill"));
+  } else {
+    heading.appendChild(el("p", "From " + snapshot.merchant_id, "muted"));
+  }
   head.appendChild(heading);
   const expiry = el("span", null, "pill");
   head.appendChild(expiry);
@@ -387,6 +550,10 @@ function showApprovalCard(id, approvalResponse) {
     linesTotal += line.quantity * line.unit_price_minor;
   });
   const rows = cardCharges(snapshot, approval.completion === "handoff", linesTotal);
+  if (linked) {
+    // 24.3, 26.7: the catalog's listed price is the whole quote; the store adds its charges at its own checkout.
+    rows.splice(0, rows.length, ["Listed price", snapshot.total_minor]);
+  }
   rows.forEach(([label, minor], i) => {
     const last = i === rows.length - 1;
     const row = el("tr", null, last ? "total" : null);
@@ -402,7 +569,10 @@ function showApprovalCard(id, approvalResponse) {
   table.appendChild(body);
   table.appendChild(foot);
   card.appendChild(table);
-  if (approval.budget) {
+  if (linked && approval.budget) {
+    card.appendChild(el("p", "Your budget: " + money(approval.budget.amount_minor, approval.budget.currency)
+        + " (before the store's shipping and tax)", "budget-line"));
+  } else if (approval.budget) {
     card.appendChild(el("p", "Your budget: " + money(approval.budget.amount_minor, approval.budget.currency)
         + (approval.completion === "handoff" ? " (before the store's shipping and tax)" : ""), "budget-line"));
   }
@@ -411,9 +581,15 @@ function showApprovalCard(id, approvalResponse) {
   if (approval.completion === "handoff") {
     info.appendChild(el("p", approval.note));
   }
+  if (linked) {
+    info.appendChild(el("p", approval.note));
+  }
   card.appendChild(info);
   const actions = el("div", null, "actions");
   const approve = el("button", "Approve " + money(snapshot.total_minor, snapshot.currency), "primary");
+  if (linked) {
+    approve.textContent = "Approve and get the link";
+  }
   approve.type = "button";
   const reject = el("button", "Reject");
   reject.type = "button";
@@ -496,6 +672,11 @@ async function pollIntent() {
   currentIntent.merchant = result.data.merchant;
   showMerchantMode();
   showSteps(milestones(result.data));
+  // 26.7: a link intent is never followed up. Its {watching: false} is not a follow-up that ended, so the link stays
+  // and no follow-up text is shown.
+  if (linkSeller(result.data.merchant)) {
+    delete result.data.follow_up;
+  }
   if (state !== currentIntent.state) {
     currentIntent.state = state;
     $("timeline-state").textContent = "Intent " + id;
@@ -542,11 +723,24 @@ function showHandoffLink(url) {
     return;
   }
   const anchor = el("a", "Continue at the store");
+  const seller = linkSeller(currentIntent && currentIntent.merchant);
+  if (seller) {
+    // 24.3, 26.7: the seller's host, from the owner's intent, as the link's text; never the address itself.
+    anchor.replaceChildren(document.createTextNode("Continue at " + seller.host));
+  }
   anchor.href = url;
   anchor.target = "_blank";
   anchor.rel = "noopener noreferrer";
   anchor.referrerPolicy = "no-referrer";
   holder.appendChild(anchor);
+  if (seller) {
+    holder.appendChild(el("p", "If you buy, the store emails you. The agent can't see this purchase."));
+  }
+}
+
+// 26.7: a link intent's seller {name, host}, from the owner's intent; null at any other merchant.
+function linkSeller(merchant) {
+  return merchant && merchant.completion === "link" && merchant.seller ? merchant.seller : null;
 }
 // </handoff-link>
 
@@ -707,6 +901,9 @@ function reached(intent) {
 function milestones(intent) {
   const handoff = intent.merchant && intent.merchant.completion === "handoff";
   const at = reached(intent);
+  if (intent.merchant && intent.merchant.completion === "link") {
+    return linkMilestones(intent, at);
+  }
   const labels = ["Proposed", "Quoted by the store", at > 2 ? "Approved by you" : "Waiting for your approval",
       handoff ? "Handed off to the store" : "Sent to the store", "Order placed at the store"];
   const steps = labels.map((label, i) => ({label: label, mark: i < at ? "done" : i === at ? "current" : "pending"}));
@@ -727,6 +924,21 @@ function milestones(intent) {
     } else {
       steps[4].mark = "pending";
     }
+  }
+  return steps;
+}
+
+// 24.3, 26.7: a link intent's steps. There is no order step: the agent can't see a purchase at the seller.
+function linkMilestones(intent, at) {
+  const labels = ["Proposed", "Priced from Shopify's catalog",
+      at > 2 ? "Approved by you" : "Waiting for your approval", "Link ready"];
+  const steps = labels.map((label, i) => ({label: label, mark: i < at ? "done" : i === at ? "current" : "pending"}));
+  const ending = ENDINGS.has(intent.state) ? endingText(intent) : "";
+  if (ending) {
+    return steps.slice(0, at).concat([{label: ending, mark: "ended"}]);
+  }
+  if (intent.state === "HANDED_OFF") {
+    steps[3].mark = "done";
   }
   return steps;
 }
@@ -840,6 +1052,20 @@ function showMerchantMode() {
   if (domain) {
     $("dev-tools").open = false;
   }
+  // 26.7: the Global Catalog reads as such, never as the lab, and has no Developer tools.
+  if (!domain && catalogMode()) {
+    badge.textContent = "Shopify Global Catalog";
+    $("dev-tools").hidden = true;
+    $("dev-tools").open = false;
+  }
+}
+
+// The followed intent is at a link merchant, or, before one, the lab's list has one (24.3).
+function catalogMode() {
+  if (currentIntent && currentIntent.merchant) {
+    return currentIntent.merchant.completion === "link";
+  }
+  return labMerchants.some((m) => m.completion === "link");
 }
 // </merchant-mode>
 
@@ -862,7 +1088,10 @@ async function startLab() {
   const select = $("lab-merchant");
   clear(select);
   clear($("order-counters"));
-  list.data.merchants.forEach((m) => {
+  // 24.3: only the merchants the lab controls have faults and orders; the others (the Global Catalog, a live store)
+  // are neither listed here nor polled.
+  const lab = list.data.merchants.filter((m) => m.lab === true);
+  lab.forEach((m) => {
     select.appendChild(el("option", m.name + (m.status === "ACTIVE" ? "" : " (suspended)")))
         .setAttribute("value", m.merchant_id);
     const box = el("div");
@@ -873,8 +1102,10 @@ async function startLab() {
     counters.set(m.merchant_id, count);
   });
   showMerchantMode();
-  refreshOrders();
-  window.setInterval(refreshOrders, 2000);
+  if (lab.length > 0) {
+    refreshOrders();
+    window.setInterval(refreshOrders, 2000);
+  }
 }
 
 async function refreshOrders() {

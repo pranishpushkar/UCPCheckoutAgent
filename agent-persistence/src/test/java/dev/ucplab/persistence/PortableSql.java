@@ -4,7 +4,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
 
-/** A lint for migrations: syntax that works on SQLite only (section 10, ADR 0002). Comments are ignored. */
+/**
+ * A lint for migrations: syntax that works on SQLite only (section 10, ADR 0002), and nesting deeper than an SQLite
+ * build with a fixed parser stack can read (macOS's {@code sqlite3} and Python's overflow at 31 nested calls). Comments
+ * and string literals are ignored.
+ */
 final class PortableSql {
 
     private record Rule(Pattern pattern, String message) {
@@ -27,7 +31,24 @@ final class PortableSql {
             rule("`", "backtick quoting is not standard SQL"),
             rule("\\bAS\\s+\\(.*\\)\\s+(STORED|VIRTUAL)\\b", "generated columns differ between databases"));
 
+    /** Section 10: the deepest parenthesis nesting a migration may use; today's deepest is 4. */
+    static final int MAX_NESTING = 8;
+
     private PortableSql() {
+    }
+
+    private static int nesting(String code) {
+        int depth = 0;
+        int deepest = 0;
+        for (int i = 0; i < code.length(); i++) {
+            char c = code.charAt(i);
+            if (c == '(') {
+                deepest = Math.max(deepest, ++depth);
+            } else if (c == ')') {
+                depth--;
+            }
+        }
+        return deepest;
     }
 
     private static Rule rule(String regex, String message) {
@@ -42,6 +63,11 @@ final class PortableSql {
             if (r.pattern().matcher(code).find()) {
                 found.add(r.message());
             }
+        }
+        int depth = nesting(code.replaceAll("'(?:[^']|'')*'", "''"));
+        if (depth > MAX_NESTING) {
+            found.add("nesting " + depth + " deep: more than " + MAX_NESTING
+                    + ", which an SQLite with a fixed parser stack (macOS, Python) cannot parse");
         }
         return found;
     }

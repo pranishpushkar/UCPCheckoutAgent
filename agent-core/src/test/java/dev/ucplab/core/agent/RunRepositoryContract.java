@@ -82,6 +82,28 @@ public abstract class RunRepositoryContract {
         assertThat(repo.find(ALICE, new RunId("r2"))).hasValueSatisfying(r -> assertThat(r.budget()).isEmpty());
     }
 
+    // Covers: 6.5, 23.1, 10 (V12) (a model_error's cause is stored by the update that ends the run and read back; a
+    // run without one reads back with none)
+    @Test
+    void aModelErrorsCause_isStoredByTheUpdateThatEndsTheRun() {
+        repo.insert(ALICE, RunRecord.started(new RunId("r1"), ALICE, "scripted", T0));
+        RunRecord failed = new RunRecord(new RunId("r1"), ALICE, "scripted", T0, Optional.of(T0.plusSeconds(3)),
+                Optional.of("failed"), Optional.of("model_error"), 2, 1, 900, 40, List.of(), List.of(), Optional.empty(),
+                Optional.of("finish_MALFORMED_FUNCTION_CALL"));
+        assertThat(repo.update(ALICE, failed)).isTrue();
+
+        assertThat(repo.find(ALICE, new RunId("r1"))).hasValueSatisfying(r -> {
+            assertThat(r.cause()).contains("finish_MALFORMED_FUNCTION_CALL");
+            assertThat(r.reason()).contains("model_error");
+        });
+        assertThat(repo.findForSystem(new RunId("r1")))
+                .hasValueSatisfying(r -> assertThat(r.cause()).contains("finish_MALFORMED_FUNCTION_CALL"));
+
+        repo.insert(ALICE, RunRecord.started(new RunId("r2"), ALICE, "scripted", T0));
+        assertThat(repo.update(ALICE, ended("r2", ALICE, List.of(I1)))).isTrue();
+        assertThat(repo.find(ALICE, new RunId("r2"))).hasValueSatisfying(r -> assertThat(r.cause()).isEmpty());
+    }
+
     // Covers: T6, I9 (another user's run reads as empty, exactly like a missing one)
     @Test
     void find_anotherUsersRun_readsAsEmpty() {

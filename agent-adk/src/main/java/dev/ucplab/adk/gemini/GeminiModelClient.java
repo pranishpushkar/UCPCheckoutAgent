@@ -1,6 +1,7 @@
 package dev.ucplab.adk.gemini;
 
 import com.google.genai.Client;
+import com.google.genai.JsonSerializable;
 import com.google.genai.errors.ApiException;
 import com.google.genai.errors.GenAiIOException;
 import com.google.genai.types.Content;
@@ -17,6 +18,7 @@ import dev.ucplab.core.agent.ModelKey;
 import dev.ucplab.core.agent.ModelTurn;
 import dev.ucplab.core.agent.ToolSpec;
 import java.io.InterruptedIOException;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -24,6 +26,8 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.UnaryOperator;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * The live {@link ModelClient} (6.5, ADR 0004): one {@code client.models.generateContent} call per turn on
@@ -36,7 +40,11 @@ import java.util.function.UnaryOperator;
  * from outside its package. The key goes only into the SDK's builder, which sends it in the {@code x-goog-api-key}
  * header.
  *
- * <p>Every exception that leaves {@link #generate} is a {@link GeminiException} with a fixed reason (I8). For the live
+ * <p>Every exception that leaves {@link #generate} is a {@link GeminiException} with a fixed reason and a cause from
+ * 6.5's closed vocabulary: the HTTP status, the answer's finish reason, or an exception's class, never its content (I8).
+ * The SDK keeps no response header, so 6.3's wait is the {@code retryDelay} of the error's {@code google.rpc.RetryInfo}
+ * detail, which the SDK writes into its error's message; only that number is read from it, and the message is neither
+ * kept nor logged. For the live
  * I6 check, {@link ModelClientSettings#requestedTools} is given the function names of every request this client
  * actually built, and {@link ModelClientSettings#answeringModel} the model version each response names.
  *
@@ -48,6 +56,12 @@ public final class GeminiModelClient implements ModelClient, AutoCloseable {
 
     static final String CLIENT_MODE = "GOOGLE_GENAI_CLIENT_MODE";
     private static final String ID_PREFIX = "ucplab-call-";
+    /**
+     * 6.3: a RetryInfo detail as the SDK writes it after {@code "Details: "}, one compact JSON detail a line, with its
+     * {@code retryDelay} in the JSON form of a {@code google.protobuf.Duration}: seconds with up to nine decimals.
+     */
+    private static final Pattern RETRY_INFO = Pattern.compile("(?:Details: )?\\{\"@type\":\"type\\.googleapis\\.com/"
+            + "google\\.rpc\\.RetryInfo\",\"retryDelay\":\"([0-9]{1,6})(?:\\.([0-9]{1,9}))?s\"}");
 
     private final Client client;
     private final String model;
@@ -64,11 +78,14 @@ public final class GeminiModelClient implements ModelClient, AutoCloseable {
         Objects.requireNonNull(key, "key");
         this.settings = Objects.requireNonNull(settings, "settings");
         Objects.requireNonNull(env, "env");
-        if (env.apply(CLIENT_MODE) != null) {
+        if (env.apply(CLIENT_MODE) != null || !key.visibleAscii()) {
             throw new GeminiException(Reason.CONFIGURATION);
         }
         this.model = settings.model().orElse(GeminiModels.MODEL);
         try {
+            // 6.5: the request config once through the SDK's own serialiser, so a setting it refuses fails here, when
+            // the service starts, and not on the first message.
+            JsonSerializable.toJsonNode(GeminiMapping.config("", List.of(), GeminiModels.MAX_OUTPUT_TOKENS));
             this.client = Client.builder()
                     .apiKey(key.reveal())
                     .vertexAI(false)
@@ -99,12 +116,42 @@ public final class GeminiModelClient implements ModelClient, AutoCloseable {
         } catch (GeminiException e) {
             throw e;
         } catch (ApiException e) {
-            throw new GeminiException(reason(e.code()));
+            throw new GeminiException(reason(e.code()), "http_" + Math.max(0, e.code()), retryDelay(e.message()));
         } catch (GenAiIOException e) {
-            throw new GeminiException(timedOut(e) ? Reason.TIMEOUT : Reason.NETWORK);
+            throw timedOut(e) ? new GeminiException(Reason.TIMEOUT, "timeout")
+                    : new GeminiException(Reason.NETWORK, named("network_", e.getCause() == null ? e : e.getCause()));
         } catch (RuntimeException e) {
-            throw new GeminiException(Reason.INTERNAL);
+            throw new GeminiException(Reason.INTERNAL, named("exception_", e));
         }
+    }
+
+    /**
+     * 6.3: the {@code retryDelay} of the first RetryInfo among the details of the SDK's error message, when there is one
+     * in the exact form above; a RetryInfo text in the message itself, before the details, is not read.
+     */
+    static Optional<Duration> retryDelay(String message) {
+        if (message == null) {
+            return Optional.empty();
+        }
+        int details = message.startsWith("Details: ") ? 0 : message.indexOf("\nDetails: ");
+        if (details < 0) {
+            return Optional.empty();
+        }
+        for (String line : message.substring(details).strip().split("\n")) {
+            Matcher m = RETRY_INFO.matcher(line);
+            if (m.matches()) {
+                long nanos = m.group(2) == null ? 0 : Long.parseLong((m.group(2) + "00000000").substring(0, 9));
+                return Optional.of(Duration.ofSeconds(Long.parseLong(m.group(1)), nanos));
+            }
+        }
+        return Optional.empty();
+    }
+
+    /** 6.5: {@code prefix} and the class's simple name, as identifier characters, at most 64 in all; never a message. */
+    static String named(String prefix, Throwable e) {
+        String name = e.getClass().getSimpleName().replaceAll("[^A-Za-z0-9_]", "_");
+        String cause = prefix + (name.isEmpty() ? "anonymous" : name);
+        return cause.length() > 64 ? cause.substring(0, 64) : cause;
     }
 
     static Reason reason(int status) {

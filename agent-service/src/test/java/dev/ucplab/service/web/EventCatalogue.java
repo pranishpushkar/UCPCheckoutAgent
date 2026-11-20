@@ -41,6 +41,8 @@ public final class EventCatalogue {
             Map.entry("complete_unavailable", Set.of("from")),
             Map.entry("handed_off", Set.of("host")),
             Map.entry("hand_off_refused", Set.of("host")),
+            // Real catalog (7.2 link_refused, 26.7): the reason, and for link_not_allowed the link's host only (I8).
+            Map.entry("link_refused", Set.of("host", "reason")),
             Map.entry("cancel_sent", Set.of("outcome", "attempt")),
             Map.entry("cancel_gave_up", Set.of("attempts")),
             Map.entry("orphan_session_found", Set.of("probe")),

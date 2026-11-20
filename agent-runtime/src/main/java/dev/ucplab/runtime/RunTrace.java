@@ -2,12 +2,14 @@ package dev.ucplab.runtime;
 
 import dev.ucplab.core.agent.ModelFailure;
 import dev.ucplab.core.agent.RunId;
+import dev.ucplab.core.agent.RunRecord;
 import dev.ucplab.core.json.CanonicalJson;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.regex.Pattern;
 
@@ -41,9 +43,9 @@ public final class RunTrace {
     }
 
     /**
-     * A model call that threw: its index, how long it took, and the failure's fixed code as the outcome, or
-     * {@link #UNKNOWN_FAILURE} when it carries none ({@link ModelFailure}) or the code is not an identifier. Never the
-     * exception's message.
+     * A model call that threw: its index, how long it took, the failure's fixed code as the outcome, or
+     * {@link #UNKNOWN_FAILURE} when it carries none ({@link ModelFailure}) or the code is not an identifier, and its
+     * {@link #causeOf cause} (6.5). Never the exception's message.
      */
     void llmCallFailed(int index, Duration took, RuntimeException failure) {
         Map<String, Object> span = span("llm.call");
@@ -51,7 +53,18 @@ public final class RunTrace {
         span.put("duration_ms", took.toMillis());
         span.put("outcome", failure instanceof ModelFailure f && f.code() != null && CODE.matcher(f.code()).matches()
                 ? f.code() : UNKNOWN_FAILURE);
+        span.put("cause", causeOf(failure));
         lines.add(CanonicalJson.write(span));
+    }
+
+    /**
+     * 6.5: a model call's failure as a cause, its {@link ModelFailure#cause}, or {@code exception_<class>} for any other
+     * exception; {@link #UNKNOWN_FAILURE} when that is not 1 to 64 of {@code [A-Za-z0-9_]}, so no text gets through.
+     */
+    static String causeOf(RuntimeException failure) {
+        String cause = failure instanceof ModelFailure f ? f.cause()
+                : "exception_" + failure.getClass().getSimpleName().replaceAll("[^A-Za-z0-9_]", "_");
+        return cause != null && RunRecord.CAUSE.matcher(cause).matches() ? cause : UNKNOWN_FAILURE;
     }
 
     void toolCall(int index, String tool, Duration took, String code) {
@@ -90,11 +103,13 @@ public final class RunTrace {
         return UNKNOWN_FAILURE;
     }
 
-    void run(String outcome, String detail, int modelCalls, int toolCalls, long inputTokens, long outputTokens,
-             Duration took) {
+    /** The run's end; {@code cause} is a {@code model_error}'s (6.5), already checked. */
+    void run(String outcome, String detail, Optional<String> cause, int modelCalls, int toolCalls, long inputTokens,
+             long outputTokens, Duration took) {
         Map<String, Object> span = span("agent.run");
         span.put("outcome", outcome);
         span.put("detail", detail);
+        cause.ifPresent(c -> span.put("cause", c));
         span.put("model_calls", modelCalls);
         span.put("tool_calls", toolCalls);
         span.put("input_tokens", inputTokens);

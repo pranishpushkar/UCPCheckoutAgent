@@ -12,7 +12,8 @@ import java.util.regex.Pattern;
 /**
  * One merchant in the registry (section 19, Appendix B). {@code owned} is the resolved value: the operator owns the
  * store (26.5). It defaults to true only on a loopback host, the lab merchants (I12). {@code shopDomain} is the store's
- * host, which the MCP endpoint and every continue_url must match (I12); every MCP merchant has one.
+ * host, which the MCP endpoint and every continue_url must match (I12); every MCP merchant has one. A catalog source
+ * ({@code transport: catalog}, 26.7) is the one entry with {@code completion: link}: never owned, with no shop_domain.
  */
 public record MerchantEntry(
         MerchantId id,
@@ -44,6 +45,12 @@ public record MerchantEntry(
         Objects.requireNonNull(shopDomain, "shopDomain");
         if (transport == Transport.MCP && shopDomain.isEmpty()) {
             throw new IllegalArgumentException("an MCP merchant needs a shop_domain");
+        }
+        if ((transport == Transport.CATALOG) != (completion == Completion.LINK)) {
+            throw new IllegalArgumentException("a catalog source and a link completion go together (19)");
+        }
+        if (transport == Transport.CATALOG && (owned || shopDomain.isPresent())) {
+            throw new IllegalArgumentException("a catalog source is not a store: never owned, no shop_domain (19, I12)");
         }
     }
 

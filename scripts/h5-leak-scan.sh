@@ -37,11 +37,14 @@ fixed_patterns() {
   return 0
 }
 
-# The shape patterns (extended regular expressions, case-insensitive); no value of ours is in them.
+# The shape patterns (extended regular expressions, case-insensitive); no value of ours is in them. The last three are
+# the Global Catalog's tracking parameters: a recording keeps a buy link's host only, so any of them means a full link.
+# The click id's keys are matched wherever they appear: the catalog prefixes them (attribution/click_id_value).
 REGEX_NAMES=("a ?key= that is not ?key=<redacted>" "Shopify-Buyer-IP with a value" "Authorization: Bearer with a value"
-             "a session_token with a value" "a Gemini API key shape")
+             "a session_token with a value" "a Gemini API key shape" "a buy link's _gsid=" "a buy link's click_id_value="
+             "a buy link's click_id_tag=")
 REGEXES=('\?key=([^<]|$)' 'shopify-buyer-ip"?[[:space:]]*[:=][[:space:]]*"?[0-9a-f:.]{3,}' 'bearer[[:space:]]+[a-z0-9_.-]{8,}'
-         'session_token=([^<]|$)' 'AIza[0-9A-Za-z_-]{35}')
+         'session_token=([^<]|$)' 'AIza[0-9A-Za-z_-]{35}' '[?&]_gsid=' 'click_id_value=' 'click_id_tag=')
 
 hits=0
 report() {   # $1 name  $2 count
@@ -116,6 +119,12 @@ if [ "$SELF" = 1 ]; then
     "Authorization: Bearer canarytokenvalue123" > "$WORK/d.txt"
   printf '%s\n' "https://shop.example/checkouts/cn/x/thank_you?session_token=canarysession123" > "$WORK/e.json"
   printf '%s\n' "model key $GEMINI_API_KEY" > "$WORK/f.log"
+  # A full Global Catalog buy link (real catalog stage 0): recordings keep its host only, so its tracking parameters
+  # must never be in the evidence.
+  # The catalog names the click id's keys attribution/click_id_value and attribution/click_id_tag (the spike's report):
+  # both forms are planted, raw and percent-encoded.
+  printf '%s\n' "https://www.shop.example/buy/1:1?_gsid=canarygsid&attribution%2Fclick_id_value=canaryclick" \
+    "https://www.shop.example/buy/2:1?attribution/click_id_tag=canarytag" > "$WORK/g.json"
   # The clean shapes must not count.
   printf '%s\n' "?key=<redacted>" "Bearer <redacted>" "Shopify-Buyer-IP: <redacted>" "session_token=<redacted>" > "$WORK/clean.txt"
   out=$(scan 0 "$WORK")

@@ -528,3 +528,9 @@ SqlIntentRepository runs only on SQLite today: sqlite-jdbc is the only driver, `
 - the test that shows it: as 90
 - condition: equivalent only while every PreparedStatement is fresh and the driver is sqlite-jdbc. A statement cache, or a driver that refuses an unset parameter (pgjdbc, M7), makes it a survivor: revisit and kill 83, 84, 90 and 91 before either lands (the SQL statement cache item of `docs/follow-ups.md`)
 - approved: owner 2026-11-19, on the condition above
+
+### 92. dev.ucplab.core.orchestrator.DefaultOrchestrator.handOffLink RemoveConditionalMutator_EQUAL_IF (`approval.status() != CONSUMED`)
+- description: removed conditional - replaced equality check with true (the approval is moved to CONSUMED even when it already is)
+- why it is equivalent: as 43 and 89, whose order 7.2 hand_off (link) mirrors: `approvals.transition(APPROVED, CONSUMED)` is a compare-and-set on the expected status, so for an approval that is already CONSUMED it changes nothing and returns false; the result is not read, so nothing escalates, throws or writes an event
+- the test that shows it: `LinkHandoffTest.approve_handsOffTheApprovedLink_withNoFollowUp` and `aPendingApprovalUnderAnApprovedIntent_isRecovered_thenConsumed_atHandOff` pass with and without the mutation
+- approved: owner 2026-11-19

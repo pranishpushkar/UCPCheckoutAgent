@@ -29,6 +29,7 @@ in `./mvnw verify` reads these files; none goes to the network.
 ## Rules
 
 - Never copy the spike's global catalog answer (`catalog_search_global.json`): it holds other stores' products and
-  text.
+  text. The Global Catalog's answers, stripped under their own rules (every seller, title and text replaced), are
+  in `../shopify-catalog/`.
 - No real checkout key, no cart permalink path, no store host but the placeholder, no IP literal, and no Shopify access
   token prefix may appear in this folder. `ShopifyFixturesTest` scans every file here, this one included.

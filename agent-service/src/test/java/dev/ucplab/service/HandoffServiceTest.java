@@ -221,7 +221,7 @@ class HandoffServiceTest {
         assertThat(intent).containsEntry("merchant", Map.of("completion", "handoff", "shop_domain", HOST));
         Map<String, Object> listed = snapshotOf(((List<?>) json(api.get(alice, "/api/lab/merchants")).get("merchants")).get(0));
         assertThat(listed).containsEntry("merchant_id", "dev-store").containsEntry("completion", "handoff")
-                .containsEntry("live", true).containsEntry("shop_domain", HOST);
+                .containsEntry("live", true).containsEntry("shop_domain", HOST).containsEntry("lab", false);
         assertThat(api.get(alice, "/api/intents").statusCode()).isEqualTo(200);
         assertThat(api.get(alice, "/api/intents/" + id.value() + "/events").statusCode()).isEqualTo(200);
         HttpResponse<String> other = api.get(bob, "/api/intents/" + id.value());

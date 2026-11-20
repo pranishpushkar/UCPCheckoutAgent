@@ -29,6 +29,15 @@ public final class ModelKey {
         return new ModelKey(value);
     }
 
+    /**
+     * 6.5: true when every character is visible ASCII ({@code !} to {@code ~}), so an HTTP header can carry the key. Any
+     * other character (a space, a line break, a non-ASCII letter) would be refused only while the first request is
+     * built. Says nothing about the key but that.
+     */
+    public boolean visibleAscii() {
+        return value.chars().allMatch(c -> c >= 0x21 && c <= 0x7e);
+    }
+
     /** The key itself, for the SDK's client builder in {@code dev.ucplab.adk.gemini} only (ArchUnit enforces it). */
     public String reveal() {
         return value;

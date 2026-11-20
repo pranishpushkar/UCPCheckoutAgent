@@ -56,7 +56,21 @@ public final class McpStore implements HttpTransport {
     private HttpReply profile = reply(200, fixture("store_profile.json"));
 
     public static String fixture(String name) {
-        try (InputStream in = McpStore.class.getResourceAsStream("/shopify/" + name)) {
+        return resource("/shopify/" + name);
+    }
+
+    /** {@code value} as JSON, as an answer is written back: for a test that edits a recorded answer. */
+    public static String json(Object value) {
+        return McpJson.write(value);
+    }
+
+    /** A Global Catalog answer from {@code shopify-catalog/} (26.7), owner-approved and stripped. */
+    public static String catalogFixture(String name) {
+        return resource("/shopify-catalog/" + name);
+    }
+
+    private static String resource(String path) {
+        try (InputStream in = McpStore.class.getResourceAsStream(path)) {
             return new String(in.readAllBytes(), StandardCharsets.UTF_8);
         } catch (IOException e) {
             throw new IllegalStateException(e);
@@ -81,7 +95,11 @@ public final class McpStore implements HttpTransport {
 
     /** The next call of {@code tool} is answered with the recorded {@code fixture}, changed by {@code edit} first. */
     public McpStore answer(String tool, String fixture, UnaryOperator<String> edit) {
-        String text = edit.apply(fixture(fixture));
+        return answerText(tool, edit.apply(fixture(fixture)));
+    }
+
+    /** The next call of {@code tool} is answered with the JSON-RPC answer {@code text}, its id replaced by the call's. */
+    public McpStore answerText(String tool, String text) {
         return queue(tool, 200, id -> {
             Map<String, Object> root = new LinkedHashMap<>(LenientJson.readObject(text));
             root.put("id", id);

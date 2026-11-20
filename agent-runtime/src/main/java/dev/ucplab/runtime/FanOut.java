@@ -3,7 +3,11 @@ package dev.ucplab.runtime;
 import dev.ucplab.core.merchant.CallOutcome;
 import dev.ucplab.core.merchant.CatalogGateway;
 import dev.ucplab.core.merchant.MerchantEntry;
+import dev.ucplab.core.merchant.Transport;
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ExecutionException;
@@ -16,9 +20,10 @@ import java.util.function.Function;
 
 /**
  * One catalog call asked of every active merchant at once (DESIGN 6.2, 19), shared by {@code search_catalog} and
- * {@code get_product}. Each merchant is asked on a virtual thread, and all are awaited until one limit
- * ({@link ToolPorts#perMerchant()}) has passed: the deadline is shared, so the whole call takes at most that, never the
- * sum. A merchant that is not done by then is cancelled with an interrupt, which ends its HTTP call (the transport turns
+ * {@code get_product}. Each merchant is asked on a virtual thread, and all are awaited from one start until its limit has
+ * passed: {@link ToolPorts#catalogSource()} for a catalog source (26.7), {@link ToolPorts#perMerchant()} for any other.
+ * The start is shared, so the whole call takes at most the longest limit, never the sum; each merchant is awaited by its
+ * own deadline, the earliest first, so an answer after a merchant's own limit is never kept. A merchant that is not done by then is cancelled with an interrupt, which ends its HTTP call (the transport turns
  * it into one failed attempt and the retry loop does not try again, so it counts once against the merchant's breaker), and
  * its answer is empty, like that of a merchant with no catalog client. A catalog that throws (a bug: failures are
  * outcomes) fails the tool, as it always did. Nothing here holds a lock; the pool is shut down without waiting, so a call
@@ -39,15 +44,30 @@ final class FanOut {
                 CatalogGateway catalog = ports.catalogs().get(merchant.id());
                 futures.add(catalog == null ? null : pool.submit(() -> call.apply(catalog)));
             }
-            long deadline = System.nanoTime() + ports.perMerchant().toNanos();
-            List<Optional<CallOutcome<T>>> answers = new ArrayList<>();
-            for (Future<CallOutcome<T>> future : futures) {
-                answers.add(future == null ? Optional.empty() : await(future, deadline));
+            long started = System.nanoTime();
+            // Awaited in deadline order, so each merchant is held to its own limit: a store is cancelled at the store
+            // limit even while a catalog source's longer one runs, and its later answer is not kept.
+            List<Integer> byDeadline = new ArrayList<>();
+            for (int i = 0; i < futures.size(); i++) {
+                byDeadline.add(i);
+            }
+            byDeadline.sort(Comparator.comparing(i -> limit(ports, active.get(i))));
+            List<Optional<CallOutcome<T>>> answers = new ArrayList<>(Collections.nCopies(futures.size(), Optional.empty()));
+            for (int i : byDeadline) {
+                Future<CallOutcome<T>> future = futures.get(i);
+                if (future != null) {
+                    answers.set(i, await(future, started + limit(ports, active.get(i)).toNanos()));
+                }
             }
             return answers;
         } finally {
             pool.shutdownNow();
         }
+    }
+
+    /** 6.2, 26.7: a catalog source's limit, or a store's. */
+    private static Duration limit(ToolPorts ports, MerchantEntry merchant) {
+        return merchant.transport() == Transport.CATALOG ? ports.catalogSource() : ports.perMerchant();
     }
 
     private static <T> Optional<CallOutcome<T>> await(Future<CallOutcome<T>> future, long deadline) {

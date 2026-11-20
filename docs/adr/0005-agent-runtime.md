@@ -111,3 +111,14 @@ built on `google-genai` and not ADK. This records what M5 built, what was measur
 - Carried from M4 and untouched by the runtime: the approval lease, `PolicyUsage`, the recovery loop's graceful
   shutdown and its fixed log reason.
 - The S9 and S28 child JVMs do not receive the evaluation's canary; their logs are still searched.
+
+## Amended after the live catalog re-check of #31 (2026-11-20)
+
+- A live run ended `model_error` with cause `http_504` on its third call, after 8.3 s; the first two took 3.1 s and
+  5.0 s. The service's per-call timeout was 10 s, and the SDK also sends it to the API as `X-Server-Timeout`, so the
+  API gave up on its own deadline. The service's call timeout is now 20 s, still under `MAX_CALL_TIMEOUT` (30 s), and a
+  504 is retried once like a 503 (6.3).
+- The live model's wall clock is 60 s (`AgentBudget.LIVE`, 6.3); the other limits are unchanged, and the scripted model
+  keeps 30 s. Twenty-second calls do not fit a 30 s run more than once.
+- Each call asks for thinking level `LOW` (6.5), the lowest `gemini-3.8-flash` offers: the agent's turns pick a tool or
+  relay a result, and the default (medium) spends latency on that.

@@ -48,7 +48,7 @@ public class LabController {
 
     /**
      * The configured merchants, for the console's selector, counters, header badge and Developer tools (DESIGN 23.3,
-     * 24.3): each one's id, name, status, completion and whether it is a live store, with its shop_domain when it is, and
+     * 24.3): each one's id, name, status, completion, whether the lab controls it and whether it is a live store, with its shop_domain when it is, and
      * the fixed reason while it is SUSPENDED. Never a URL, a lab address or a token reference.
      */
     @GetMapping("/api/lab/merchants")
@@ -61,6 +61,8 @@ public class LabController {
             entry.put("status", registry.find(m.id()).map(e -> e.status().name()).orElse("SUSPENDED"));
             // 23.3, 24.3: for the header badge and the Developer tools before an intent exists.
             entry.put("completion", m.completion().name().toLowerCase(java.util.Locale.ROOT));
+            // 23.3, 24.3: whether the lab controls it (its lab_url), so has faults and orders; the console polls only these.
+            entry.put("lab", controls.controls(m.id()));
             Optional<String> live = LiveStore.domain(m.owned(), m.shopDomain());
             entry.put("live", live.isPresent());
             live.ifPresent(d -> entry.put("shop_domain", d));

@@ -48,7 +48,7 @@ public final class SqlRunRepository implements RunRepository {
         checkOwner(owner, run);
         db.write(c -> {
             try (PreparedStatement s = c.prepareStatement("INSERT INTO agent_run (" + RUN_COLUMNS + ", updated_at,"
-                    + " budget_minor, budget_currency) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+                    + " budget_minor, budget_currency, cause) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
                 bindRun(s, run);
                 s.setString(12, SqlTimes.format(clock.instant()));
                 // The budget is written here only: an update never touches it (23.1, fixed for the run).
@@ -59,6 +59,7 @@ public final class SqlRunRepository implements RunRepository {
                     s.setNull(13, java.sql.Types.INTEGER);
                     s.setString(14, null);
                 }
+                s.setString(15, run.cause().orElse(null));
                 s.executeUpdate();
             } catch (SQLException e) {
                 if (SqlErrors.isUniqueViolation(e)) {
@@ -91,7 +92,7 @@ public final class SqlRunRepository implements RunRepository {
         return db.write(c -> {
             try (PreparedStatement s = c.prepareStatement("UPDATE agent_run SET model = ?, started_at = ?,"
                     + " ended_at = ?, outcome = ?, reason = ?, model_calls = ?, tool_calls = ?, input_tokens = ?,"
-                    + " output_tokens = ?, updated_at = ? WHERE id = ? AND user_id = ?")) {
+                    + " output_tokens = ?, updated_at = ?, cause = ? WHERE id = ? AND user_id = ?")) {
                 s.setString(1, run.model());
                 s.setString(2, SqlTimes.format(run.startedAt()));
                 s.setString(3, run.endedAt().map(SqlTimes::format).orElse(null));
@@ -102,8 +103,10 @@ public final class SqlRunRepository implements RunRepository {
                 s.setLong(8, run.inputTokens());
                 s.setLong(9, run.outputTokens());
                 s.setString(10, SqlTimes.format(clock.instant()));
-                s.setString(11, run.id().value());
-                s.setString(12, owner.value());
+                // 6.5: a model_error's cause comes with the update that ends the run; every other update clears it.
+                s.setString(11, run.cause().orElse(null));
+                s.setString(12, run.id().value());
+                s.setString(13, owner.value());
                 if (s.executeUpdate() == 0) {
                     return false;
                 }
@@ -245,7 +248,7 @@ public final class SqlRunRepository implements RunRepository {
     private static List<RunRecord> runs(Connection c, String where, String... params) throws SQLException {
         List<RunRecord> out = new ArrayList<>();
         try (PreparedStatement s = c.prepareStatement(
-                "SELECT " + RUN_COLUMNS + ", budget_minor, budget_currency FROM agent_run WHERE " + where
+                "SELECT " + RUN_COLUMNS + ", budget_minor, budget_currency, cause FROM agent_run WHERE " + where
                         + " ORDER BY started_at, id")) {
             for (int i = 0; i < params.length; i++) {
                 s.setString(i + 1, params[i]);
@@ -270,7 +273,8 @@ public final class SqlRunRepository implements RunRepository {
                             r.getLong("output_tokens"),
                             intents(c, id),
                             toolEvents(c, id),
-                            budget));
+                            budget,
+                            Optional.ofNullable(r.getString("cause")).map(SqlRunRepository::storedCause)));
                 }
             }
         }
@@ -289,6 +293,14 @@ public final class SqlRunRepository implements RunRepository {
                 return out;
             }
         }
+    }
+
+    /**
+     * 6.5, 10 V12: the database holds a cause to 1 to 64 characters only, so a stored one outside RunRecord's identifier
+     * rule, which no RunRecord could have written, reads as {@code unknown}, never as its text.
+     */
+    private static String storedCause(String stored) {
+        return RunRecord.CAUSE.matcher(stored).matches() ? stored : "unknown";
     }
 
     private static List<ToolEvent> toolEvents(Connection c, String runId) throws SQLException {

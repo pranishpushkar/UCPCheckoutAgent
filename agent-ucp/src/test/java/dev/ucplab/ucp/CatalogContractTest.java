@@ -51,6 +51,17 @@ class CatalogContractTest extends ContractTestBase {
         assertThat(page.hasNextPage()).isTrue();
     }
 
+    // Covers: 6.2, 23.1 (with a run budget the lab merchant is asked with filters.price.max, and returns nothing above it)
+    @Test
+    void search_withABudget_isAskedForNothingAboveIt() {
+        List<CatalogProduct> products = value(client().search(new CatalogSearch("", 10,
+                java.util.Optional.of(new dev.ucplab.core.merchant.Money(1200, "USD"))))).products();
+
+        assertThat(products).extracting(CatalogProduct::id).contains("item_456");
+        assertThat(products).allSatisfy(p -> assertThat(p.variants())
+                .allSatisfy(v -> assertThat(v.price().minor()).isLessThanOrEqualTo(1200)));
+    }
+
     // Covers: FR1 (no match is Ok and empty, not an error)
     @Test
     void search_noMatch_isAnEmptyPage() {

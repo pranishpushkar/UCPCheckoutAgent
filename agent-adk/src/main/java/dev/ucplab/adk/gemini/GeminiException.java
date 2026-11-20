@@ -1,7 +1,9 @@
 package dev.ucplab.adk.gemini;
 
 import dev.ucplab.core.agent.ModelFailure;
+import java.time.Duration;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * Every failure that leaves {@link GeminiModelClient} (I8, ADR 0004): one of our fixed {@link Reason}s, never the
@@ -47,10 +49,28 @@ public final class GeminiException extends RuntimeException implements ModelFail
     }
 
     private final Reason reason;
+    private final String cause;
+    private final Optional<Duration> retryAfter;
 
+    /** A failure whose cause (6.5) is the reason's name in lower case, such as {@code configuration}. */
     GeminiException(Reason reason) {
+        this(reason, Objects.requireNonNull(reason, "reason").name().toLowerCase(java.util.Locale.ROOT), Optional.empty());
+    }
+
+    /** A failure of the answer, whose cause is {@code cause} (6.5): one of {@link GeminiMapping}'s constants. */
+    GeminiException(Reason reason, String cause) {
+        this(reason, cause, Optional.empty());
+    }
+
+    /**
+     * @param cause 6.5's cause: a status, an enum name or a class's simple name, never content (I8)
+     * @param retryAfter the {@code retryDelay} the API's error named (6.3), when it named one
+     */
+    GeminiException(Reason reason, String cause, Optional<Duration> retryAfter) {
         super(Objects.requireNonNull(reason, "reason").message, null, false, true);
         this.reason = reason;
+        this.cause = Objects.requireNonNull(cause, "cause");
+        this.retryAfter = Objects.requireNonNull(retryAfter, "retryAfter");
     }
 
     public Reason reason() {
@@ -61,5 +81,21 @@ public final class GeminiException extends RuntimeException implements ModelFail
     @Override
     public String code() {
         return reason.name();
+    }
+
+    @Override
+    public String cause() {
+        return cause;
+    }
+
+    /** 6.3: only an HTTP 429, 503 or 504 may succeed when tried again. */
+    @Override
+    public boolean retryable() {
+        return cause.equals("http_429") || cause.equals("http_503") || cause.equals("http_504");
+    }
+
+    @Override
+    public Optional<Duration> retryAfter() {
+        return retryAfter;
     }
 }

@@ -8,6 +8,7 @@ import dev.ucplab.core.merchant.CatalogProduct;
 import dev.ucplab.core.merchant.CatalogSearch;
 import dev.ucplab.core.merchant.CatalogVariant;
 import dev.ucplab.core.merchant.MerchantEntry;
+import dev.ucplab.core.merchant.Money;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -19,11 +20,17 @@ import java.util.Set;
 /**
  * {@code search_catalog} (6.2): {@code query} (1 to 200 characters) and {@code max_results} (1 to 10). Searches each
  * active merchant's catalog and returns {@code {items:[{merchant_id, item_id, title, price_minor, currency,
- * in_stock}]}}, one entry per variant, at most {@code max_results}. {@code title} is wrapped; the merchant's own
+ * in_stock, options?, seller?}]}}, one entry per variant, at most {@code max_results}. {@code title} is wrapped, and so
+ * are {@code seller}, a catalog source's seller name (26.7), and each name and label of {@code options}, the variant's
+ * own; the merchant's own
  * availability word is left out. A variant whose id a tool would not accept back is left out. Every active merchant is
  * asked at once, for {@link ToolPorts#perMerchant()} at most (19); the items are merged round-robin in registry order. A
  * merchant that timed out or failed is left out and named in {@code unavailable}; when every active merchant failed:
- * {@code {"error":"unavailable"}}.
+ * {@code {"error":"unavailable"}}. With a run budget (23.1) the search carries it as its price limit, from the run and
+ * never from the model, and an item in another currency or priced above it is left out whatever the merchant returned:
+ * a price filter is a request, not a guarantee. Items left out for their price are named only as {@code above_budget
+ * {count, lowest_price_minor, currency}}; when nothing fits, the same merchants are asked once more without the filter
+ * for it, the only second search.
  */
 final class SearchCatalogTool implements Tool {
 
@@ -63,7 +70,8 @@ final class SearchCatalogTool implements Tool {
             return ToolOutcome.invalid(e.getMessage());
         }
         List<MerchantEntry> active = ports.merchants().active();
-        List<Optional<CatalogPage>> pages = askAll(active, new CatalogSearch(query, max));
+        Optional<Money> limit = context.budget().map(b -> new Money(b.amountMinor(), b.currency()));
+        List<Optional<CatalogPage>> pages = askAll(active, new CatalogSearch(query, max, limit));
         List<List<Object>> perMerchant = new ArrayList<>();
         List<String> unavailable = new ArrayList<>();
         for (int i = 0; i < active.size(); i++) {
@@ -75,7 +83,7 @@ final class SearchCatalogTool implements Tool {
             List<Object> mine = new ArrayList<>();
             for (CatalogProduct product : pages.get(i).get().products()) {
                 for (CatalogVariant variant : product.variants()) {
-                    if (Args.ITEM_ID.matcher(variant.itemId()).matches()) {
+                    if (Args.ITEM_ID.matcher(variant.itemId()).matches() && fits(variant, limit)) {
                         mine.add(item(merchant, product, variant));
                     }
                 }
@@ -85,8 +93,15 @@ final class SearchCatalogTool implements Tool {
         if (!active.isEmpty() && unavailable.size() == active.size()) {
             return ToolOutcome.error("unavailable");
         }
+        List<Object> items = roundRobin(perMerchant, max);
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("items", roundRobin(perMerchant, max));
+        result.put("items", items);
+        if (limit.isPresent()) {
+            // 6.2, the near miss: a merchant that honours the filter returns nothing above it, so when nothing fits the
+            // same search is asked once more without it. Only numbers from the catalog reach the model.
+            List<Optional<CatalogPage>> read = items.isEmpty() ? askAll(active, new CatalogSearch(query, max)) : pages;
+            aboveBudget(read, limit.get()).ifPresent(a -> result.put("above_budget", a));
+        }
         if (!unavailable.isEmpty()) {
             result.put("unavailable", unavailable);
         }
@@ -99,6 +114,41 @@ final class SearchCatalogTool implements Tool {
                 .map(answer -> answer.flatMap(o -> o instanceof CallOutcome.Ok<CatalogPage> ok
                         ? Optional.of(ok.value()) : Optional.<CatalogPage>empty()))
                 .toList();
+    }
+
+    /**
+     * {@code {count, lowest_price_minor, currency}} of the variants in {@code pages} in the limit's currency and priced
+     * above it, or empty when there are none (6.2). Numbers only: nothing else of a left-out variant.
+     */
+    private static Optional<Map<String, Object>> aboveBudget(List<Optional<CatalogPage>> pages, Money limit) {
+        long count = 0;
+        long lowest = Long.MAX_VALUE;
+        for (Optional<CatalogPage> page : pages) {
+            for (CatalogProduct product : page.map(CatalogPage::products).orElse(List.of())) {
+                for (CatalogVariant variant : product.variants()) {
+                    Money price = variant.price();
+                    if (Args.ITEM_ID.matcher(variant.itemId()).matches() && price.currency().equals(limit.currency())
+                            && price.minor() > limit.minor()) {
+                        count++;
+                        lowest = Math.min(lowest, price.minor());
+                    }
+                }
+            }
+        }
+        if (count == 0) {
+            return Optional.empty();
+        }
+        Map<String, Object> above = new LinkedHashMap<>();
+        above.put("count", count);
+        above.put("lowest_price_minor", lowest);
+        above.put("currency", limit.currency());
+        return Optional.of(above);
+    }
+
+    /** True without a limit, or when the variant is in the limit's currency and priced at or below it (6.2). */
+    private static boolean fits(CatalogVariant variant, Optional<Money> limit) {
+        return limit.isEmpty() || variant.price().currency().equals(limit.get().currency())
+                && variant.price().minor() <= limit.get().minor();
     }
 
     /** One item from each merchant in turn, in registry order, each merchant's own order kept, up to {@code max}. */
@@ -127,6 +177,11 @@ final class SearchCatalogTool implements Tool {
         item.put("price_minor", variant.price().minor());
         item.put("currency", variant.price().currency());
         item.put("in_stock", variant.availability().available());
+        if (!variant.options().isEmpty()) {
+            item.put("options", ToolText.options(variant));
+        }
+        // 6.2, 26.7: a catalog source's seller, by name only, wrapped like the title; never its domain or a URL (I6).
+        variant.seller().ifPresent(s -> item.put("seller", UntrustedText.wrap("merchant", "seller", s)));
         return item;
     }
 }

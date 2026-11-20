@@ -134,7 +134,7 @@ class RunsApiTest {
         Map<String, Object> full = run(alice, id);
         assertThat(full).containsKeys("run_id", "status", "model", "started_at", "ended_at", "messages",
                 "messages_retained", "tool_events", "intent_ids", "counts");
-        assertThat(full).containsEntry("model", "scripted/v2").containsEntry("messages_retained", true);
+        assertThat(full).containsEntry("model", "scripted/v4").containsEntry("messages_retained", true);
         assertThat(list(full.get("tool_events"))).extracting(e -> e.get("tool"))
                 .containsExactly("ask_user", "search_catalog", "propose_purchase");
         assertThat(list(full.get("tool_events"))).allSatisfy(e -> assertThat(e.keySet())
@@ -260,6 +260,35 @@ class RunsApiTest {
                 .get("run_id");
         assertThat(awaitStatus(alice, timeout, s -> !s.equals("waiting_for_user") && !s.equals("running"))).isEqualTo("user_timeout");
         assertNotWaiting(alice, timeout);
+    }
+
+    // Covers: 23.1, 6.5, 10 (V12), I8 (a model_error comes with its cause, on the answer and on a later GET, which
+    // reads it from the stored run; the cause names the failure's class, never its message; a run that did not end
+    // with model_error has no cause)
+    @Test
+    void aModelError_comesWithItsCause_neverTheMessage() throws IOException {
+        Map<String, Object> beans = new java.util.HashMap<>();
+        beans.put("testModel", (ModelClient) (c, t) -> {
+            String last = ((dev.ucplab.core.agent.Message.User) c.messages().stream()
+                    .filter(m -> m instanceof dev.ucplab.core.agent.Message.User).reduce((a, b) -> b).orElseThrow()).text();
+            if (last.startsWith("fail")) {
+                throw new IllegalStateException("SECRET model down");
+            }
+            return new dev.ucplab.core.agent.ModelTurn("Done.", List.of(), new dev.ucplab.core.agent.Usage(1, 1));
+        });
+        start(Optional.empty(), beans);
+        Session alice = api.signIn("alice");
+
+        HttpResponse<String> posted = api.post(alice, "/api/runs", message("fail now"));
+        Map<String, Object> failed = LenientJson.readObject(posted.body());
+        assertThat(failed).containsEntry("status", "failed").containsEntry("reason", "model_error")
+                .containsEntry("cause", "exception_IllegalStateException");
+        assertThat(posted.body()).doesNotContain("SECRET");
+        Map<String, Object> read = LenientJson.readObject(api.get(alice, "/api/runs/" + failed.get("run_id")).body());
+        assertThat(read).containsEntry("cause", "exception_IllegalStateException");
+
+        Map<String, Object> done = LenientJson.readObject(api.post(alice, "/api/runs", message("hello")).body());
+        assertThat(done).containsEntry("status", "done").doesNotContainKey("cause");
     }
 
     private void assertNotWaiting(Session s, String id) {

@@ -73,6 +73,16 @@ public final class DefaultApprovalService implements ApprovalService {
 
     @Override
     public PendingApproval open(PurchaseIntent intent, CheckoutView quote) {
+        return open(intent, quote, Optional.empty());
+    }
+
+    /** A link intent's approval (9.2, 26.7): as {@link #open}, the snapshot also holding the seller and the link. */
+    @Override
+    public PendingApproval openLink(PurchaseIntent intent, CheckoutView quote, LinkSnapshot link) {
+        return open(intent, quote, Optional.of(Objects.requireNonNull(link, "link")));
+    }
+
+    private PendingApproval open(PurchaseIntent intent, CheckoutView quote, Optional<LinkSnapshot> link) {
         Objects.requireNonNull(intent, "intent");
         Objects.requireNonNull(quote, "quote");
         Instant now = clock.instant();
@@ -85,7 +95,7 @@ public final class DefaultApprovalService implements ApprovalService {
         ApprovalSnapshot snapshot = new ApprovalSnapshot(
                 intent.id(), intent.merchantId(), quote.id(),
                 quote.lines().stream().map(l -> new SnapshotLine(l.itemId(), l.quantity(), l.unitPriceMinor(), l.title())).toList(),
-                quote.currency(), quote.totalMinor(), quote.totalMinor(), now.plus(ttl), shipping(quote));
+                quote.currency(), quote.totalMinor(), quote.totalMinor(), now.plus(ttl), shipping(quote), link);
         String hash = snapshot.hash();
         String approvalId = ids.next();
         String token = tokens.mint(approvalId, intent.id(), hash);

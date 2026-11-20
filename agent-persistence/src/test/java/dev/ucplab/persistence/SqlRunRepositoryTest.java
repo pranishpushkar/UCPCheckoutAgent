@@ -121,6 +121,26 @@ class SqlRunRepositoryTest extends RunRepositoryContract {
                 + " VALUES ('ghost', 0, 'alice', 't')")).isInstanceOf(DatabaseException.class);
     }
 
+    // Covers: 6.5, 10 V12, I8 (the database holds a cause to 1 to 64 characters only, so the identifier rule is the code's:
+    // a stored cause outside [A-Za-z0-9_], which only a writer other than RunRecord could leave, reads back as unknown,
+    // never as its text; a cause inside the rule reads back unchanged)
+    @Test
+    void find_aStoredCauseOutsideTheIdentifierRule_readsAsUnknown() {
+        RunRecord ended = new RunRecord(new RunId("r-c"), ALICE, "gemini/v3", T0, Optional.of(T0.plusSeconds(9)),
+                Optional.of("failed"), Optional.of("model_error"), 3, 2, 3483, 120, List.of(), List.of())
+                .withCause(Optional.of("http_504"));
+        repo.insert(ALICE, ended);
+        assertThat(repo.find(ALICE, ended.id()).orElseThrow().cause()).contains("http_504");
+
+        for (String stored : List.of("http 504", "SECRET: the prompt", "finish-SAFETY", "\u00e9t\u00e9")) {
+            org.assertj.core.api.Assertions.assertThatCode(() -> exec("UPDATE agent_run SET cause = '" + stored
+                    + "' WHERE id = 'r-c'")).as("the database keeps " + stored).doesNotThrowAnyException();
+            assertThat(repo.find(ALICE, ended.id()).orElseThrow().cause()).as(stored).contains("unknown");
+        }
+        exec("UPDATE agent_run SET cause = '" + "A_9".repeat(21) + "z' WHERE id = 'r-c'");
+        assertThat(repo.find(ALICE, ended.id()).orElseThrow().cause()).contains("A_9".repeat(21) + "z");
+    }
+
     // Covers: 23.1 (tool durations are stored in whole milliseconds; a sub-millisecond part is dropped, never rounded up)
     @Test
     void toolEventDuration_isStoredInWholeMilliseconds() {

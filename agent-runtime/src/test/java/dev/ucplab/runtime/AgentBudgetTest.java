@@ -162,4 +162,16 @@ class AgentBudgetTest {
                 .isInstanceOf(IllegalStateException.class);
         assertThat(meter.waitingForUser(() -> "again")).as("the meter is usable afterwards").isEqualTo("again");
     }
+
+    // Covers: 6.3 (the live model's run has 60 s of wall clock and the scripted model keeps 30 s; every other limit is the
+    // same for both)
+    @Test
+    void forModel_liveGets60s_scriptedKeeps30s_otherLimitsTheSame() {
+        assertThat(AgentBudget.forModel("scripted")).isEqualTo(AgentBudget.DEFAULT);
+        assertThat(AgentBudget.DEFAULT.wallClock()).isEqualTo(Duration.ofSeconds(30));
+        for (String live : java.util.List.of("gemini", "gemini-3.8-flash")) {
+            assertThat(AgentBudget.forModel(live)).as(live).isEqualTo(AgentBudget.LIVE);
+        }
+        assertThat(AgentBudget.LIVE).isEqualTo(new AgentBudget(6, 8, Duration.ofSeconds(60), 20_000));
+    }
 }

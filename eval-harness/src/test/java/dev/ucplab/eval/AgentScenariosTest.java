@@ -140,7 +140,8 @@ class AgentScenariosTest {
         }
     }
 
-    // Covers: 13.2, S29, I3, P9 (the run's budget is 10.00 USD and the Blue Mug costs more: the intent ends
+    // Covers: 13.2, S29, I3, P9, 6.2 (the run's budget is 12.00 USD, the Blue Mug's own price, so the search shows it,
+    // and its quote with the lab's tax is above it: the intent ends
     // FAILED_NOT_CHARGED with policy_P9, no approval is opened, no order; the script's last turn fires only on a result
     // that names the budget and the quoted total, so the agent says none fits and names the closest price)
     @Test
@@ -151,12 +152,12 @@ class AgentScenariosTest {
             assertThat(e.intents()).singleElement().satisfies(p -> {
                 assertThat(p.intent().state()).isEqualTo(IntentState.FAILED_NOT_CHARGED);
                 assertThat(p.intent().failureReason()).contains("policy_P9");
-                assertThat(p.intent().budget()).contains(new dev.ucplab.core.intent.Budget(1_000, "USD"));
+                assertThat(p.intent().budget()).contains(new dev.ucplab.core.intent.Budget(1_200, "USD"));
                 assertThat(p.approvalRows()).isEmpty();
             });
             assertThat(e.orders()).isEmpty();
             assertThat(e.agentRun().get().record().outcome()).contains("done");
-            assertThat(e.agentRun().get().record().budget()).contains(new dev.ucplab.core.intent.Budget(1_000, "USD"));
+            assertThat(e.agentRun().get().record().budget()).contains(new dev.ucplab.core.intent.Budget(1_200, "USD"));
             assertThat(tools(e)).containsExactly("search_catalog", "propose_purchase");
         }
     }

@@ -36,8 +36,19 @@ import org.springframework.context.annotation.Configuration;
 public class RunConfiguration {
 
     static final String MODEL_UNAVAILABLE = "AGENT_MODEL=gemini needs the gemini provider, which is not on the classpath";
-    /** One model call may take this long; the run's own wall clock stays 30 s (6.3, m6-plan section 3.2). */
-    static final Duration CALL_TIMEOUT = Duration.ofSeconds(10);
+    /**
+     * One model call may take this long (6.5), and the SDK sends it as {@code X-Server-Timeout}: 10 s met the API's own
+     * deadline (a 504) on a third call. The live run's wall clock is 60 s (6.3), room for three or four such calls.
+     */
+    static final Duration CALL_TIMEOUT = Duration.ofSeconds(20);
+
+    /** 6.3: the run's limits for {@code AGENT_MODEL}. */
+    static AgentBudget budget(ServiceProperties.AgentModel model) {
+        return switch (model) {
+            case SCRIPTED -> AgentBudget.DEFAULT;
+            case GEMINI -> AgentBudget.LIVE;
+        };
+    }
 
     /** The model for {@code AGENT_MODEL}; a test may register its own. */
     @Bean
@@ -81,7 +92,8 @@ public class RunConfiguration {
             case GEMINI -> "gemini";
         };
         ToolPorts ports = new ToolPorts(registry, new LinkedHashMap<MerchantId, CatalogGateway>(catalogs.byId()), orchestrator);
-        return new AgentRuntime(model, name, ports, runs, AgentBudget.DEFAULT, supervisorConfig.askTimeout(), clock);
+        return new AgentRuntime(model, name, ports, runs, budget(properties.agentModel()), supervisorConfig.askTimeout(),
+                clock);
     }
 
     /** The catalog client of each configured merchant, SUSPENDED ones included (19). */

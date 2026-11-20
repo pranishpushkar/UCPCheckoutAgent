@@ -26,8 +26,9 @@ import java.util.Set;
  *
  * <p>Returns {@code {intent_id, state, quote:{currency, total_minor, lines:[{item_id, quantity, unit_price_minor}]}}}
  * for AWAITING_APPROVAL, and {@code {intent_id, state, failure_reason?}} otherwise; after a P9 denial also
- * {@code reason}, {@code quoted} and {@code budget} (6.2). It never returns the session id,
- * merchant messages, the approval id or token, or the snapshot hash (I6, I8, 9.2).
+ * {@code reason}, {@code quoted} and {@code budget} (6.2), and after a refused link ({@code link_not_allowed}, 26.7)
+ * also a fixed {@code reason}. It never returns the session id, merchant messages, the approval id or token, the
+ * snapshot hash, or a link or its host (I6, I8, 9.2).
  */
 final class ProposePurchaseTool implements Tool {
 
@@ -69,6 +70,10 @@ final class ProposePurchaseTool implements Tool {
         return SPEC;
     }
 
+    /** The failure_reason of an offer whose link I12 refused (7.2 link_refused, 26.7). */
+    private static final String LINK_NOT_ALLOWED = "link_not_allowed";
+    /** 6.2: a fixed text of ours, never the link or its host. */
+    static final String LINK_NOT_ALLOWED_REASON = "the store's link is not on the seller's own site";
     /** The failure_reason of a quote P9 refused (9.1). */
     private static final String OVER_BUDGET = "policy_P9";
 
@@ -101,6 +106,9 @@ final class ProposePurchaseTool implements Tool {
         } else {
             IntentStatus status = ports.orchestrator().status(context.auth(), proposal.intentId());
             status.failureReason().ifPresent(r -> result.put("failure_reason", ToolText.failureReason(r)));
+            if (status.failureReason().filter(LINK_NOT_ALLOWED::equals).isPresent()) {
+                result.put("reason", LINK_NOT_ALLOWED_REASON);
+            }
             if (status.failureReason().filter(OVER_BUDGET::equals).isPresent() && context.budget().isPresent()
                     && proposal.quote().isPresent()) {
                 // Our own text and numbers only (6.2), so the agent can try a cheaper item or say none fits.

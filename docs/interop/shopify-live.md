@@ -96,7 +96,7 @@ scripts/shopify-live.sh --i-own-this-store --with-buyer-ip --cancel-after       
 
 With `--model gemini` (DESIGN 26.6), each model call sends the following.
 
-- The system prompt (DESIGN 6.4, version v2). When the run has a budget, the system prompt is followed by the
+- The system prompt (DESIGN 6.4, version v3). When the run has a budget, the system prompt is followed by the
   `[BUDGET]` hint: "The user's budget for this run is $700.00…". This is our own text, built from the run's stored
   budget.
 - The conversation: your messages, and the model's own earlier turns.

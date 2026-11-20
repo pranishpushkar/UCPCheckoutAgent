@@ -4,6 +4,7 @@ Not part of ./mvnw verify (verify needs no Python)."""
 import io
 import json
 import os
+import re
 import shutil
 import signal
 import sqlite3
@@ -728,6 +729,19 @@ class GeminiModel(unittest.TestCase):
                                       "(it is never taken as an argument)", repr(value))
             self.assertNotIn("\n", message)
 
+    # Covers: 26.6, I8 (a key holding a character an HTTP header cannot carry, anywhere in it, is refused in one line that
+    # never shows the key: the service's first model call would fail with nothing sent)
+    # model_choice alone, never main: a test must not reach the step that starts the service.
+    def test_gemini_aKeyAHeaderCannotCarry_isRefusedInOneLine(self):
+        for bad in ("\u200b", "\u00a0", "\n", " ", "\u00e9", "\t"):
+            env = {"GEMINI_API_KEY": self.KEY[:10] + bad + self.KEY[10:]}
+            with self.assertRaises(SystemExit) as e:
+                live.model_choice(["--model", "gemini"], env, False)
+            message = str(e.exception)
+            self.assertEqual(message, "refused: GEMINI_API_KEY holds a character an HTTP header cannot carry "
+                                      "(only visible ASCII); it is not shown", repr(bad))
+            self.assertNotIn(self.KEY[:10], message)
+
     # Covers: 26.6 (an unknown model, and --model outside --console, are refused)
     def test_anUnknownModel_andTheOptionOutsideTheConsole_areRefused(self):
         os.environ["GEMINI_API_KEY"] = self.KEY
@@ -846,6 +860,126 @@ class LeakScanGeminiKey(unittest.TestCase):
             text = f.read()
         self.assertTrue("printf 'the Gemini API key\\t%s\\n' \"$GEMINI_API_KEY\"" in text, "the fixed pattern's line")
         self.assertNotRegex(text, r"grep[^\n]*\$GEMINI_API_KEY")
+
+
+
+class LeakScanTrackingParameters(unittest.TestCase):
+    """scripts/h5-leak-scan.sh holds the Global Catalog's tracking parameters (_gsid=, click_id_value=, click_id_tag=)
+    as shapes (real catalog stage 0): recordings keep a buy link's host only, so any of them in the evidence means a
+    full link was recorded."""
+
+    SCAN = os.path.join(HERE, "h5-leak-scan.sh")
+    NAMES = ("a buy link's _gsid=", "a buy link's click_id_value=", "a buy link's click_id_tag=")
+
+    def run_scan(self, *args):
+        return subprocess.run(["bash", self.SCAN] + list(args), capture_output=True, text=True, timeout=120,
+                              env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": os.environ.get("HOME", "")})
+
+    # Covers: 26.7, I8 (the self-test plants a full buy link and finds each tracking parameter by its pattern name)
+    def test_theSelfTest_findsEachTrackingParameter(self):
+        done = self.run_scan("--self-test")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        for name in self.NAMES:
+            self.assertRegex(done.stdout, r"HIT  %s \(evidence\): [1-9]" % re.escape(name))
+
+    # Covers: 26.7, I8 (the parameters as the catalog names them, attribution/click_id_value and click_id_tag, raw or
+    # percent-encoded, are found; the scan's own shapes say so)
+    def test_theShapes_matchTheCatalogsAttributionNames(self):
+        with open(self.SCAN) as f:
+            text = f.read()
+        self.assertTrue("'click_id_value=' 'click_id_tag='" in text, "the shapes match the name wherever it appears")
+        self.assertTrue("attribution%2Fclick_id_value=" in text, "the self-test plants the percent-encoded form")
+        self.assertTrue("attribution/click_id_tag=" in text, "the self-test plants the raw form")
+
+    # Covers: 26.7, I8 (the dry run names the three shapes)
+    def test_theDryRun_namesTheTrackingParameters(self):
+        done = self.run_scan("--dry-run")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        for name in self.NAMES:
+            self.assertTrue("DRY-RUN shape: " + name in done.stdout, name)
+
+
+class Catalog(unittest.TestCase):
+    """--catalog (DESIGN 26.7), with --console only: the service lists Shopify's catalog alone and calls no store, so
+    the store's guards, the buyer IP and --after-payment are refused; it needs the client and the agent profile only;
+    the dry run names every call with the secrets replaced."""
+
+    ENV = {"SHOPIFY_CLIENT_ID": "cid-canary-2", "SHOPIFY_CLIENT_SECRET": "csec-canary-2",
+           "AGENT_PROFILE_URL": "https://example.test/profile.json", "BUYER_IP": "81.2.69.162",
+           "PATH": os.environ.get("PATH", "/bin")}
+
+    def setUp(self):
+        self.saved = dict(os.environ)
+        self.work = tempfile.mkdtemp()
+        os.environ.clear()
+        os.environ.update(self.ENV)
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self.saved)
+        shutil.rmtree(self.work)
+
+    def dry_run(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = live.main(["--console", "--catalog", "--dry-run"])
+        self.assertEqual(code, 0)
+        return out.getvalue()
+
+    # Covers: 26.7 (--catalog is for the console only)
+    def test_theOption_isForTheConsoleOnly(self):
+        with self.assertRaises(SystemExit) as e:
+            live.main(["--catalog", "--dry-run"])
+        self.assertEqual(str(e.exception), "refused: --catalog belongs to --console (scripts/shopify-console.sh)")
+
+    # Covers: 26.7, 26.5, I12 (no store is called: the store's guards and --after-payment are refused, not ignored)
+    def test_theStoresOptions_areRefused(self):
+        for flag in ("--i-own-this-store", "--with-buyer-ip", "--after-payment"):
+            with self.assertRaises(SystemExit, msg=flag) as e:
+                live.main(["--console", "--catalog", "--dry-run", flag])
+            self.assertIn("refused: %s belongs to the owned store" % flag, str(e.exception))
+
+    # Covers: 26.7 (a real run needs the client id and secret and the agent profile, and no store domain or buyer IP)
+    def test_aRealRun_needsTheClientAndTheProfile_only(self):
+        os.environ.clear()
+        os.environ["PATH"] = self.ENV["PATH"]
+        with self.assertRaises(SystemExit) as e:
+            live.main(["--console", "--catalog"])
+        self.assertEqual(str(e.exception),
+                         "missing environment: SHOPIFY_CLIENT_ID, SHOPIFY_CLIENT_SECRET, AGENT_PROFILE_URL")
+
+    # Covers: 19, 26.7 (the merchants file lists the catalog alone: catalog and link, Shopify's catalog URL, the
+    # client's credential_ref, and none of a store's keys)
+    def test_theMerchantsFile_listsTheCatalogAlone(self):
+        text = live.catalog_merchants_yaml()
+        for line in ("id: shopify-catalog", "url: https://catalog.shopify.com/api/ucp/mcp", "transport: catalog",
+                     "completion: link", "credential_ref: env:SHOPIFY_CLIENT"):
+            self.assertIn(line, text)
+        for never in ("owned", "shop_domain", "requires_buyer_ip", "ucp_versions", "myshopify.com"):
+            self.assertNotIn(never, text)
+
+    # Covers: 26.7, I8 (the service gets no BUYER_IP at all, even when the shell holds one; the client still goes in)
+    def test_theService_isNeverGivenTheBuyerIp(self):
+        env = live.service_env(os.environ, self.work, 8080, catalog=True)
+        self.assertNotIn("BUYER_IP", env)
+        self.assertNotIn(self.ENV["BUYER_IP"], json.dumps(env))
+        self.assertEqual(env["SHOPIFY_CLIENT"], "cid-canary-2:csec-canary-2")
+
+    # Covers: 26.7, I8 (the dry run shows the catalog's merchants file and every call, the secrets replaced; it names
+    # no buyer IP and no store, and calls nothing)
+    def test_theDryRun_showsEveryCall_withTheSecretsReplaced(self):
+        text = self.dry_run()
+        self.assertIn("transport: catalog", text)
+        self.assertIn("POST https://api.shopify.com/auth/access_token", text)
+        self.assertIn("POST https://catalog.shopify.com/api/ucp/mcp tools/call search_catalog and get_product", text)
+        self.assertIn("Authorization: Bearer <redacted>", text)
+        self.assertIn("no Shopify-Buyer-IP, and nothing is sent to any store", text)
+        self.assertIn('"SHOPIFY_CLIENT": "<redacted>"', text)
+        self.assertNotIn("BUYER_IP", text)
+        for secret in ("cid-canary-2", "csec-canary-2", "81.2.69.162"):
+            self.assertNotIn(secret, text)
+        for never in ("create_checkout", "get_checkout", "cancel_checkout", "myshopify.com"):
+            self.assertNotIn(never, text)
 
 
 if __name__ == "__main__":

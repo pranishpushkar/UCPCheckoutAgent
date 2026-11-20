@@ -60,6 +60,11 @@ public final class CatalogClient implements CatalogGateway {
         Objects.requireNonNull(request, "request");
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("query", request.query());
+        // 6.2: a run's budget as filters.price.max in minor units, denominated in context.currency (UCP catalog search).
+        request.maxPrice().ifPresent(m -> {
+            body.put("context", Map.of("currency", m.currency()));
+            body.put("filters", Map.of("price", Map.of("max", m.minor())));
+        });
         body.put("pagination", Map.of("limit", (long) request.limit()));
         return call(SEARCH_CAPABILITY, "/catalog/search", body, CatalogParser::parseSearch);
     }

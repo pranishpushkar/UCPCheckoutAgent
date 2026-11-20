@@ -284,15 +284,15 @@ class ConsoleStaticTest {
     }
 
     // Covers: I2, 9.3 L4, 24.3, 9.2 (the approval card is its own component and reads only the approval response's
-    // fields: the snapshot's lines with their merchant titles, currency and total, the expiry and the token; never the
-    // chat, the run, the messages or a description)
+    // fields: the snapshot's lines with their merchant titles, currency and total, the expiry and the token, and at a link
+    // merchant the answer's seller (23.2, 26.7); never the chat, the run, the messages or a description)
     @Test
     void approvalCard_readsOnlyTheApprovalResponsesFields() throws IOException {
         String js = read("console.js");
         String card = card(js);
 
         Set<String> allowed = Set.of("snapshot", "lines", "item_id", "title", "quantity", "unit_price_minor", "currency",
-                "total_minor", "expires_at", "token", "merchant_id", "completion", "note", "budget");
+                "total_minor", "expires_at", "token", "merchant_id", "completion", "note", "budget", "seller");
         Set<String> read = new LinkedHashSet<>();
         Matcher fields = Pattern.compile("\\b(?:approval|snapshot|line)\\.([A-Za-z_]+)").matcher(card);
         while (fields.find()) {
@@ -460,6 +460,35 @@ class ConsoleStaticTest {
                 .contains("anchor.href = url;").contains("anchor.target = \"_blank\";")
                 .contains("anchor.rel = \"noopener noreferrer\";")
                 .contains("anchor.referrerPolicy = \"no-referrer\";");
+    }
+
+    // Covers: 24.3, 23.2, 26.7 (a link merchant's card: "From <seller.name>" with a Shopify catalog badge, the total
+    // row Listed price, no Other charges line, the answer's note, and the button Approve and get the link; all as text)
+    @Test
+    void approvalCard_atALinkMerchant_readsAsTheDesignSays() throws IOException {
+        String card = card(read("console.js"));
+
+        assertThat(card).contains("approval.completion === \"link\"")
+                .contains("el(\"p\", \"From \" + approval.seller.name")
+                .contains("\"Shopify catalog\"")
+                .contains("\"Listed price\"")
+                .contains("\"Approve and get the link\"");
+        assertThat(count(card, "Other charges (tax)")).as("only in cardCharges' agent branch").isEqualTo(1);
+    }
+
+    // Covers: 24.3, 26.7, I9, D5 (in HANDED_OFF a link intent's link reads Continue at <seller.host>, with the same
+    // anchor rules, and the fixed text that the agent can't see the purchase; the stepper's link steps)
+    @Test
+    void handoffLink_atALinkMerchant_namesTheSellersHost_andSaysTheAgentCantSee() throws IOException {
+        String js = read("console.js");
+        String link = handoffLink(js);
+
+        assertThat(link).contains("\"Continue at \" + ").contains("seller.host")
+                .contains("\"If you buy, the store emails you. The agent can't see this purchase.\"")
+                .contains("anchor.rel = \"noopener noreferrer\";")
+                .contains("anchor.referrerPolicy = \"no-referrer\";");
+        assertThat(count(js, "handoff_url")).as("handoff_url is read once").isEqualTo(1);
+        assertThat(js).contains("\"Priced from Shopify's catalog\"").contains("\"Link ready\"");
     }
 
     /** The code between {@code // <follow-up>} and {@code // </follow-up>} in console.js. */
@@ -772,5 +801,246 @@ class ConsoleStaticTest {
         assertThat(card.indexOf("if (approval.budget) {")).as("under the total row")
                 .isGreaterThan(card.indexOf("card.appendChild(table);"))
                 .isLessThan(card.indexOf("const info = el(\"div\", null, \"info\");"));
+    }
+
+    /** 24.3's run-end table: each status line and chat text, in the page's own words. */
+    private static final List<String> RUN_END_TEXTS = List.of(
+            "Working on it.", "Waiting for your answer.", "Waiting for your approval.", "Done.",
+            "Stopped: ran out of steps.",
+            "I looked at several options but ran out of steps before choosing. Try a narrower request.",
+            "Stopped: ran out of time.", "I ran out of time before choosing. Try a narrower request.",
+            "Stopped: too much to read.", "I had too much to read before choosing. Try a narrower request.",
+            "Stopped: no answer from you.", "I stopped waiting for your answer. Send a new message to start again.",
+            "Stopped: the model could not be reached.", "I couldn't reach the model, so I stopped. Try again in a moment.",
+            "Stopped: the model is busy.", "The model is busy right now; try again in a minute.",
+            "Stopped: a step failed.", "A step failed, so I stopped. Try again in a moment.",
+            "Stopped: something went wrong.", "Something went wrong on our side, so I stopped. Try again in a moment.",
+            "Stopped: the service restarted.",
+            "The service restarted while I was working, so I stopped. Send your request again.",
+            "Stopped.", "I stopped before finishing. Try again in a moment.");
+
+    // Covers: 24.3, 23 (the status line names every run status and reason in words, never the codes: the live check
+    // showed "Run budget exceeded (TOOL_CALLS)."; each of 24.3's texts is in the page, and each limit and reason code
+    // is only a key of its table)
+    @Test
+    void runEnd_theStatusLineNamesEveryStatusAndReasonInWords_neverTheCode() throws IOException {
+        String js = read("console.js");
+        String end = block(js, "run-end");
+
+        assertThat(end).as("24.3's run-end table").isNotEmpty();
+        for (String text : RUN_END_TEXTS) {
+            assertThat(end).as(text).contains("\"" + text + "\"");
+        }
+        for (String code : List.of("MODEL_CALLS", "TOOL_CALLS", "WALL_CLOCK", "TOKENS", "model_error", "tool_error",
+                "internal_error", "interrupted", "budget_exceeded", "user_timeout", "failed", "running",
+                "waiting_for_user", "done")) {
+            assertThat(end).as(code).contains("\"" + code + "\"");
+        }
+        assertThat(js).as("the codes are never shown").doesNotContain("run.status.replace(")
+                .doesNotContain("run.reason ? \" (\"");
+        assertThat(count(js, "run.reason")).as("the reason is read only by the table").isEqualTo(count(end, "run.reason"));
+        assertThat(end).doesNotContain("innerHTML").doesNotContain("textContent");
+    }
+
+    // Covers: 24.3, 6.3, 6.5 (a model_error whose cause is http_429 or http_503 reads "the model is busy", in the
+    // status line and the chat; any other cause keeps the model_error row; the cause is read only by the table)
+    @Test
+    void runEnd_aBusyModel_saysSo_fromTheCause() throws IOException {
+        String js = read("console.js");
+        String end = block(js, "run-end");
+
+        assertThat(end).contains("const BUSY = [\"Stopped: the model is busy.\",")
+                .contains("\"The model is busy right now; try again in a minute.\"]")
+                .contains("const BUSY_CAUSES = new Set([\"http_429\", \"http_503\"]);")
+                .contains("if (run.status === \"failed\" && run.reason === \"model_error\" && BUSY_CAUSES.has(run.cause)) {");
+        assertThat(end.indexOf("BUSY_CAUSES.has(run.cause)")).as("before the table's own rows")
+                .isLessThan(end.indexOf("const ends = RUN_ENDS.get(run.status);"));
+        assertThat(count(js, "run.cause")).as("the cause is read only by the table").isEqualTo(count(end, "run.cause"));
+    }
+
+    // Covers: 24.3, 23.3 (the order counters and the fault lab's selector list only the merchants whose lab is true;
+    // with none, as in catalog mode, nothing polls GET /api/lab/orders, which is 422 for any other merchant)
+    @Test
+    void orderCounters_pollOnlyTheLabsMerchants_andNothingWithoutOne() throws IOException {
+        String js = read("console.js");
+        String start = js.substring(js.indexOf("async function startLab() {"), js.indexOf("async function refreshOrders() {"));
+
+        assertThat(start).contains("const lab = list.data.merchants.filter((m) => m.lab === true);")
+                .contains("lab.forEach((m) => {")
+                .doesNotContain("list.data.merchants.forEach(")
+                .contains("  if (lab.length > 0) {\n    refreshOrders();\n    window.setInterval(refreshOrders, 2000);\n  }");
+        assertThat(count(js, "/api/lab/orders")).as("only refreshOrders reads the orders").isEqualTo(1);
+        assertThat(count(js, "setInterval(refreshOrders")).isEqualTo(1);
+    }
+
+    // Covers: 24.3, 6.3 (a run that ended in budget_exceeded, user_timeout or failed gets the table's chat text as the
+    // agent's last bubble, after the run's messages, set as text; the status line takes the table's text)
+    @Test
+    void runEnd_aRunThatEndedWithoutAnAnswer_saysSoInTheChat() throws IOException {
+        String js = read("console.js");
+        String show = js.substring(js.indexOf("function showRun(run) {"), js.indexOf("async function pollRun() {"));
+
+        assertThat(show).contains("const [statusText, chatText] = runEnd(run);")
+                .contains("if (chatText) {")
+                .contains("$(\"chat\").appendChild(el(\"li\", chatText, \"agent\"));")
+                .contains("setStatus(statusText);");
+        assertThat(show.indexOf("(run.messages || []).forEach")).as("after the run's messages")
+                .isLessThan(show.indexOf("if (chatText) {"));
+        String end = block(js, "run-end");
+        assertThat(end).contains("[\"budget_exceeded\",").contains("[\"user_timeout\",").contains("[\"failed\",");
+    }
+
+    // Covers: 24.3, 26.7 (in catalog mode the badge reads "Shopify Global Catalog", not "Lab merchants", and Developer
+    // tools stay hidden: from the followed intent's merchant.completion, or before one from the lab list's completion;
+    // a live store's badge comes first)
+    @Test
+    void merchantMode_inCatalogMode_readsShopifyGlobalCatalog_andHidesDeveloperTools() throws IOException {
+        String mode = block(read("console.js"), "merchant-mode");
+
+        assertThat(mode).contains("currentIntent.merchant.completion === \"link\"")
+                .contains("labMerchants.some((m) => m.completion === \"link\")")
+                .contains("if (!domain && catalogMode()) {")
+                .contains("badge.textContent = \"Shopify Global Catalog\";")
+                .contains("$(\"dev-tools\").hidden = true;")
+                .contains("$(\"dev-tools\").open = false;");
+        assertThat(mode.indexOf("badge.textContent = domain ? \"Live store · \" + domain : \"Lab merchants\";"))
+                .as("the catalog's text replaces the lab's, after it").isLessThan(mode.indexOf("if (!domain && catalogMode()) {"));
+        assertThat(count(mode, "Shopify Global Catalog")).isEqualTo(1);
+    }
+
+    /** The code of function {@code name} in console.js, up to the next top-level function. */
+    private static String function(String js, String name) {
+        int from = js.indexOf("function " + name + "(");
+        assertThat(from).as("function " + name).isNotNegative();
+        int to = js.indexOf("\n}\n", from);
+        return js.substring(from, to + 2);
+    }
+
+    // Covers: 24.3 (on Send the button is disabled and reads "Working…", and under the user's message an agent bubble
+    // with a working indicator reads "Thinking…"; a second Send while it works sends nothing)
+    @Test
+    void working_onSend_disablesSendAsWorking_andShowsAThinkingBubble() throws IOException {
+        String js = read("console.js");
+        String working = block(js, "working");
+        String start = function(working, "startWorking");
+        String send = function(js, "send");
+
+        assertThat(read("index.html")).contains("<button type=\"submit\" class=\"primary\" id=\"send-button\">Send</button>");
+        assertThat(working).contains("const THINKING = \"Thinking…\";");
+        assertThat(start).contains("button.disabled = true;").contains("button.textContent = \"Working…\";")
+                .contains("el(\"li\", null, \"agent working\")").contains("el(\"span\", THINKING, \"working-step\")")
+                .contains("$(\"chat\").appendChild(bubble);");
+        assertThat(send).contains("  if (working) {\n    return;\n  }")
+                .contains("$(\"chat\").appendChild(el(\"li\", text, \"user\"));");
+        assertThat(send.indexOf("$(\"chat\").appendChild(el(\"li\", text, \"user\"));")).as("the message, then the bubble")
+                .isLessThan(send.indexOf("startWorking();"));
+        assertThat(send.indexOf("startWorking();")).as("before the request, which waits for a settle point")
+                .isLessThan(send.indexOf("await api("));
+    }
+
+    // Covers: 24.3 (each tool's step is a fixed text of the page, looked up by the tool's name)
+    @ParameterizedTest
+    @CsvSource({
+            "search_catalog, Searching the catalog…",
+            "propose_purchase, Preparing your approval…",
+            "get_purchase_status, Checking the purchase…"})
+    void working_eachToolHasItsStep(String tool, String text) throws IOException {
+        assertThat(block(read("console.js"), "working")).contains("[\"" + tool + "\", \"" + text + "\"]");
+    }
+
+    // Covers: 24.3, I2, S10 (the bubble's step comes from the run's tool events only: the newest event's tool name picks
+    // a fixed text, get_product names the one non-link merchant of the lab list, any other tool reads "Thinking…"; the
+    // step's code never reads a message, the model's text or an event's summary, and sets text only)
+    @Test
+    void working_theStepComesFromToolEventsOnly_neverTheModelsWords() throws IOException {
+        String js = read("console.js");
+        String working = block(js, "working");
+        String step = function(working, "stepText");
+        String price = function(working, "priceStep");
+
+        assertThat(step).contains("const newest = events.length > 0 ? events[events.length - 1].tool : \"\";")
+                .contains("if (newest === \"get_product\") {").contains("return STEP_TEXTS.get(newest) || THINKING;");
+        assertThat(price).contains("const only = labMerchants.length === 1 ? labMerchants[0] : null;")
+                .contains("only && only.completion !== \"link\" && only.name")
+                .contains("\"Checking the price at \" + only.name + \"…\"").contains("\"Checking the price…\"");
+        assertThat(function(working, "showWorking")).contains("working.step.textContent = stepText(run.tool_events || []);");
+        for (String other : List.of("messages", "summary", "rationale", "description", "innerHTML", "run.reason",
+                "run.cause")) {
+            assertThat(working).as("the working block reads " + other).doesNotContain(other);
+        }
+        assertThat(working).as("a text field (textContent is only written)").doesNotContainPattern("\\.text\\b");
+    }
+
+    // Covers: 24.3 (each tool call's chip appears while the run works: a poll that carries tool events shows them, with
+    // the same chips as at the end)
+    @Test
+    void working_toolChipsAppearLive() throws IOException {
+        String js = read("console.js");
+        String show = function(js, "showRun");
+
+        assertThat(show).contains("if (run.tool_events) {\n    showChips(run.tool_events);\n  }");
+        assertThat(function(js, "loadRunDetails")).contains("showChips(result.data.tool_events || []);");
+        assertThat(count(js, "el(\"span\", null, e.summary === \"ok\" ? \"dot ok\" : \"dot warn\")")).as("one chip maker")
+                .isEqualTo(1);
+        assertThat(function(js, "showChips")).contains("clear($(\"tools\"));");
+    }
+
+    // Covers: 24.3 (from 10 s after Send the bubble adds "Still working · <n> s", whole seconds by the page's clock,
+    // updated every second)
+    @Test
+    void working_after10s_addsTheElapsedTime() throws IOException {
+        String working = block(read("console.js"), "working");
+
+        assertThat(working).contains("const STILL_AFTER_MS = 10000;")
+                .contains("timer: window.setInterval(tickWorking, 1000)");
+        assertThat(function(working, "tickWorking")).contains("const ms = Date.now() - working.since;")
+                .contains("ms >= STILL_AFTER_MS ? \"Still working · \" + Math.floor(ms / 1000) + \" s\" : \"\"");
+    }
+
+    // Covers: 24.3 (when the run leaves running the bubble is removed and Send is enabled and reads Send again; a failed
+    // request or poll does the same and puts its error on the status line)
+    @Test
+    void working_onRunEnd_orAnError_removesTheBubble_andEnablesSend() throws IOException {
+        String js = read("console.js");
+        String stop = function(block(js, "working"), "stopWorking");
+        String show = function(js, "showRun");
+
+        assertThat(stop).contains("window.clearInterval(working.timer);").contains("working.bubble.remove();")
+                .contains("working = null;").contains("button.disabled = false;").contains("button.textContent = \"Send\";");
+        assertThat(show).contains("  if (run.status === \"running\") {\n    showWorking(run);\n  } else {\n    stopWorking();\n    setStatus(statusText);\n  }");
+        assertThat(show.indexOf("if (chatText) {")).as("the run-end text, then the bubble").isLessThan(show.indexOf("showWorking(run);"));
+        assertThat(function(js, "send")).contains("  if (!result.ok) {\n    stopWorking();\n    setStatus(errorText(result), true);\n    return;\n  }");
+        assertThat(function(js, "pollRun")).contains("  if (!result.ok) {\n    stopWorking();\n    setStatus(errorText(result), true);\n    return;\n  }");
+    }
+
+    // Covers: 24.3 (the status line says "Working on it." once, when the work starts, never on a poll or a step; the
+    // bubble is outside the aria-live region)
+    @Test
+    void working_theStatusLineSaysWorkingOnce_andTheBubbleIsNotAnnounced() throws IOException {
+        String js = read("console.js");
+        String html = read("index.html");
+
+        assertThat(count(js, "setStatus(\"Working on it.\")")).isEqualTo(1);
+        assertThat(function(block(js, "working"), "startWorking")).contains("setStatus(\"Working on it.\");");
+        assertThat(function(block(js, "working"), "showWorking")).doesNotContain("setStatus(");
+        assertThat(count(function(js, "showRun"), "setStatus(")).as("only for a run that left running").isEqualTo(1);
+        String chat = html.substring(html.indexOf("<ol id=\"chat\""), html.indexOf(">", html.indexOf("<ol id=\"chat\"")));
+        assertThat(chat).doesNotContain("aria-live").doesNotContain("role=\"status\"");
+    }
+
+    // Covers: 24.3 (the indicator's dots are its only animation, hidden from screen readers, and under
+    // prefers-reduced-motion: reduce they are gone, leaving the text)
+    @Test
+    void working_underReducedMotion_isTextOnly() throws IOException {
+        String css = read("console.css");
+        String start = function(block(read("console.js"), "working"), "startWorking");
+
+        assertThat(start).contains("dots.setAttribute(\"aria-hidden\", \"true\");");
+        assertThat(css).contains(".working-dots::before {").contains("animation: working-pulse 1.2s ease-in-out infinite;")
+                .contains("@keyframes working-pulse {");
+        assertThat(count(css, "animation:")).as("one animation").isEqualTo(1);
+        int reduced = css.indexOf("@media (prefers-reduced-motion: reduce) {");
+        assertThat(reduced).isPositive();
+        assertThat(css.substring(reduced, css.indexOf("\n}\n", reduced))).contains(".working-dots { display: none; }");
     }
 }
