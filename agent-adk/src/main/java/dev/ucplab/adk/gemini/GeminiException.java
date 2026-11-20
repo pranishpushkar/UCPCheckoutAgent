@@ -88,10 +88,10 @@ public final class GeminiException extends RuntimeException implements ModelFail
         return cause;
     }
 
-    /** 6.3: only an HTTP 429 or 503 may succeed when tried again. */
+    /** 6.3: only an HTTP 429, 503 or 504 may succeed when tried again. */
     @Override
     public boolean retryable() {
-        return cause.equals("http_429") || cause.equals("http_503");
+        return cause.equals("http_429") || cause.equals("http_503") || cause.equals("http_504");
     }
 
     @Override

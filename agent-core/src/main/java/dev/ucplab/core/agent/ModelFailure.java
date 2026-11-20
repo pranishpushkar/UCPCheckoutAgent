@@ -22,7 +22,7 @@ public interface ModelFailure {
         return code();
     }
 
-    /** 6.3: whether one more try may succeed (HTTP 429 or 503). */
+    /** 6.3: whether one more try may succeed (HTTP 429, 503 or 504). */
     default boolean retryable() {
         return false;
     }

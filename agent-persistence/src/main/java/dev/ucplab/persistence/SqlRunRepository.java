@@ -274,7 +274,7 @@ public final class SqlRunRepository implements RunRepository {
                             intents(c, id),
                             toolEvents(c, id),
                             budget,
-                            Optional.ofNullable(r.getString("cause"))));
+                            Optional.ofNullable(r.getString("cause")).map(SqlRunRepository::storedCause)));
                 }
             }
         }
@@ -293,6 +293,14 @@ public final class SqlRunRepository implements RunRepository {
                 return out;
             }
         }
+    }
+
+    /**
+     * 6.5, 10 V12: the database holds a cause to 1 to 64 characters only, so a stored one outside RunRecord's identifier
+     * rule, which no RunRecord could have written, reads as {@code unknown}, never as its text.
+     */
+    private static String storedCause(String stored) {
+        return RunRecord.CAUSE.matcher(stored).matches() ? stored : "unknown";
     }
 
     private static List<ToolEvent> toolEvents(Connection c, String runId) throws SQLException {

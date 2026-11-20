@@ -14,6 +14,8 @@ import com.google.genai.types.GenerateContentResponse;
 import com.google.genai.types.GenerateContentResponseUsageMetadata;
 import com.google.genai.types.Part;
 import com.google.genai.types.Tool;
+import com.google.genai.types.ThinkingConfig;
+import com.google.genai.types.ThinkingLevel;
 import dev.ucplab.adk.gemini.GeminiException.Reason;
 import dev.ucplab.core.agent.Conversation;
 import dev.ucplab.core.agent.Message;
@@ -73,7 +75,9 @@ final class GeminiMapping {
                 // Automatic function calling applies only to Java Method tools, which we never pass; say so anyway.
                 .automaticFunctionCalling(AutomaticFunctionCallingConfig.builder().disable(true).build())
                 .candidateCount(1)
-                .maxOutputTokens(maxOutputTokens);
+                .maxOutputTokens(maxOutputTokens)
+                // 6.5: each turn picks a tool or relays a result; gemini-3.8-flash's default, medium, spends latency.
+                .thinkingConfig(ThinkingConfig.builder().thinkingLevel(ThinkingLevel.Known.LOW).build());
         if (!tools.isEmpty()) {
             List<FunctionDeclaration> declarations = new ArrayList<>();
             for (ToolSpec spec : tools) {

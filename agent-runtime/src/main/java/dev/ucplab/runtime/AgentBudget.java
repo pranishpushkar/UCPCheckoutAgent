@@ -14,12 +14,11 @@ public record AgentBudget(int maxModelCalls, int maxToolCalls, Duration wallCloc
     public static final AgentBudget DEFAULT = new AgentBudget(6, 8, Duration.ofSeconds(30), 20_000);
 
     /** The live model's limits (6.3): DEFAULT's, with a 60 s wall clock. */
-    public static final AgentBudget LIVE = DEFAULT;
+    public static final AgentBudget LIVE = new AgentBudget(6, 8, Duration.ofSeconds(60), 20_000);
 
     /** 6.3: {@link #DEFAULT} for the scripted model, {@link #LIVE} for any other. */
     public static AgentBudget forModel(String model) {
-        Objects.requireNonNull(model, "model");
-        return DEFAULT;
+        return Objects.requireNonNull(model, "model").equals("scripted") ? DEFAULT : LIVE;
     }
 
     public AgentBudget {

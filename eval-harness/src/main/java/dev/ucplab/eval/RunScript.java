@@ -593,8 +593,9 @@ public final class RunScript {
             }
             return model.generate(conversation, tools);
         };
-        AgentRuntime runtime = new AgentRuntime(checked, live.map(LiveModel::model).orElse("scripted"),
-                toolPorts(stack, scenario), runs, AgentBudget.DEFAULT, ASK_TIMEOUT, clock);
+        String modelName = live.map(LiveModel::model).orElse("scripted");
+        AgentRuntime runtime = new AgentRuntime(checked, modelName, toolPorts(stack, scenario), runs,
+                AgentBudget.forModel(modelName), ASK_TIMEOUT, clock);
         Optional<RunOutcome> outcome = Optional.empty();
         Optional<String> abort = Optional.empty();
         try {
