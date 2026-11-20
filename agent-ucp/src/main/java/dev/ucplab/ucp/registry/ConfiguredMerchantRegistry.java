@@ -143,12 +143,21 @@ public final class ConfiguredMerchantRegistry implements MerchantRegistry {
         return slot == null ? Optional.empty() : slot.state.get().reason();
     }
 
-    /** The last known state, after starting a re-check if this merchant is SUSPENDED by a check and one is due. */
+    /**
+     * The last known state, after starting a re-check if this merchant is SUSPENDED by a check and one is due. A check
+     * publishes its new state before it lets go of the flag, so once the flag is ours a state other than the one read
+     * means a check ended in between: its result is returned and no second check starts (single-flight).
+     */
     private State current(Slot slot) {
         State state = slot.state.get();
         if (state.status() == MerchantStatus.SUSPENDED && slot.settings.fileStatus() == MerchantStatus.ACTIVE
                 && !clock.instant().isBefore(state.checkedAt().plus(RECHECK))
                 && slot.checking.compareAndSet(false, true)) {
+            State now = slot.state.get();
+            if (now != state) {
+                slot.checking.set(false);
+                return now;
+            }
             try {
                 Thread.ofVirtual().start(() -> check(slot));
             } catch (RuntimeException | Error e) {
