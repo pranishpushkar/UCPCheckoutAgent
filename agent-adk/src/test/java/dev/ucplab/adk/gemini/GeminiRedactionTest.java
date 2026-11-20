@@ -168,6 +168,22 @@ class GeminiRedactionTest {
         assertThat(found()).containsExactly("log", "output", "exception");
     }
 
+    // Covers: I8 (the search's loggers stay at ALL for the whole test, through a garbage collection: java.util.logging
+    // holds a logger weakly, so one nobody references is dropped with its level, and the SDK's records below its
+    // default level would then go unlogged and unsearched; CI run 44663708377 saw null at line 199)
+    @Test
+    @Order(3)
+    void theLoggersTheSearchRaises_stayAtAll_throughAGarbageCollection() throws InterruptedException {
+        for (int i = 0; i < 5; i++) {
+            System.gc();
+            Thread.sleep(20);
+        }
+
+        for (String name : LOGGERS) {
+            assertThat(Logger.getLogger(name).getLevel()).as(name.isEmpty() ? "root" : name).isEqualTo(Level.ALL);
+        }
+    }
+
     // Covers: I8 (401 and 500 whose bodies repeat the key, a dropped connection and a timeout: the canary appears in no
     // log record, no output and no exception)
     @Test
