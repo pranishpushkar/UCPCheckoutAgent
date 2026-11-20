@@ -526,11 +526,13 @@ One circuit breaker and one rate limiter per merchant (by `MerchantId`, shared b
 
 Configuration file `policy.yaml`. `PolicyEngine.evaluateProposal(...)` and `evaluateQuote(...)` (Appendix B) return `PolicyDecision{allowed, ruleId, reason}`, and every decision is stored as an event.
 
+**Caps per currency.** P2 and P3 are amounts, so each is set per ISO 4217 currency, in that currency's minor units: `caps: {USD: {per_purchase_minor: 20000, daily_minor: 50000}, INR: {per_purchase_minor: 2000000, daily_minor: 5000000}}`. A quote is checked against the caps of its own currency only and is never converted: a quote in a currency with no caps is refused by P2 ("no per-purchase cap is set for INR; caps are set for USD"), as is one above its currency's cap. Each currency's daily cap counts only that currency's spend, so caps in two currencies are independent, with no FX between them. Without `caps`, the defaults are USD's below. The older flat keys `per_purchase_cap_minor` and `daily_cap_minor` still load and mean the USD caps, which is what they always meant (every merchant quoted USD until 26.7's buyer country); a file with both `caps` and a flat key, a currency that is not three upper-case letters, or a currency without both caps refuses startup.
+
 | Rule | Default | Meaning |
 | --- | --- | --- |
 | P1 merchant allowlist | `localhost` entries only | Reject merchants that are not ACTIVE in the merchant registry (section 19) |
-| P2 per-purchase cap | 20000 minor units | Reject a quote above the cap |
-| P3 daily cap per user | 50000 minor units | Reject when the user's spend over the last 24 hours (a rolling window, not a calendar day, so time zones don't matter) would exceed the cap. Counts intents in AWAITING\_APPROVAL, APPROVED, COMPLETING, RECONCILING, COMPLETED or ESCALATED; an intent being re-quoted is counted once |
+| P2 per-purchase cap | USD 20000 minor units | Reject a quote above the cap of its currency, or in a currency with no caps (never converted) |
+| P3 daily cap per user | USD 50000 minor units | Reject when the user's spend in the quote's currency over the last 24 hours (a rolling window, not a calendar day, so time zones don't matter) would exceed that currency's daily cap. Counts intents in AWAITING\_APPROVAL, APPROVED, COMPLETING, RECONCILING, COMPLETED or ESCALATED whose newest approval is in that currency; an intent being re-quoted is counted once |
 | P4 size limits | 5 per line, 5 lines | Reject larger proposals |
 | P5 proposal rate limit | 10 per user per hour | Guards against a looping agent |
 | P6 approval required | true | May not be false in the `prod` profile |
@@ -1326,7 +1328,7 @@ With several merchants (M6a) the console shows one approval card per intent awai
   | `price_unstable` | "The store's price kept changing: no order was placed" |
   | `policy_P9` | "Over your budget: the store quoted <refused_quote>, your budget is <budget>", from `refused_quote` and `budget` (23.2); "Over your budget: no order was placed" when either is missing |
   | `policy_P1` | "This store is not allowed: no order was placed" |
-  | `policy_P2` | "Above the limit for one purchase: no order was placed" |
+  | `policy_P2` | "Above the limit for one purchase, or in a currency with no limit set: no order was placed" |
   | `policy_P3` | "Above your limit for the last 24 hours: no order was placed" |
   | `policy_P4` | "Too many items or too large a quantity: no order was placed" |
   | `policy_P5` | "Too many proposals in the last hour: no order was placed" |
@@ -1508,7 +1510,7 @@ A service test runs the real Gemini client against a loopback stub of the API th
 
 **The budget stays the user's (P9).** The model can't set, raise or clear it under the live client either: `propose_purchase` refuses an unknown argument, and the intent takes the run's budget.
 
-**Cost.** A console run is bounded by the per-run limits of 6.3 (6 model calls, 8 tool calls, 30 s, 20,000 tokens). No daily cap exists on model calls or tokens. The console's daily cap is P3's, on purchases (`daily_cap_minor` of the console's policy file), not on the model.
+**Cost.** A console run is bounded by the per-run limits of 6.3 (6 model calls, 8 tool calls, 30 s, 20,000 tokens). No daily cap exists on model calls or tokens. The console's daily cap is P3's, on purchases (`caps.<currency>.daily_minor` of the console's policy file), not on the model. The console script writes caps for USD, the owned store's currency, and for the buyer country's currency: round amounts of about the same size from a short table in the script, chosen by the operator and not converted; a `--buyer-country` whose country the table does not hold is refused.
 
 ### 26.7 Shopify's Global Catalog, link-only \[CONTRACT\]
 
