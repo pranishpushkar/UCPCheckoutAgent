@@ -242,7 +242,9 @@ public final class AgentRuntime {
                 Instant before = clock.instant();
                 ModelTurn turn;
                 try {
-                    turn = model.generate(conversation, tools.specs());
+                    // 6.3: a search the run has moved past is sent as its summary and ids; the record keeps it whole.
+                    turn = model.generate(new Conversation(conversation.systemPrompt(),
+                            EarlierTurns.superseded(conversation.messages())), tools.specs());
                 } catch (ScriptDriftException e) {
                     throw e;
                 } catch (RuntimeException e) {

@@ -260,12 +260,17 @@ const BUDGET_LIMIT = /\b(?:under|below|maximum|max|no more than|at most|less tha
 const BUDGET_SIGNS = {"$": "USD", "€": "EUR", "£": "GBP", "₹": "INR", "rs": "INR", "rs.": "INR", "rupee": "INR",
   "rupees": "INR"};
 
+// A word after a sign-less amount that says it is not money ("under 2 kg", "under 3 days", "under 700 UK").
+const BUDGET_NOT_MONEY = /^\s*(?:kg|g|cm|mm|years?|yrs?|days?|months?|size|uk|us|eu|pack|pcs|%|x)(?![a-z])/i;
+
 function budgetCurrency(sign) {
   return BUDGET_SIGNS[sign.toLowerCase()] || sign.toUpperCase();
 }
 
 // An amount with a limit word and a sign or code ("under $500", "max 80 EUR", "£40 or less", "under 500 rupees",
-// "Rs.500 or less"), or after a budget word with or without one ("budget to 15000"), or null.
+// "Rs.500 or less"), or after a budget word with or without one ("budget to 15000"), or null. Without a sign or code it
+// takes the field's currency; after a limit word it must then be 100 or more with no unit after it ("shoes under 15000",
+// not "kids under 10" or "under 2 kg").
 function budgetFromMessage(text) {
   const m = BUDGET_LIMIT.exec(text);
   if (!m) {
@@ -274,7 +279,8 @@ function budgetFromMessage(text) {
   const sign = m[1] || m[3] || m[4] || m[6] || m[7] || m[9];
   const amount = m[2] || m[5] || m[8];
   const named = Boolean(m[8]);
-  if (!sign && !named) {
+  if (!sign && !named && (Number(amount.replace(/,/g, "")) < 100
+      || BUDGET_NOT_MONEY.test(text.slice(m.index + m[0].length)))) {
     return null;
   }
   return {amount: amount.replace(/,/g, ""),

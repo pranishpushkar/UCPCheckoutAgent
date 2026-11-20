@@ -240,4 +240,18 @@ class EarlierTurnsTest {
         later.add(new Message.ToolResult("c3", "search_catalog", search(2)));
         assertThat(EarlierTurns.superseded(later).get(2)).as("never summarised again").isEqualTo(out.get(2));
     }
+
+    // Covers: 6.3 superseded search results (a superseded search that failed is its error code with no item_ids, and one
+    // that is not JSON is "search_catalog: done"; neither carries anything of the result)
+    @Test
+    void superseded_aFailedOrUnreadableSearch_isItsSummaryAlone() {
+        for (String[] c : new String[][] {{"{\"error\":\"unavailable\"}", "{\"earlier\":\"error: unavailable\"}"},
+                {"not json <untrusted>", "{\"earlier\":\"search_catalog: done\"}"}}) {
+            List<Message> run = List.of(new Message.User("shoes"),
+                    calls("c1", "search_catalog", Map.of("query", "shoes", "max_results", 5L)),
+                    new Message.ToolResult("c1", "search_catalog", c[0]),
+                    calls("c2", "ask_user", Map.of("question", "Which size?")), answer("c2", "uk 7"));
+            assertThat(((Message.ToolResult) EarlierTurns.superseded(run).get(2)).json()).as(c[0]).isEqualTo(c[1]);
+        }
+    }
 }

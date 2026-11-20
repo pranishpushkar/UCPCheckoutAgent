@@ -47,9 +47,53 @@ final class EarlierTurns {
         return List.copyOf(out);
     }
 
-    /** 6.3 superseded search results: what a run's next model call is sent of its own messages. */
+    /**
+     * 6.3 superseded search results: what a run's next model call is sent of its own messages. A search result the model
+     * has read (a model turn follows it) is sent as its summary and its items' {@code item_ids} once a later result is
+     * another search or an {@code ask_user} answer; every other message is sent as it is.
+     */
     static List<Message> superseded(List<Message> messages) {
-        return List.copyOf(messages);
+        List<Message> out = new ArrayList<>(messages);
+        // Read backwards: a search or an answer after a model turn supersedes every search before that turn.
+        boolean later = false;
+        boolean superseding = false;
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            switch (messages.get(i)) {
+                case Message.Model model -> superseding = superseding || later;
+                case Message.ToolResult result -> {
+                    if (superseding && result.tool().equals("search_catalog")) {
+                        out.set(i, searchSummary(result));
+                    }
+                    later = later || result.tool().equals("search_catalog") || result.tool().equals("ask_user");
+                }
+                case Message.User user -> {
+                }
+            }
+        }
+        return List.copyOf(out);
+    }
+
+    /** A search's summary with its items' item_ids, each one get_product takes, and nothing else of them (6.3, 6.4). */
+    private static Message searchSummary(Message.ToolResult result) {
+        Message summary = summarised(result, Optional.empty(), new HashMap<>());
+        if (summary == result) {
+            return result;
+        }
+        Object items;
+        try {
+            items = CanonicalJson.readObject(result.json()).get("items");
+        } catch (RuntimeException e) {
+            return summary;
+        }
+        if (!(items instanceof List<?> found)) {
+            return summary;
+        }
+        List<String> ids = found.stream().filter(Map.class::isInstance).map(i -> ((Map<?, ?>) i).get("item_id"))
+                .filter(String.class::isInstance).map(String.class::cast).filter(id -> Args.ITEM_ID.matcher(id).matches())
+                .toList();
+        Map<String, Object> json = new LinkedHashMap<>(CanonicalJson.readObject(((Message.ToolResult) summary).json()));
+        json.put("item_ids", ids);
+        return new Message.ToolResult(result.callId(), result.tool(), CanonicalJson.write(json));
     }
 
     private static Message summarised(Message.ToolResult result, Optional<ToolCall> call, Map<String, Map<?, ?>> items) {

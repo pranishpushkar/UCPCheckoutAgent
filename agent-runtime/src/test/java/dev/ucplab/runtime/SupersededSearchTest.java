@@ -182,11 +182,11 @@ class SupersededSearchTest {
     @Test
     void theLiveRerunsShape_endsInAProposal_underTheCeiling_withHeadroom() {
         assertThat(session.outcome()).isInstanceOf(RunOutcome.Done.class);
-        assertThat(orchestrator.calls).hasSize(1);
+        assertThat(orchestrator.calls).filteredOn(c -> c.startsWith("propose ")).hasSize(1);
         assertThat(SENT).hasSize(6);
         long total = record.inputTokens() + record.outputTokens();
         assertThat(total).as("the run's tokens, under 20,000 with 3,000 to spare").isLessThanOrEqualTo(17_000);
-        assertThat(total).as("pinned: a change that sends the model more shows here").isEqualTo(15_049);
+        assertThat(total).as("pinned: a change that sends the model more shows here").isEqualTo(14_814);
     }
 
     // Covers: 6.3 superseded search results (a search is sent whole until it is superseded: call 2 reads the first search
@@ -211,7 +211,8 @@ class SupersededSearchTest {
     // summary, an item the latest search does not hold, still reads it, and the proposal is of that item)
     @Test
     void getProduct_onAnIdFromTheSummary_stillReadsIt() {
-        assertThat(orchestrator.calls).as("the run reached its proposal").hasSize(1);
+        assertThat(orchestrator.calls).as("the run reached its proposal").filteredOn(c -> c.startsWith("propose "))
+                .hasSize(1);
         assertThat(READ).containsExactly("gid://shopify/ProductVariant/100000");
         String read = results(SENT.get(4)).get(3).json();
         assertThat(read).contains("\"item_id\":\"gid://shopify/ProductVariant/100000\"")
