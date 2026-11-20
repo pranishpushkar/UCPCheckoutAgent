@@ -258,6 +258,18 @@ public final class Scenarios {
                     .withBudget(new Budget(1_200, "USD")));
 
     /**
+     * A-S30 (S30, 13.2, 6.4 v9): a follow-up turn. The first turn proposes a Blue Mug under a budget of 20.00 USD; the
+     * owner changes the run's budget to 15.00 USD and the user sends "cheaper please". The follow-up searches before it
+     * replies, under the changed budget, and its reply, that nothing cheaper fits, is backed by that search.
+     */
+    public static final Scenario A_S30 = new Scenario("A-S30", "agent, scripted: a follow-up asks for something cheaper",
+            "none; the run's budget is 20.00 USD, then 15.00 USD before the follow-up \"cheaper please\"",
+            Set.of(IntentState.COMPLETED), List.of("I1"), (t, run) -> RuleSet.empty(), AutoApprover.Policy.APPROVE_ALL,
+            SHOP, PAY_OK, AgentSpec.of("Buy me a blue mug under $20.", "a-s30-followup-cheaper.json", List.of(),
+                    Set.of("waiting_for_approval"), 1, 1, false).withBudget(new Budget(2_000, "USD"))
+                    .withFollowUp(new AgentSpec.FollowUp("cheaper please", Optional.of(new Budget(1_500, "USD")))));
+
+    /**
      * A-B: each budget breach of 6.3 in turn, by run index (model calls, tool calls, wall clock, tokens), with section
      * 8's checks: no intent, no approval, only discovery and catalog reads, no order.
      */
@@ -384,18 +396,18 @@ public final class Scenarios {
                             Action.FailBeforeForward.status(503)))), A_S20_CLAIM));
 
     /**
-     * The rows live mode runs (m5-plan section 10, C18): S10 and S12. The other agent rows exist to drive the runtime
-     * down a path a script forces (a second proposal, an unlisted merchant, a budget breach), which a live model need
-     * not take.
+     * The rows live mode runs (m5-plan section 10, C18): S10, S12, and S30, whose follow-up claim (6.4 v9) only a live
+     * model can break. The other agent rows exist to drive the runtime down a path a script forces (a second proposal,
+     * an unlisted merchant, a budget breach), which a live model need not take.
      */
     public static List<Scenario> live() {
-        return List.of(A_S10, A_S12);
+        return List.of(A_S10, A_S12, A_S30);
     }
 
     /** Every row the harness can run: the catalogue rows in catalogue order, then the agent rows. */
     public static List<Scenario> all() {
         return List.of(S0, S1, S2, S3, S4, S5A, S5B, S6, S7, S8, S9, S11, S13, S14, S28,
-                A_S0, A_S2, A_S4, A_S10, A_S11, A_S12, A_B, A_S20, S21, A_S22, A_S29);
+                A_S0, A_S2, A_S4, A_S10, A_S11, A_S12, A_B, A_S20, S21, A_S22, A_S29, A_S30);
     }
 
     /**

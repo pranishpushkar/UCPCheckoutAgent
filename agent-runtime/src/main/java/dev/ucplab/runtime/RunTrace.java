@@ -3,6 +3,7 @@ package dev.ucplab.runtime;
 import dev.ucplab.core.agent.ModelFailure;
 import dev.ucplab.core.agent.RunId;
 import dev.ucplab.core.agent.RunRecord;
+import dev.ucplab.core.agent.Usage;
 import dev.ucplab.core.json.CanonicalJson;
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -103,9 +104,12 @@ public final class RunTrace {
         return UNKNOWN_FAILURE;
     }
 
-    /** The run's end; {@code cause} is a {@code model_error}'s (6.5), already checked. */
+    /**
+     * The run's end; {@code cause} is a {@code model_error}'s (6.5), already checked. The counts are sums over the run, as
+     * its record holds them; {@code turn} is the ending turn's own, which the 6.3 limits apply to (11).
+     */
     void run(String outcome, String detail, Optional<String> cause, int modelCalls, int toolCalls, long inputTokens,
-             long outputTokens, Duration took) {
+             long outputTokens, Usage turn, int turnModelCalls, Duration took) {
         Map<String, Object> span = span("agent.run");
         span.put("outcome", outcome);
         span.put("detail", detail);
@@ -114,6 +118,9 @@ public final class RunTrace {
         span.put("tool_calls", toolCalls);
         span.put("input_tokens", inputTokens);
         span.put("output_tokens", outputTokens);
+        span.put("turn_model_calls", turnModelCalls);
+        span.put("turn_input_tokens", turn.inputTokens());
+        span.put("turn_output_tokens", turn.outputTokens());
         span.put("duration_ms", took.toMillis());
         lines.add(CanonicalJson.write(span));
     }

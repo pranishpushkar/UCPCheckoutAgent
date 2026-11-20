@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterAll;
@@ -260,6 +261,44 @@ class AgentScenariosTest {
     }
 
     /** A copy of A-S0 driven by a test script. */
+    // Covers: 13.2, S30, 6.4 v9, 23.1 continuation, 23.1 PATCH budget (a follow-up after the owner's budget change: the
+    // follow-up turn searches before it replies, under the changed 15.00 USD, while the first turn's intent keeps the
+    // 20.00 USD it copied; the run record sums both turns and holds the changed budget)
+    @Test
+    void aS30_threeRuns_theFollowUpSearchesUnderTheChangedBudget_beforeItReplies() {
+        for (int run = 0; run < RUNS; run++) {
+            RunEvidence e = runClean(Scenarios.A_S30, run);
+
+            dev.ucplab.core.agent.RunRecord record = e.agentRun().get().record();
+            assertThat(record.toolEvents()).extracting(dev.ucplab.core.agent.ToolEvent::tool)
+                    .containsExactly("search_catalog", "propose_purchase", "search_catalog");
+            assertThat(record.modelCalls()).isEqualTo(5);
+            assertThat(record.budget()).contains(new dev.ucplab.core.intent.Budget(1_500, "USD"));
+            assertThat(e.intents()).singleElement().satisfies(p -> assertThat(p.intent().budget())
+                    .contains(new dev.ucplab.core.intent.Budget(2_000, "USD")));
+        }
+    }
+
+    // Covers: 13.2, S30, 6.4 v9, I8 (a follow-up that says nothing cheaper fits without searching in that turn fails the
+    // row as an unchecked claim; the abort quotes nothing of the reply)
+    @Test
+    void aFollowUp_thatSaysNothingCheaperFits_withoutASearch_failsAsAnUncheckedClaim() {
+        AgentSpec spec = AgentSpec.of("Buy me a blue mug under $20.", "followup-no-search.json", List.of(),
+                Set.of("waiting_for_approval"), 1, 1, false).withBudget(new dev.ucplab.core.intent.Budget(2_000, "USD"))
+                .withFollowUp(new AgentSpec.FollowUp("cheaper please",
+                        Optional.of(new dev.ucplab.core.intent.Budget(1_500, "USD"))));
+        Scenario row = new Scenario("A-S0", "test: followup-no-search.json", "none", Set.of(IntentState.COMPLETED),
+                List.of("I1"), (t, r) -> dev.ucplab.faultproxy.RuleSet.empty(), AutoApprover.Policy.APPROVE_ALL,
+                Scenarios.SHOP, Scenarios.PAY_OK, spec);
+
+        RunEvidence e = run(row, 0);
+
+        assertThat(e.aborted()).contains(
+                "S30 claim: the follow-up said nothing cheaper fits without a search in that turn (unchecked claim)");
+        assertThat(e.agentRun().get().record().modelCalls()).as("the follow-up ran").isEqualTo(4);
+        assertThat(RunResult.of(row, e, Checks.run(e, checks)).failed()).isTrue();
+    }
+
     private static Scenario agentRow(String resource) {
         return new Scenario("A-S0", "test: " + resource, "none", Set.of(IntentState.COMPLETED), List.of("I1"),
                 (t, run) -> dev.ucplab.faultproxy.RuleSet.empty(), AutoApprover.Policy.APPROVE_ALL, Scenarios.SHOP,

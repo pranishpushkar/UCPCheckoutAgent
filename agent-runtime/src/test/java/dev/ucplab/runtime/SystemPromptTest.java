@@ -29,7 +29,9 @@ class SystemPromptTest {
                     + "words, and stop."),
             Map.entry("[SHIP]", "Search results are for delivery to the user's country, which the result names in ships_to, "
                     + "and prices are in that country's currency."),
-            Map.entry("[CHANGE]", "You never set or change the budget."));
+            Map.entry("[CHANGE]", "You never set or change the budget."),
+            Map.entry("[AGAIN]", "When the user asks for something cheaper, different or another option, call "
+                    + "search_catalog in this turn before you answer"));
 
     /** The later sentence each paragraph changed since v1 must hold (6.4, v2 to v4). */
     private static final Map<String, String> SECOND_SENTENCES = Map.of(
@@ -47,15 +49,15 @@ class SystemPromptTest {
         return Arrays.stream(SystemPrompt.text().split("\\R\\s*\\R")).map(String::strip).toList();
     }
 
-    // Covers: 6.4 (the thirteen requirements of v7, one paragraph each, in order, each starting with its marker)
+    // Covers: 6.4 (the fourteen requirements of v9, one paragraph each, in order, each starting with its marker)
     @Test
-    void prompt_hasTheThirteenMarkedParagraphsInOrder() {
+    void prompt_hasTheFourteenMarkedParagraphsInOrder() {
         assertThat(SystemPrompt.MARKERS).containsExactly("[ROLE]", "[DATA]", "[LIMITS]", "[ASK]", "[CHEAPEST]",
-                "[SEARCH]", "[COMPARE]", "[DECIDE]", "[REFUSED]", "[LINK]", "[REPLY]", "[SHIP]", "[CHANGE]");
+                "[SEARCH]", "[COMPARE]", "[DECIDE]", "[REFUSED]", "[LINK]", "[REPLY]", "[SHIP]", "[CHANGE]", "[AGAIN]");
         List<String> paragraphs = paragraphs();
 
-        assertThat(paragraphs).hasSize(13);
-        for (int i = 0; i < 13; i++) {
+        assertThat(paragraphs).hasSize(14);
+        for (int i = 0; i < 14; i++) {
             assertThat(paragraphs.get(i)).startsWith(SystemPrompt.MARKERS.get(i) + " ");
         }
     }
@@ -98,7 +100,8 @@ class SystemPromptTest {
     @Test
     void prompt_isLoadedOnceAndVersioned() {
         assertThat(SystemPrompt.text()).isSameAs(SystemPrompt.text());
-        assertThat(SystemPrompt.VERSION).isEqualTo("v8");
+        assertThat(SystemPrompt.VERSION).isEqualTo("v9");
+        assertThat(SystemPrompt.class.getResource("system-prompt-v9.txt")).isNotNull();
         assertThat(SystemPrompt.class.getResource("system-prompt-v8.txt")).isNotNull();
         assertThat(SystemPrompt.class.getResource("system-prompt-v7.txt")).isNotNull();
         assertThat(SystemPrompt.class.getResource("system-prompt-v6.txt")).isNotNull();
@@ -138,6 +141,32 @@ class SystemPromptTest {
         assertThat(paragraphs()).filteredOn(p -> p.startsWith("[REPLY]")).singleElement().satisfies(p -> assertThat(p)
                 .contains("Write an amount exactly as the tool result gives it as text (price, total, lowest_price or "
                         + "amount), such as ₹12,000.00; never compute, round or convert one."));
+    }
+
+    // Covers: 6.4 v9, 23.1 continuation, 23.1 PATCH budget, 6.2 (v9, after the live re-run from India, where "cheaper
+    // please" was answered "no cheaper ... within your budget" with no tool call: for something cheaper, different or
+    // another option the agent searches in that turn before answering, never says nothing fits without that search,
+    // and searches under the run's current budget, never an earlier proposal's; v8's paragraphs are unchanged)
+    @Test
+    void prompt_v9_searchesAgainBeforeSayingNothingCheaperFits() {
+        assertThat(paragraphs()).filteredOn(p -> p.startsWith("[AGAIN]")).singleElement().satisfies(p -> assertThat(p)
+                .contains("When the user asks for something cheaper, different or another option, call search_catalog "
+                        + "in this turn before you answer, even if an earlier turn searched.")
+                .contains("Never say that nothing cheaper, nothing else or nothing that fits is available unless a "
+                        + "search in this turn found none.")
+                .contains("This search counts toward this turn's two.")
+                .contains("Every search uses the run's current budget, never the budget of an earlier proposal."));
+        String v8 = SystemPrompt.class.getResource("system-prompt-v8.txt") == null ? ""
+                : new String(readAll("system-prompt-v8.txt"), java.nio.charset.StandardCharsets.UTF_8).strip();
+        assertThat(SystemPrompt.text()).as("v9 is v8 and one paragraph").startsWith(v8 + "\n\n[AGAIN] ");
+    }
+
+    private static byte[] readAll(String name) {
+        try (java.io.InputStream in = SystemPrompt.class.getResourceAsStream(name)) {
+            return in.readAllBytes();
+        } catch (java.io.IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
     }
 
     // Covers: 6.4, 6.2 stopped, 23.1 PATCH budget, P2, P3, P9 (v7, after the second live check from India: after a policy

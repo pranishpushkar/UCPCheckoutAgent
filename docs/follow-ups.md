@@ -27,3 +27,29 @@ owner's, and an item is done only when its condition is met.
 ## Deal comparison (from the #34 live re-check from India, 2026-11-20)
 
 - **What:** "Deal comparison: compare listed prices across offers for the same product and size (catalog UPID cluster) in code, show cheaper offers or up to 3 alternatives on the card, and say 'lowest listed price among N offers; shipping, tax and duties are set at each store's checkout.' Strongest first step: the same-item cheapest-offer check." (owner, 2026-11-20)
+
+## Size-only answers keep to the offered options (from the follow-up-turns live re-run, 2026-11-20)
+
+- **What:** when the agent offers named options through `ask_user` and the user answers with only a size, the agent
+  should keep to the options it offered. On the live re-run it offered three shoes and proposed a fourth. (owner,
+  2026-11-20)
+
+## Price outlier warning, as part of deal comparison (from the follow-up-turns live re-run, 2026-11-20)
+
+- **What:** flag a listed price far below the other offers for the same item in the catalog's UPID cluster. On the live
+  re-run a Dunk Low was listed at ₹1,399.00 against about ₹12,000 elsewhere. The card states it as catalog fact
+  ("lowest of N offers; others from ₹X"), never as the model's judgement. Part of Deal comparison above. (owner,
+  2026-11-20)
+- **Also:** "a request for something different excludes item IDs already proposed in the run" (owner, 2026-11-20).
+  Today nothing does: `search_catalog` sends the same query, filters and page size each time and knows nothing of the
+  run's intents, and with no sort order requested the catalog's own ranking, cut to 5, then [CHEAPEST], picks the same
+  lowest-priced item again (a ₹1,399.00 Dunk Low on the live re-runs).
+- **Also:** "search_catalog's 5-result cap counts variants, not products; cap per product (one slot per product) so a
+  multi-variant product can't crowd out alternatives. Not yet seen live." (owner, 2026-11-20)
+
+## Seller policy links on the card (from the follow-up-turns live re-run, 2026-11-20)
+
+- **What:** show the seller's policy links on the approval card. Not recorded before this. The Global Catalog's
+  `seller.links` (for example `privacy_policy`, `terms_of_service`) are dropped by `GlobalCatalogParser` on purpose
+  today ("no seller domain, url or links", I6), so showing them needs a decision on I6: read them for the card only,
+  never into a tool result. (owner, 2026-11-20)

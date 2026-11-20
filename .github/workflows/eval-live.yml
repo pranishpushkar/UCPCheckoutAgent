@@ -1,4 +1,4 @@
-# m5-plan section 10, Decision 6, C16. The live evaluation: S10 and S12 against the Gemini model
+# m5-plan section 10, Decision 6, C16. The live evaluation: S10, S12 and S30 against the Gemini model
 # (./mvnw verify -Peval-live, which runs EvalMain --mode live). Manual only, never a required check. The key comes only
 # from the GEMINI_API_KEY repository secret, as an environment variable: never a property, an argument or a file.
 # EvalMain caps each run at $5 estimated cost and 2,000,000 tokens, scans its output and its own stdout and stderr for
@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       runs:
-        description: Runs per scenario (S10 and S12)
+        description: Runs per scenario (S10, S12 and S30)
         required: true
         default: '30'
       model:
