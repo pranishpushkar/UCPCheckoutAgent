@@ -729,6 +729,19 @@ class GeminiModel(unittest.TestCase):
                                       "(it is never taken as an argument)", repr(value))
             self.assertNotIn("\n", message)
 
+    # Covers: 26.6, I8 (a key holding a character an HTTP header cannot carry, anywhere in it, is refused in one line that
+    # never shows the key: the service's first model call would fail with nothing sent)
+    # model_choice alone, never main: a test must not reach the step that starts the service.
+    def test_gemini_aKeyAHeaderCannotCarry_isRefusedInOneLine(self):
+        for bad in ("\u200b", "\u00a0", "\n", " ", "\u00e9", "\t"):
+            env = {"GEMINI_API_KEY": self.KEY[:10] + bad + self.KEY[10:]}
+            with self.assertRaises(SystemExit) as e:
+                live.model_choice(["--model", "gemini"], env, False)
+            message = str(e.exception)
+            self.assertEqual(message, "refused: GEMINI_API_KEY holds a character an HTTP header cannot carry "
+                                      "(only visible ASCII); it is not shown", repr(bad))
+            self.assertNotIn(self.KEY[:10], message)
+
     # Covers: 26.6 (an unknown model, and --model outside --console, are refused)
     def test_anUnknownModel_andTheOptionOutsideTheConsole_areRefused(self):
         os.environ["GEMINI_API_KEY"] = self.KEY

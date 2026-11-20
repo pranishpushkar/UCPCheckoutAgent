@@ -114,6 +114,21 @@ class ModelChoiceTest {
                 .satisfies(e -> assertThat(e.getMessage()).doesNotContain(FAKE_KEY).doesNotContain("evil"));
     }
 
+    // Covers: 6.5, 26.6, I8 (a key holding a character an HTTP header cannot carry, anywhere in it, refuses to start in one
+    // line that never shows the key: the live re-check's first call failed with exception_IllegalArgumentException and
+    // nothing sent)
+    @Test
+    void gemini_aKeyAHeaderCannotCarry_refusesToStart() {
+        for (String bad : List.of("\u200b", "\u00a0", "\n", " ", "\u00e9", "\t", "\u007f")) {
+            String key = FAKE_KEY.substring(0, 10) + bad + FAKE_KEY.substring(10);
+            assertThatThrownBy(() -> TestService.start(dir, Map.of("AGENT_MODEL", "gemini", "GEMINI_API_KEY", key,
+                    "GEMINI_BASE_URL", "http://127.0.0.1:9"), Optional.empty())).as("U+%04X", (int) bad.charAt(0))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("GEMINI_API_KEY holds a character an HTTP header cannot carry (only visible ASCII)")
+                    .satisfies(e -> assertThat(e.getMessage()).doesNotContain(FAKE_KEY.substring(0, 10)));
+        }
+    }
+
     // Covers: I8 (the key is read by Environment only: only Environment, which reads the process environment, and ServiceProperties name it, and it holds the key
     // only as a ModelKey, whose toString and the properties' own are redacted)
     @Test
@@ -143,10 +158,12 @@ class ModelChoiceTest {
     @Test
     void gemini_againstAStub_runsATurn_andAResumedRunSendsTheStoredCallParts() throws IOException {
         List<String> requests = new CopyOnWriteArrayList<>();
+        List<String> serverTimeouts = new CopyOnWriteArrayList<>();
         AtomicInteger n = new AtomicInteger();
         stub = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
         stub.createContext("/", ex -> {
             requests.add(new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            serverTimeouts.add(String.valueOf(ex.getRequestHeaders().getFirst("X-Server-Timeout")));
             byte[] out = (n.incrementAndGet() == 1 ? CALL : TEXT).getBytes(StandardCharsets.UTF_8);
             ex.getResponseHeaders().set("Content-Type", "application/json");
             ex.sendResponseHeaders(200, out.length);
@@ -165,6 +182,12 @@ class ModelChoiceTest {
         Map<String, Object> run = LenientJson.readObject(first.body());
         assertThat(run).containsEntry("status", "done");
         assertThat(requests).hasSize(2);
+        // 6.5: the service's live request as the SDK built it on this classpath: LOW thinking, the five tools, and the
+        // 20 s call timeout sent as X-Server-Timeout.
+        assertThat(requests.get(0)).contains("\"thinkingConfig\":{\"thinkingLevel\":\"LOW\"}")
+                .contains("\"search_catalog\"").contains("\"get_product\"").contains("\"propose_purchase\"")
+                .contains("\"get_purchase_status\"").contains("\"ask_user\"");
+        assertThat(serverTimeouts).containsOnly("20");
         String id = (String) run.get("run_id");
         Map<String, Object> full = LenientJson.readObject(api.get(alice, "/api/runs/" + id).body());
         assertThat(full.get("model").toString()).startsWith("gemini/");

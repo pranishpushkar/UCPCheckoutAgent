@@ -243,6 +243,57 @@ class GeminiModelClientTest {
         assertThat(retryAfterOf(429, "not json")).as("no body to read").isEmpty();
     }
 
+    // Covers: 6.5, I8 (a key holding a character an HTTP header cannot carry, anywhere in it, is refused when the client
+    // is built, with cause configuration and a message that never holds the key; OkHttp would refuse it only while building
+    // the first request, as exception_IllegalArgumentException with nothing sent)
+    @Test
+    void construct_aKeyAHeaderCannotCarry_isRefusedWithCauseConfiguration() {
+        for (String bad : List.of("\u200b", "\u00a0", "\n", " ", "\u00e9", "\t", "\u007f")) {
+            String key = KEY.substring(0, 4) + bad + KEY.substring(4);
+            assertThatThrownBy(() -> new GeminiModelClient(ModelKey.of(key), settings(), name -> null))
+                    .as("U+%04X", (int) bad.charAt(0)).isInstanceOfSatisfying(GeminiException.class, e -> {
+                        assertThat(e.reason()).isEqualTo(Reason.CONFIGURATION);
+                        assertThat(e.cause()).isEqualTo("configuration");
+                        assertThat(e.getMessage()).doesNotContain(KEY.substring(0, 4) + bad);
+                    });
+        }
+        assertThat(stub.received()).isEmpty();
+    }
+
+    // Covers: 6.5, 6.2, I6 (the live request through the real SDK, with no network: the v3 prompt, the five real tool
+    // schemas, the 20 s call timeout and LOW thinking are built, validated and sent by the SDK itself, so a setting the
+    // SDK refuses fails in verify, not on the owner's first message)
+    @Test
+    void generate_theLiveRequest_isBuiltAndSentByTheRealSdk() {
+        stub.answer(200, "{\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"ok\"}]}}],"
+                + USAGE + "}");
+        List<ToolSpec> five = dev.ucplab.runtime.ToolRegistry.of(new dev.ucplab.runtime.ToolPorts(
+                refusing(dev.ucplab.core.merchant.MerchantRegistry.class), Map.of(),
+                refusing(dev.ucplab.core.intent.Orchestrator.class)), (q, t) -> Optional.empty(), Duration.ofSeconds(1))
+                .specs();
+        GeminiModelClient live = new GeminiModelClient(ModelKey.of(KEY), ModelClientSettings.defaults()
+                .withBaseUrl(stub.url()).withCallTimeout(Duration.ofSeconds(20)), name -> null);
+
+        ModelTurn turn = live.generate(new Conversation(dev.ucplab.runtime.SystemPrompt.text(),
+                List.of(new Message.User("a snowboard under $700"))), five);
+
+        assertThat(turn.text()).isEqualTo("ok");
+        assertThat(stub.received()).singleElement().satisfies(r -> {
+            assertThat(r.uri()).contains("gemini-3.8-flash:generateContent");
+            assertThat(r.body()).contains("\"thinkingConfig\":{\"thinkingLevel\":\"LOW\"}");
+            for (String name : dev.ucplab.runtime.ToolRegistry.NAMES) {
+                assertThat(r.body()).contains("\"name\":\"" + name + "\"");
+            }
+        });
+    }
+
+    private static <T> T refusing(Class<T> type) {
+        return type.cast(java.lang.reflect.Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[] {type},
+                (p, m, a) -> {
+                    throw new UnsupportedOperationException("specs only");
+                }));
+    }
+
     // Covers: 6.5, 11 (a timeout and a dropped connection have their own causes, never retryable)
     @Test
     void generate_timeoutAndDroppedConnection_haveTheirCauses() throws Exception {
