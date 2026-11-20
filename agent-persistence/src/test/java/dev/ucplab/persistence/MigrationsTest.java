@@ -333,7 +333,8 @@ class MigrationsTest {
             assertThat(column(db, dump)).isEqualTo(before);
             assertThat(column(db, "SELECT count(*) FROM purchase_intent")).containsExactly("2");
             assertThat(column(db, "SELECT name FROM sqlite_master WHERE type = 'trigger'"))
-                    .containsExactlyInAnyOrder("purchase_intent_merchant_immutable", "purchase_intent_budget_immutable");
+                    .containsExactlyInAnyOrder("purchase_intent_merchant_immutable", "purchase_intent_budget_immutable",
+                            "purchase_intent_ship_to_immutable");
             assertThat(column(db, "SELECT version FROM flyway_schema_history WHERE success = 1"
                     + " ORDER BY installed_rank")).containsSubsequence("6", "7");
         }
@@ -416,7 +417,8 @@ class MigrationsTest {
                     .contains("ux_intent_active_dedupe", "ix_intent_user", "ux_intent_order", "ix_intent_state_created",
                             "ix_intent_cancel_pending", "ix_approval_pending_expiry");
             assertThat(column(db, "SELECT name FROM sqlite_master WHERE type = 'trigger'"))
-                    .containsExactlyInAnyOrder("purchase_intent_merchant_immutable", "purchase_intent_budget_immutable");
+                    .containsExactlyInAnyOrder("purchase_intent_merchant_immutable", "purchase_intent_budget_immutable",
+                            "purchase_intent_ship_to_immutable");
             org.assertj.core.api.Assertions.assertThatThrownBy(
                     () -> exec(db, "UPDATE purchase_intent SET merchant_id = 'other' WHERE id = 'i1'"))
                     .hasStackTraceContaining("I11");
@@ -608,12 +610,13 @@ class MigrationsTest {
             assertThat(column(db, "SELECT state || ':' || budget_minor || budget_currency FROM purchase_intent WHERE id = 'ib'"))
                     .containsExactly("QUOTING:500USD");
             assertThat(column(db, "SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name"))
-                    .containsExactly("purchase_intent_budget_immutable", "purchase_intent_merchant_immutable");
+                    .containsExactly("purchase_intent_budget_immutable", "purchase_intent_merchant_immutable",
+                            "purchase_intent_ship_to_immutable");
         }
     }
 
     // Covers: 10 V12, 6.5 (a database at V11 holding runs upgrades to V12: every run keeps its values and has no cause;
-    // V12 is the last migration)
+    // V12 follows V11. It was the last migration until V13, #28's precedent for a test that follows a contract change)
     @Test
     void v12_upgradesAV11DatabaseWithRuns_givingEachNoCause() {
         Path file = dir.resolve("v11-to-v12.db");
@@ -636,7 +639,7 @@ class MigrationsTest {
             assertThat(column(db, dump)).isEqualTo(before);
             assertThat(column(db, "SELECT count(*) FROM agent_run WHERE cause IS NULL")).containsExactly("2");
             assertThat(column(db, "SELECT version FROM flyway_schema_history WHERE success = 1"
-                    + " ORDER BY installed_rank")).endsWith("11", "12");
+                    + " ORDER BY installed_rank")).containsSubsequence("11", "12");
         }
     }
 
@@ -667,6 +670,76 @@ class MigrationsTest {
                     "UPDATE agent_run SET cause = 'http_429' WHERE id = 't'")).isInstanceOf(DatabaseException.class);
             assertThat(column(db, "SELECT id || ':' || coalesce(cause, '-') FROM agent_run ORDER BY id"))
                     .containsExactly("r:http_429", "t:-");
+        }
+    }
+
+    // Covers: 10 V13, 23.1 (a database at V12 holding intents and runs upgrades to V13: every row keeps every value it had
+    // and reads as US, which is what it was searched for; V13 is the last migration)
+    @Test
+    void v13_upgradesAV12DatabaseWithRows_givingEachUS() {
+        Path file = dir.resolve("v12-to-v13.db");
+        Flyway.configure().dataSource("jdbc:sqlite:" + file, null, null).locations("classpath:db/migration")
+                .target("12").load().migrate();
+        String dump = "SELECT group_concat(id || '|' || merchant_id || '|' || state || '|' || version, ';')"
+                + " FROM (SELECT * FROM purchase_intent ORDER BY id)";
+        List<String> before;
+        try (Database old = Database.open(file, 1)) {
+            exec(old, intent("i1", "merchant-a", "k1", "APPROVED", null), budgetedIntent("500", "'USD'"),
+                    "INSERT INTO agent_run (id, user_id, model, started_at, updated_at) VALUES ('r', 'u', 'm', 't', 't')");
+            before = column(old, dump);
+        }
+
+        Migrations.migrate(file);
+
+        try (Database db = Database.open(file, 1)) {
+            assertThat(column(db, "SELECT name FROM pragma_table_info('purchase_intent')")).contains("ship_to_country");
+            assertThat(column(db, "SELECT name FROM pragma_table_info('agent_run')")).contains("ship_to_country");
+            assertThat(column(db, dump)).isEqualTo(before);
+            assertThat(column(db, "SELECT id || ':' || ship_to_country FROM purchase_intent ORDER BY id"))
+                    .containsExactly("i1:US", "ib:US");
+            assertThat(column(db, "SELECT id || ':' || ship_to_country FROM agent_run")).containsExactly("r:US");
+            assertThat(column(db, "SELECT version FROM flyway_schema_history WHERE success = 1"
+                    + " ORDER BY installed_rank")).endsWith("12", "13");
+        }
+    }
+
+    // Covers: 10 V13, 23.1 (on both tables a buyer country is two upper-case letters, never null; anything else is
+    // refused)
+    @Test
+    void v13_aBuyerCountryIsTwoCapitals_neverNull() {
+        Path file = dir.resolve("v13.db");
+        Migrations.migrate(file);
+        try (Database db = Database.open(file, 1)) {
+            assertThat(column(db, "SELECT name FROM pragma_table_info('agent_run')")).contains("ship_to_country");
+            exec(db, "INSERT INTO agent_run (id, user_id, model, started_at, updated_at) VALUES ('r', 'u', 'm', 't', 't')");
+            exec(db, "UPDATE agent_run SET ship_to_country = 'IN' WHERE id = 'r'");
+            for (String bad : List.of("NULL", "'in'", "'I'", "'IND'", "'I1'", "''")) {
+                org.assertj.core.api.Assertions.assertThatThrownBy(() -> exec(db, "UPDATE agent_run SET ship_to_country = "
+                        + bad + " WHERE id = 'r'")).as("agent_run " + bad).isInstanceOf(DatabaseException.class);
+                org.assertj.core.api.Assertions.assertThatThrownBy(() -> exec(db, "INSERT INTO purchase_intent (id, user_id,"
+                        + " merchant_id, dedupe_key, lines_json, buyer_email, state, version, created_at, updated_at,"
+                        + " ship_to_country) VALUES ('ix', 'u', 'm', 'kx', '[]', 'e', 'PROPOSED', 0, 't', 't', " + bad + ")"))
+                        .as("purchase_intent " + bad).isInstanceOf(DatabaseException.class);
+            }
+            assertThat(column(db, "SELECT ship_to_country FROM agent_run")).containsExactly("IN");
+        }
+    }
+
+    // Covers: 10 V13, 23.1 (V13's trigger refuses a raw change to an intent's buyer country by any writer, and lets every
+    // other update through)
+    @Test
+    void v13_aRawChangeOfAnIntentsCountry_aborts_otherUpdatesDoNot() {
+        Path file = dir.resolve("v13-trigger.db");
+        Migrations.migrate(file);
+        try (Database db = Database.open(file, 1)) {
+            exec(db, intent("i1", "m", "k1", "PROPOSED", null));
+            org.assertj.core.api.Assertions.assertThatThrownBy(
+                    () -> exec(db, "UPDATE purchase_intent SET ship_to_country = 'IN' WHERE id = 'i1'"))
+                    .hasRootCauseMessage("[SQLITE_CONSTRAINT_TRIGGER] A RAISE function within a trigger fired, causing"
+                            + " the SQL statement to abort (23.1: an intent's buyer country never changes)");
+            exec(db, "UPDATE purchase_intent SET ship_to_country = ship_to_country, state = 'QUOTING' WHERE id = 'i1'");
+
+            assertThat(column(db, "SELECT state || ':' || ship_to_country FROM purchase_intent")).containsExactly("QUOTING:US");
         }
     }
 }

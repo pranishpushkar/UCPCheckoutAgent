@@ -2,6 +2,7 @@ package dev.ucplab.ucp;
 
 import dev.ucplab.core.id.IdGenerator;
 import dev.ucplab.core.intent.AttemptOp;
+import dev.ucplab.core.intent.BuyerCountry;
 import dev.ucplab.core.merchant.CallOutcome;
 import dev.ucplab.core.merchant.CatalogGateway;
 import dev.ucplab.core.merchant.CatalogPage;
@@ -152,7 +153,7 @@ public final class GlobalCatalogGateway implements MerchantGateway, CatalogGatew
      * read fresh each time (20). The catalog's refusal, or an answer without that variant, is {@code Rejected}.
      */
     @Override
-    public CallOutcome<LinkOffer> offer(MerchantId merchant, String itemId) {
+    public CallOutcome<LinkOffer> offer(MerchantId merchant, String itemId, BuyerCountry shipTo) {
         Objects.requireNonNull(merchant, "merchant");
         Objects.requireNonNull(itemId, "itemId");
         return call("get_product", Map.of("id", itemId, "context", CONTEXT), body -> GlobalCatalogParser.offer(body, itemId),

@@ -10,6 +10,7 @@ import dev.ucplab.core.id.SequentialIdGenerator;
 import dev.ucplab.core.identity.AuthContext;
 import dev.ucplab.core.identity.UserId;
 import dev.ucplab.core.intent.Budget;
+import dev.ucplab.core.intent.BuyerCountry;
 import dev.ucplab.core.intent.InMemoryIntentRepository;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.Orchestrator;
@@ -92,7 +93,7 @@ final class RunFixture {
         Orchestrator orchestrator = new Orchestrator() {
             @Override
             public ProposalResult propose(AuthContext auth, MerchantId merchant, List<ProposedLine> lines,
-                                          String rationale, Optional<Budget> budget) {
+                                          String rationale, Optional<Budget> budget, BuyerCountry shipTo) {
                 throw new UnsupportedOperationException();
             }
 

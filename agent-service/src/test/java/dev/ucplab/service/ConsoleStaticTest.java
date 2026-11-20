@@ -759,6 +759,77 @@ class ConsoleStaticTest {
                 .isGreaterThan(form.indexOf("id=\"message\""));
     }
 
+    // Covers: 24.3, 23.1 (beside the Budget field, an always-visible, labelled Deliver to select)
+    @Test
+    void sendForm_hasADeliverToSelect_alwaysVisible() throws IOException {
+        String html = read("index.html");
+        String form = html.substring(html.indexOf("<form id=\"send\""), html.indexOf("</form>"));
+
+        assertThat(form).contains("<label for=\"ship-to\">Deliver to</label>")
+                .contains("<select id=\"ship-to\" name=\"ship-to\"></select>");
+        assertThat(form.indexOf("id=\"ship-to\"")).as("it follows the budget's currency")
+                .isGreaterThan(form.indexOf("id=\"budget-currency\""));
+        String select = form.substring(form.indexOf("<select id=\"ship-to\""));
+        assertThat(select.substring(0, select.indexOf(">"))).doesNotContain("hidden").doesNotContain("disabled");
+    }
+
+    // Covers: 24.3, 23.1, 18 (Deliver to lists GET /api/countries by name, as text, and starts at /api/me's
+    // buyer_country; it keeps nothing in browser storage, where the theme stays the only stored value)
+    @Test
+    void deliverTo_listsTheCountries_asText_andStartsAtTheOperatorsDefault() throws IOException {
+        String js = read("console.js");
+        String shipTo = block(js, "ship-to");
+
+        assertThat(shipTo).contains("await api(\"GET\", \"/api/countries\")")
+                .contains("const option = el(\"option\", country.name);")
+                .contains("option.value = country.country;")
+                .contains("$(\"ship-to\").value = me.buyer_country.country;")
+                .doesNotContain("localStorage");
+        assertThat(js).contains("loadCountries(me.body);");
+    }
+
+    // Covers: 24.3, 23.1 (changing Deliver to sets the Budget field's currency to the country's, adding it to the list
+    // when it is not there; a new run sends the country, a continuation does not, and it is disabled while a run
+    // continues)
+    @Test
+    void deliverTo_switchesTheBudgetsCurrency_andIsSentOnANewRunOnly() throws IOException {
+        String js = read("console.js");
+        String shipTo = block(js, "ship-to");
+
+        assertThat(shipTo).contains("function onShipToChange() {")
+                .contains("$(\"budget-currency\").appendChild(el(\"option\", country.currency));")
+                .contains("$(\"budget-currency\").value = country.currency;");
+        assertThat(js).contains("$(\"ship-to\").addEventListener(\"change\", onShipToChange);")
+                .contains("const shipTo = continuing ? {} : {ship_to_country: $(\"ship-to\").value};")
+                .contains("$(\"ship-to\").disabled = continuingRun();");
+    }
+
+    // Covers: 24.3 (money in the currency's own minor digits: shown that way, and the Budget field's amount turned into
+    // minor units with the same digits)
+    @Test
+    void money_andTheBudgetField_useTheCurrencysOwnMinorDigits() throws IOException {
+        String js = read("console.js");
+
+        assertThat(js).contains("function minorDigits(currency) {")
+                .contains("new Intl.NumberFormat(\"en\", {style: \"currency\", currency: currency})"
+                        + ".resolvedOptions().maximumFractionDigits");
+        String money = js.substring(js.indexOf("function money(minor, currency) {"));
+        money = money.substring(0, money.indexOf("\n}\n"));
+        assertThat(money).contains("minorDigits(currency)").doesNotContain("/ 100");
+        String toSend = block(js, "budget").substring(block(js, "budget").indexOf("function budgetToSend() {"));
+        assertThat(toSend.substring(0, toSend.indexOf("\n}\n"))).contains("minorDigits(").doesNotContain("* 100");
+    }
+
+    // Covers: 24.3, 23.2, 26.7 (the link card says where the catalog listed the item as shipping to, from the approval
+    // answer's ships_to, as text)
+    @Test
+    void approvalCard_atALinkMerchant_saysListedAsShippingTo() throws IOException {
+        String card = card(read("console.js"));
+
+        assertThat(card).contains("if (approval.ships_to) {")
+                .contains("el(\"p\", \"Listed as shipping to \" + approval.ships_to.name");
+    }
+
     // Covers: 24.3, P9 (the pre-fill reads an amount with a limit word from the message, with a $, € or £ sign or a code)
     @Test
     void budgetPrefill_knowsTheLimitWords_andTheCurrencySigns() throws IOException {
@@ -808,7 +879,7 @@ class ConsoleStaticTest {
         assertThat(send).doesNotContain("budgetFromMessage")
                 .contains("const budget = continuing ? {} : budgetToSend();")
                 .contains("? await api(\"POST\", \"/api/runs/\" + currentRun.id + \"/messages\", {message: text})")
-                .contains(": await api(\"POST\", \"/api/runs\", Object.assign({message: text}, budget));");
+                .contains(": await api(\"POST\", \"/api/runs\", Object.assign({message: text}, budget, shipTo));");
         String toSend = budget.substring(budget.indexOf("function budgetToSend() {"));
         toSend = toSend.substring(0, toSend.indexOf("\n}\n") + 2);
         assertThat(toSend).contains("$(\"budget\").value").contains("$(\"budget-currency\").value")

@@ -6,6 +6,7 @@ import dev.ucplab.core.agent.RunId;
 import dev.ucplab.core.identity.AuthContext;
 import dev.ucplab.core.identity.UserId;
 import dev.ucplab.core.intent.Budget;
+import dev.ucplab.core.intent.BuyerCountry;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentState;
 import dev.ucplab.core.intent.IntentStatus;
@@ -35,7 +36,7 @@ class ProposeLinkReasonTest {
         return new Orchestrator() {
             @Override
             public ProposalResult propose(AuthContext auth, MerchantId merchant, List<ProposedLine> lines,
-                    String rationale, Optional<Budget> budget) {
+                    String rationale, Optional<Budget> budget, BuyerCountry shipTo) {
                 return new ProposalResult(ID, IntentState.FAILED_NOT_CHARGED, Optional.empty());
             }
 

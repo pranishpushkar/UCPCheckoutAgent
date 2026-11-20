@@ -8,6 +8,7 @@ import dev.ucplab.core.id.IdGenerator;
 import dev.ucplab.core.identity.AuthContext;
 import dev.ucplab.core.identity.UserId;
 import dev.ucplab.core.intent.Budget;
+import dev.ucplab.core.intent.BuyerCountry;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentRepository;
 import dev.ucplab.core.intent.IntentState;
@@ -183,6 +184,15 @@ public final class RunSupervisor implements AutoCloseable {
      * the user's own budget for the run, from the request body only (P9).
      */
     public RunView start(AuthContext auth, String message, Optional<Budget> budget) {
+        return start(auth, message, budget, BuyerCountry.US);
+    }
+
+    /**
+     * As above, for the run's buyer country {@code shipTo} (23.1): the request body's, or the operator's default.
+     * Skeleton (red): the country is not passed on yet.
+     */
+    public RunView start(AuthContext auth, String message, Optional<Budget> budget, BuyerCountry shipTo) {
+        Objects.requireNonNull(shipTo, "shipTo");
         Objects.requireNonNull(auth, "auth");
         Objects.requireNonNull(message, "message");
         refuseWhenClosing();

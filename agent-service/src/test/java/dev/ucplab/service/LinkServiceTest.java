@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import dev.ucplab.core.identity.AuthContext;
 import dev.ucplab.core.identity.UserId;
+import dev.ucplab.core.intent.BuyerCountry;
 import dev.ucplab.core.intent.IntentEvent;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentState;
@@ -125,6 +126,16 @@ class LinkServiceTest {
         return result.intentId();
     }
 
+    private IntentId proposeFor(String user, BuyerCountry shipTo) {
+        Clock clock = service.bean(Clock.class);
+        AuthContext auth = new AuthContext(new UserId("local-" + user), user + "@local.ucplab.dev", clock.instant(),
+                "test-session");
+        ProposalResult result = service.bean(DefaultOrchestrator.class).propose(auth, CATALOG,
+                List.of(new ProposedLine(ITEM, 1)), "a board", Optional.empty(), shipTo);
+        assertThat(result.state()).isEqualTo(IntentState.AWAITING_APPROVAL);
+        return result.intentId();
+    }
+
     private Map<String, Object> awaitIntent(ApiClient api, Session s, IntentId id, String state) {
         long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
         Map<String, Object> now = json(api.get(s, "/api/intents/" + id.value()));
@@ -142,6 +153,27 @@ class LinkServiceTest {
             Thread.currentThread().interrupt();
             throw new AssertionError(e);
         }
+    }
+
+    // Covers: 23.1, 23.2, 24.3, 26.7, 9.2 (a link intent for India is priced by a get_product read for India, in INR,
+    // and its approval answer names the country, our own text, outside the snapshot, which shows no link)
+    @Test
+    void aLinkIntentForIndia_isReadForIndia_andTheApprovalNamesIt() throws IOException {
+        store.answerText("get_product", McpStore.catalogFixture("global_get_product_us.json")
+                .replace("\"currency\": \"USD\"", "\"currency\": \"INR\"")
+                .replace("\"currency\":\"USD\"", "\"currency\":\"INR\""));
+        start();
+        ApiClient api = new ApiClient(service.port());
+        Session alice = api.signIn("alice");
+        IntentId id = proposeFor("alice", new BuyerCountry("IN"));
+
+        Map<String, Object> approval = json(api.get(alice, "/api/intents/" + id.value() + "/approval"));
+
+        assertThat(approval).containsEntry("ships_to", Map.of("country", "IN", "name", "India"));
+        assertThat(approval.get("snapshot").toString()).doesNotContain("link").doesNotContain("shipsTo");
+        assertThat(store.toolCalls()).filteredOn(c -> c.tool().equals("get_product")).singleElement()
+                .satisfies(c -> assertThat(((Map<?, ?>) c.arguments().get("catalog")).get("context"))
+                        .isEqualTo(Map.of("address_country", "IN", "currency", "INR")));
     }
 
     // Covers: 7.2 quote_ready (link), hand_off (link), 19, 23.2, 24.3, 26.7, I6, I8, I9, N1 (a catalog entry builds a

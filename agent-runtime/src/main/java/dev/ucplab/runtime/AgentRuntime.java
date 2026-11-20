@@ -12,6 +12,7 @@ import dev.ucplab.core.agent.ToolCall;
 import dev.ucplab.core.agent.ToolEvent;
 import dev.ucplab.core.identity.AuthContext;
 import dev.ucplab.core.intent.Budget;
+import dev.ucplab.core.intent.BuyerCountry;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentNotFoundException;
 import dev.ucplab.core.intent.IntentState;
@@ -99,6 +100,16 @@ public final class AgentRuntime {
     /** Starts a run with no budget. */
     public RunSession start(AuthContext auth, RunId id, String userMessage, UserChannel user, RunTrace trace) {
         return start(auth, id, userMessage, user, trace, Optional.empty());
+    }
+
+    /**
+     * Starts a run for the run's buyer country {@code shipTo} (23.1), the user's own choice or the operator's default,
+     * never anything the model said. Skeleton (red): the country is not used yet.
+     */
+    public RunSession start(AuthContext auth, RunId id, String userMessage, UserChannel user, RunTrace trace,
+                            Optional<Budget> userBudget, BuyerCountry shipTo) {
+        Objects.requireNonNull(shipTo, "shipTo");
+        return start(auth, id, userMessage, user, trace, userBudget);
     }
 
     /**

@@ -21,6 +21,7 @@ import dev.ucplab.core.intent.AttemptId;
 import dev.ucplab.core.intent.AttemptOp;
 import dev.ucplab.core.intent.AttemptStatus;
 import dev.ucplab.core.intent.Budget;
+import dev.ucplab.core.intent.BuyerCountry;
 import dev.ucplab.core.intent.DuplicateIntentException;
 import dev.ucplab.core.intent.HandoffWatch;
 import dev.ucplab.core.intent.IntentEvent;
@@ -346,7 +347,7 @@ public final class DefaultOrchestrator implements Orchestrator {
      */
     @Override
     public ProposalResult propose(AuthContext auth, MerchantId merchantId, List<ProposedLine> lines, String rationale,
-            Optional<Budget> budget) {
+            Optional<Budget> budget, BuyerCountry shipTo) {
         Objects.requireNonNull(auth, "auth");
         Objects.requireNonNull(merchantId, "merchantId");
         Objects.requireNonNull(lines, "lines");
@@ -457,6 +458,12 @@ public final class DefaultOrchestrator implements Orchestrator {
     /** {@code dedupe_key = sha256(userId + '|' + merchantId + '|' + sorted(itemId:quantity))} (7.7), comma-joined. */
     public static String dedupeKey(UserId user, MerchantId merchantId, List<ProposedLine> lines) {
         return dedupeKey(user, merchantId, lines, Optional.empty());
+    }
+
+    /** 7.7, with the run's buyer country. Skeleton (red): the country is not in the key yet. */
+    public static String dedupeKey(UserId user, MerchantId merchantId, List<ProposedLine> lines, Optional<Budget> budget,
+            BuyerCountry shipTo) {
+        return dedupeKey(user, merchantId, lines, budget);
     }
 
     /** 7.7: with the run's budget appended when it has one, so proposals under different budgets never share an intent. */

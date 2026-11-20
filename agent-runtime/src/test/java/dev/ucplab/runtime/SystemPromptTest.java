@@ -26,7 +26,9 @@ class SystemPromptTest {
             Map.entry("[REPLY]", "Write to the user in plain text only: no Markdown, no asterisks for bold, no headings, no "
                     + "tables."),
             Map.entry("[REFUSED]", "After a refusal over the budget, propose at most one cheaper item that fits, or tell the user "
-                    + "none fits and name the closest price you found."));
+                    + "none fits and name the closest price you found."),
+            Map.entry("[SHIP]", "Search results are for delivery to the user's country, which the result names in ships_to, "
+                    + "and prices are in that country's currency."));
 
     /** The later sentence each paragraph changed since v1 must hold (6.4, v2 to v4). */
     private static final Map<String, String> SECOND_SENTENCES = Map.of(
@@ -44,15 +46,15 @@ class SystemPromptTest {
         return Arrays.stream(SystemPrompt.text().split("\\R\\s*\\R")).map(String::strip).toList();
     }
 
-    // Covers: 6.4 (the eleven requirements of v5, one paragraph each, in order, each starting with its marker)
+    // Covers: 6.4 (the twelve requirements of v6, one paragraph each, in order, each starting with its marker)
     @Test
-    void prompt_hasTheElevenMarkedParagraphsInOrder() {
+    void prompt_hasTheTwelveMarkedParagraphsInOrder() {
         assertThat(SystemPrompt.MARKERS).containsExactly("[ROLE]", "[DATA]", "[LIMITS]", "[ASK]", "[CHEAPEST]",
-                "[SEARCH]", "[COMPARE]", "[DECIDE]", "[REFUSED]", "[LINK]", "[REPLY]");
+                "[SEARCH]", "[COMPARE]", "[DECIDE]", "[REFUSED]", "[LINK]", "[REPLY]", "[SHIP]");
         List<String> paragraphs = paragraphs();
 
-        assertThat(paragraphs).hasSize(11);
-        for (int i = 0; i < 11; i++) {
+        assertThat(paragraphs).hasSize(12);
+        for (int i = 0; i < 12; i++) {
             assertThat(paragraphs.get(i)).startsWith(SystemPrompt.MARKERS.get(i) + " ");
         }
     }
@@ -95,8 +97,8 @@ class SystemPromptTest {
     @Test
     void prompt_isLoadedOnceAndVersioned() {
         assertThat(SystemPrompt.text()).isSameAs(SystemPrompt.text());
-        assertThat(SystemPrompt.VERSION).isEqualTo("v5");
-        assertThat(SystemPrompt.class.getResource("system-prompt-v5.txt")).isNotNull();
+        assertThat(SystemPrompt.VERSION).isEqualTo("v6");
+        assertThat(SystemPrompt.class.getResource("system-prompt-v6.txt")).isNotNull();
         assertThat(SystemPrompt.class.getResource("system-prompt-v4.txt")).isNotNull();
     }
 
@@ -123,6 +125,16 @@ class SystemPromptTest {
                 .satisfies(p -> assertThat(p).contains("merchant_id").contains("seller name"));
         assertThat(SystemPrompt.text()).as("the prompt itself uses no Markdown").doesNotContain("**")
                 .doesNotContain("shopify-catalog");
+    }
+
+    // Covers: 6.4, 26.7, 6.2, 23.1 (v6, after the live check from India: results are for the user's country in its
+    // currency; never convert a price or say an item ships elsewhere; other_currency is said, never proposed)
+    @Test
+    void prompt_v6_namesShipsTo_neverConverts_andSaysOtherCurrency() {
+        assertThat(paragraphs()).filteredOn(p -> p.startsWith("[SHIP]")).singleElement().satisfies(p -> assertThat(p)
+                .contains("Never convert a price into another currency, and never say an item ships somewhere else.")
+                .contains("When the result has other_currency, say that more items ship there but are priced in another "
+                        + "currency, and don't propose them."));
     }
 
     // Covers: 6.4, 6.3, 26.7 (v4, after the live catalog run that ran out of steps with four searches and no proposal: at

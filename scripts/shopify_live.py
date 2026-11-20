@@ -151,7 +151,12 @@ def console_merchants(domain):
 POLICY_YAML = "per_purchase_cap_minor: 200000\ndaily_cap_minor: 400000\n"
 
 
-def service_env(env, tmp, port, model="scripted", catalog=False):
+def buyer_country(argv, env):
+    """Skeleton (red): no default buyer country is chosen yet."""
+    return None
+
+
+def service_env(env, tmp, port, model="scripted", catalog=False, buyer_country=None):
     """The service's whole environment: built from nothing, so no other variable of the owner's shell reaches it. With
     gemini the key goes in here and nowhere else, never on the command line (DESIGN 26.6). With --catalog there is no
     BUYER_IP at all: the catalog is never sent one (DESIGN 26.7)."""

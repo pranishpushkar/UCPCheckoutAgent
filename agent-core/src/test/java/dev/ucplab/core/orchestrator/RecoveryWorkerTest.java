@@ -18,6 +18,7 @@ import dev.ucplab.core.identity.AuthContext;
 import dev.ucplab.core.intent.AttemptOp;
 import dev.ucplab.core.intent.AttemptStatus;
 import dev.ucplab.core.intent.Budget;
+import dev.ucplab.core.intent.BuyerCountry;
 import dev.ucplab.core.intent.InMemoryRecoveryScan;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentStatus;
@@ -73,8 +74,8 @@ class RecoveryWorkerTest {
 
     private record Counting(Orchestrator delegate, Tracker tracker) implements Orchestrator {
         @Override
-        public ProposalResult propose(AuthContext auth, MerchantId merchant, List<ProposedLine> lines, String rationale, Optional<Budget> budget) {
-            return delegate.propose(auth, merchant, lines, rationale, budget);
+        public ProposalResult propose(AuthContext auth, MerchantId merchant, List<ProposedLine> lines, String rationale, Optional<Budget> budget, BuyerCountry shipTo) {
+            return delegate.propose(auth, merchant, lines, rationale, budget, shipTo);
         }
 
         @Override

@@ -2,6 +2,7 @@ package dev.ucplab.core.agent;
 
 import dev.ucplab.core.identity.UserId;
 import dev.ucplab.core.intent.Budget;
+import dev.ucplab.core.intent.BuyerCountry;
 import dev.ucplab.core.intent.IntentId;
 import java.time.Instant;
 import java.util.List;
@@ -34,7 +35,8 @@ public record RunRecord(
         List<IntentId> intentIds,
         List<ToolEvent> toolEvents,
         Optional<Budget> budget,
-        Optional<String> cause) {
+        Optional<String> cause,
+        BuyerCountry shipTo) {
 
     /** 6.5: what a cause may hold, a status, an enum name or a class's simple name. */
     public static final java.util.regex.Pattern CAUSE = java.util.regex.Pattern.compile("[A-Za-z0-9_]{1,64}");
@@ -51,6 +53,7 @@ public record RunRecord(
         toolEvents = List.copyOf(Objects.requireNonNull(toolEvents, "toolEvents"));
         Objects.requireNonNull(budget, "budget");
         Objects.requireNonNull(cause, "cause");
+        Objects.requireNonNull(shipTo, "shipTo");
         if (cause.isPresent() && (!reason.equals(Optional.of("model_error")) || !CAUSE.matcher(cause.get()).matches())) {
             throw new IllegalArgumentException("a cause goes only with model_error, and is an identifier (6.5)");
         }
@@ -69,6 +72,15 @@ public record RunRecord(
     }
 
     /** A run record with no cause: the fields before V12. */
+    /** A run for the default buyer country, US (23.1): the fields before V13. */
+    public RunRecord(RunId id, UserId owner, String model, Instant startedAt, Optional<Instant> endedAt,
+            Optional<String> outcome, Optional<String> reason, int modelCalls, int toolCalls, long inputTokens,
+            long outputTokens, List<IntentId> intentIds, List<ToolEvent> toolEvents, Optional<Budget> budget,
+            Optional<String> cause) {
+        this(id, owner, model, startedAt, endedAt, outcome, reason, modelCalls, toolCalls, inputTokens, outputTokens,
+                intentIds, toolEvents, budget, cause, BuyerCountry.US);
+    }
+
     public RunRecord(RunId id, UserId owner, String model, Instant startedAt, Optional<Instant> endedAt,
             Optional<String> outcome, Optional<String> reason, int modelCalls, int toolCalls, long inputTokens,
             long outputTokens, List<IntentId> intentIds, List<ToolEvent> toolEvents, Optional<Budget> budget) {
@@ -92,13 +104,24 @@ public record RunRecord(
     /** This record with {@code runBudget}: a store keeps the budget written at insert whatever an update carries. */
     public RunRecord withBudget(Optional<Budget> runBudget) {
         return new RunRecord(id, owner, model, startedAt, endedAt, outcome, reason, modelCalls, toolCalls, inputTokens,
-                outputTokens, intentIds, toolEvents, runBudget, cause);
+                outputTokens, intentIds, toolEvents, runBudget, cause, shipTo);
     }
 
     /** This record with a {@code model_error}'s {@code cause} (6.5). */
     public RunRecord withCause(Optional<String> modelErrorCause) {
         return new RunRecord(id, owner, model, startedAt, endedAt, outcome, reason, modelCalls, toolCalls, inputTokens,
-                outputTokens, intentIds, toolEvents, budget, modelErrorCause);
+                outputTokens, intentIds, toolEvents, budget, modelErrorCause, shipTo);
+    }
+
+    /** The run's buyer country (23.1): set when the run starts and fixed for it. */
+    public RunRecord withShipTo(BuyerCountry runShipTo) {
+        return new RunRecord(id, owner, model, startedAt, endedAt, outcome, reason, modelCalls, toolCalls, inputTokens,
+                outputTokens, intentIds, toolEvents, budget, cause, runShipTo);
+    }
+
+    public static RunRecord started(RunId id, UserId owner, String model, Instant at, Optional<Budget> budget,
+            BuyerCountry shipTo) {
+        return started(id, owner, model, at, budget).withShipTo(shipTo);
     }
 
     /** A run that has just started: no calls, no intents, no outcome, no reason. */

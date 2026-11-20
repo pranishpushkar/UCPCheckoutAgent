@@ -284,6 +284,25 @@ public abstract class IntentRepositoryContract {
         assertThat(repo.findForSystem(two.id()).orElseThrow().budget()).isEmpty();
     }
 
+    // Covers: 23.1, 10 (V13) (the buyer country is stored at insert and read back by every read; an intent proposed
+    // without one reads back as US; an update never changes it, whatever the caller passes)
+    @Test
+    void insert_storesTheBuyerCountry_andAnUpdateNeverChangesIt() {
+        BuyerCountry india = new BuyerCountry("IN");
+        repo.insert(proposed("i1", ALICE, "d1").withShipTo(india).withState(IntentState.QUOTING, clock.instant()));
+        repo.insert(proposed("i2", ALICE, "d2").withState(IntentState.QUOTING, clock.instant()));
+
+        assertThat(repo.find(ALICE, new IntentId("i1")).orElseThrow().shipTo()).isEqualTo(india);
+        assertThat(repo.findForSystem(new IntentId("i2")).orElseThrow().shipTo()).isEqualTo(BuyerCountry.US);
+        List<PurchaseIntent> claimed = repo.claimRecoverable(W1, LEASE, 10);
+        PurchaseIntent one = claimed.stream().filter(i -> i.id().value().equals("i1")).findFirst().orElseThrow();
+        assertThat(one.shipTo()).isEqualTo(india);
+
+        repo.update(one.withShipTo(new BuyerCountry("GB")), 0, W1);
+        assertThat(repo.findForSystem(one.id()).orElseThrow().shipTo()).isEqualTo(india);
+        assertThat(repo.findForSystem(one.id()).orElseThrow().version()).isEqualTo(1);
+    }
+
     /** A copy of {@code i} at another merchant: what a caller breaking I11 would pass. */
     private static PurchaseIntent atMerchant(PurchaseIntent i, MerchantId merchant) {
         return new PurchaseIntent(i.id(), i.owner(), merchant, i.merchantFingerprint(), i.dedupeKey(), i.lines(), i.buyerEmail(), i.state(),

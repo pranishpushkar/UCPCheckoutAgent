@@ -2,11 +2,13 @@ package dev.ucplab.runtime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import dev.ucplab.core.intent.BuyerCountry;
 import dev.ucplab.core.json.CanonicalJson;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * Walks a tool result and checks every string in it against the fields declared wrapped (6.4, 9.3 L2): merchant and
@@ -20,12 +22,14 @@ final class ResultFields {
     /** Merchant-sent ids and codes: as they are when they look like ids, else wrapped. */
     static final Set<String> WRAPPED_UNLESS_ID = Set.of("item_id", "order_id", "failure_reason");
     /** Our own fields: ids, codes, states and the currency. */
-    static final Set<String> OWN = Set.of("merchant_id", "intent_id", "state", "currency", "error");
+    static final Set<String> OWN = Set.of("merchant_id", "intent_id", "state", "currency", "error", "country");
     /** Fixed texts of ours, each with the only values it may hold (6.2 note: never merchant text). */
-    static final Map<String, Set<String>> FIXED = Map.of("note", Set.of(GetPurchaseStatusTool.HANDED_OFF_NOTE));
+    static final Map<String, Set<String>> FIXED = Map.of("note", Set.of(GetPurchaseStatusTool.HANDED_OFF_NOTE),
+            "country_name", BuyerCountry.all().stream().map(BuyerCountry::name).collect(Collectors.toSet()));
     /** Containers and numbers. */
     static final Set<String> STRUCTURE = Set.of("items", "quote", "lines", "price_minor", "total_minor", "quantity",
-            "unit_price_minor", "in_stock", "options", "above_budget", "count", "lowest_price_minor");
+            "unit_price_minor", "in_stock", "options", "above_budget", "count", "lowest_price_minor", "ships_to",
+            "other_currency");
 
     private static final Pattern ID = Pattern.compile("[A-Za-z0-9_\\-]{1,100}");
 

@@ -4,11 +4,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.ucplab.core.config.AgentProfile;
+import dev.ucplab.core.intent.BuyerCountry;
 import dev.ucplab.core.policy.PolicyConfig;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -34,6 +36,22 @@ class ServicePropertiesTest {
 
     private static ServiceProperties from(Map<String, String> env) {
         return ServiceProperties.from(Environment.of(env));
+    }
+
+    // Covers: 23.1, 26.7 (BUYER_COUNTRY: US when unset; a known code is the default; anything else is refused at startup
+    // with a fixed message)
+    @Test
+    void buyerCountry_isUSWhenUnset_aKnownCode_orRefused() {
+        assertThat(from(env("local")).buyerCountry()).isEqualTo(BuyerCountry.US);
+        Map<String, String> india = env("local");
+        india.put("BUYER_COUNTRY", "IN");
+        assertThat(from(india).buyerCountry()).isEqualTo(new BuyerCountry("IN"));
+        for (String bad : List.of("in", "IND", "XX", "AQ", "", " IN")) {
+            Map<String, String> env = env("local");
+            env.put("BUYER_COUNTRY", bad);
+            assertThatThrownBy(() -> from(env)).as(bad).isInstanceOf(IllegalStateException.class)
+                    .hasMessage(ServiceProperties.BUYER_COUNTRY_INVALID);
+        }
     }
 
     // Covers: 9.2, I8 (prod refuses a change-me placeholder secret; the message names the setting, not the value)

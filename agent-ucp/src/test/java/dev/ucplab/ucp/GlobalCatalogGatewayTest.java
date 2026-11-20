@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.ucplab.core.id.SequentialIdGenerator;
+import dev.ucplab.core.intent.BuyerCountry;
 import dev.ucplab.core.json.LenientJson;
 import dev.ucplab.core.merchant.CallOutcome;
 import dev.ucplab.core.merchant.CatalogPage;
@@ -176,6 +177,86 @@ class GlobalCatalogGatewayTest {
 
         assertThat(page.products()).extracting(CatalogProduct::title)
                 .containsExactly("Example Snowboard 2", "Example Snowboard 3");
+    }
+
+    static final BuyerCountry INDIA = new BuyerCountry("IN");
+
+    /** A recorded answer with each variant's currency replaced, in order: the IN answers are not kept (README). */
+    @SuppressWarnings("unchecked")
+    static String withCurrencies(String fixtureName, String... currencies) {
+        Map<String, Object> answer = LenientJson.readObject(fixture(fixtureName));
+        Map<String, Object> payload = content(answer);
+        List<Map<String, Object>> products = payload.containsKey("products")
+                ? (List<Map<String, Object>>) payload.get("products") : List.of((Map<String, Object>) payload.get("product"));
+        int n = 0;
+        for (Map<String, Object> product : products) {
+            for (Map<String, Object> variant : (List<Map<String, Object>>) product.get("variants")) {
+                ((Map<String, Object>) variant.get("price")).put("currency", currencies[n++]);
+            }
+        }
+        return McpStore.json(answer);
+    }
+
+    // Covers: 26.7, 23.1, 6.2 (the search asks for the run's buyer country: its code as context.address_country and
+    // filters.ships_to, its currency as context.currency; with a budget, in that currency, filters.price.max too)
+    @Test
+    void search_sendsTheBuyerCountry_andItsCurrency() {
+        store.answerText("search_catalog", withCurrencies("global_search_us.json", "INR", "INR", "INR"))
+                .answerText("search_catalog", withCurrencies("global_search_us.json", "INR", "INR", "INR"));
+
+        ok(gateway().search(new CatalogSearch("snowboard", 10, Optional.empty(), INDIA)));
+        ok(gateway().search(new CatalogSearch("snowboard", 10, Optional.of(new Money(4_000_000, "INR")), INDIA)));
+
+        assertThat(store.toolCalls().get(0).arguments().get("catalog")).isEqualTo(Map.of(
+                "query", "snowboard",
+                "context", Map.of("address_country", "IN", "currency", "INR"),
+                "filters", Map.of("available", true, "ships_to", Map.of("country", "IN")),
+                "pagination", Map.of("limit", 10L)));
+        assertThat(store.toolCalls().get(1).arguments().get("catalog")).isEqualTo(Map.of(
+                "query", "snowboard",
+                "context", Map.of("address_country", "IN", "currency", "INR"),
+                "filters", Map.of("available", true, "ships_to", Map.of("country", "IN"),
+                        "price", Map.of("max", 4_000_000L)),
+                "pagination", Map.of("limit", 10L)));
+    }
+
+    // Covers: 26.7, 6.2 (for India, the INR variants are kept and every variant in another currency is left out and
+    // counted, as the paged spike saw: AUD and CAD among INR; for US, a CAD variant is counted the same way)
+    @Test
+    void search_keepsTheCountrysCurrency_andCountsTheOthers() {
+        store.answerText("search_catalog", withCurrencies("global_search_us.json", "INR", "AUD", "CAD"))
+                .answerText("search_catalog", withCurrencies("global_search_us.json", "CAD", "USD", "USD"));
+
+        CatalogPage india = ok(gateway().search(new CatalogSearch("snowboard", 10, Optional.empty(), INDIA)));
+        CatalogPage us = ok(gateway().search(new CatalogSearch("snowboard", 10)));
+
+        assertThat(india.products()).extracting(CatalogProduct::title).containsExactly("Example Snowboard 1");
+        assertThat(india.products().getFirst().variants().getFirst().price()).isEqualTo(new Money(30495, "INR"));
+        assertThat(india.otherCurrency()).isEqualTo(2);
+        assertThat(us.products()).extracting(CatalogProduct::title)
+                .containsExactly("Example Snowboard 2", "Example Snowboard 3");
+        assertThat(us.otherCurrency()).isEqualTo(1);
+        assertThat(india.toString()).doesNotContain("AUD").doesNotContain("CAD");
+    }
+
+    // Covers: 26.7, 7.2, 23.1 (the offer that prices an approval and the get_product tool's read are both asked for the
+    // buyer country, and read in its currency; a read in another currency is unreadable, never converted)
+    @Test
+    void offerAndProduct_readForTheBuyerCountry_inItsCurrency() {
+        store.answerText("get_product", withCurrencies("global_get_product_us.json", "INR"))
+                .answerText("get_product", withCurrencies("global_get_product_us.json", "INR"))
+                .answerText("get_product", fixture("global_get_product_us.json"));
+
+        LinkOffer offer = ok(gateway().offer(CATALOG, "gid://shopify/ProductVariant/1000001", INDIA));
+        CatalogProduct product = ok(gateway().product("gid://shopify/ProductVariant/1000001", INDIA));
+        CallOutcome<LinkOffer> usd = gateway().offer(CATALOG, "gid://shopify/ProductVariant/1000001", INDIA);
+
+        assertThat(offer.price()).isEqualTo(new Money(30495, "INR"));
+        assertThat(product.variants().getFirst().price()).isEqualTo(new Money(30495, "INR"));
+        assertThat(store.toolCalls()).extracting(c -> c.arguments().get("catalog")).allSatisfy(c -> assertThat(c)
+                .isEqualTo(Map.of("id", "gid://shopify/ProductVariant/1000001",
+                        "context", Map.of("address_country", "IN", "currency", "INR"))));
+        assertThat(usd).isInstanceOf(CallOutcome.ProtocolError.class);
     }
 
     // Covers: 26.7, 26.2 (an answer at another UCP version is unreadable: a ProtocolError, never a page)

@@ -280,6 +280,24 @@ class ApprovalSnapshotTest {
         assertThat(sample().hash()).isEqualTo("37bd4b1e6bfbdb0fde5ee59cf333a620a3ab239b63d2f574c241a56cadb228fa");
     }
 
+    // Covers: 9.2, I2, I3, 23.1 (a link's shipsTo, the intent's buyer country, is in the canonical form and hashed; a link
+    // without one hashes exactly as before). Expected string and hashes from Python json.dumps(sort_keys=True,
+    // separators=(',',':')) and hashlib.
+    @Test
+    void aLinksShipsTo_isHashed_andALinkWithoutOneHashesAsBefore() {
+        LinkSnapshot india = new LinkSnapshot("Example Shop A", "shop-a.myshopify.example",
+                Optional.of("www.shop-a.example"), Optional.of("IN"),
+                dev.ucplab.core.merchant.ContinueUrl.parse(LINK).orElseThrow());
+
+        assertThat(linked(india).canonicalJson()).contains(
+                "\"sellerSite\":\"www.shop-a.example\",\"shipsTo\":\"IN\",\"url\":");
+        assertThat(linked(india).hash()).isEqualTo("4905a3b029c45fd183f24e87d9a66a3e6a527454e7f17ad86b4d8fc42e6f6227");
+        assertThat(linked(new LinkSnapshot(india.sellerName(), india.sellerDomain(), india.sellerSite(),
+                Optional.of("US"), india.url())).hash())
+                .isEqualTo("8f6d4863716ba7e6b7bba71a13dbf46aace89612a00a0d4f0b35a4fbd3561eb2");
+        assertThat(linked(SHOP_A).hash()).isEqualTo("25d64f9a2fb0bdbc7c37f11ca53605859486f3b57080ea0614abb6653dc88186");
+    }
+
     // Covers: I2, I3, 26.7 (the hash changes with any part of the link: an approval of one link cannot hand off another)
     @Test
     void theHash_changesWithAnyPartOfTheLink() {
