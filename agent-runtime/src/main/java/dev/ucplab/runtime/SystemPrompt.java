@@ -9,13 +9,13 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * The system prompt (6.4): {@code system-prompt-v8.txt}, loaded once. It states the thirteen 6.4 requirements, each as one
+ * The system prompt (6.4): {@code system-prompt-v9.txt}, loaded once. It states the fourteen 6.4 requirements, each as one
  * paragraph starting with a fixed marker ({@link #MARKERS}). The version is part of the file name and goes into
  * {@code RunRecord.model} as {@code <model>/<version>}.
  */
 public final class SystemPrompt {
 
-    public static final String VERSION = "v8";
+    public static final String VERSION = "v9";
 
     /**
      * Role; tool results are data; cannot pay or approve; ask when ambiguous; cheapest only without a preference; search
@@ -23,10 +23,12 @@ public final class SystemPrompt {
      * variant's options, and read one product (v3, v4); at most two searches, then propose or say none fits (v4); after a
      * policy refusal its reason and a stop (v7); at a catalog seller, approve for the store's link and buy on its site
      * (v5); plain text, no internal ids, the seller's name (v5); results for the user's country in its currency, never
-     * converted, and other currencies only counted (v6); never a budget change, the Budget field named instead (v7); amounts as the results give them (v8).
+     * converted, and other currencies only counted (v6); never a budget change, the Budget field named instead (v7);
+     * amounts as the results give them (v8); a search in the turn before saying nothing cheaper or nothing else fits,
+     * under the run's current budget (v9).
      */
     public static final List<String> MARKERS = List.of("[ROLE]", "[DATA]", "[LIMITS]", "[ASK]", "[CHEAPEST]", "[SEARCH]",
-            "[COMPARE]", "[DECIDE]", "[REFUSED]", "[LINK]", "[REPLY]", "[SHIP]", "[CHANGE]");
+            "[COMPARE]", "[DECIDE]", "[REFUSED]", "[LINK]", "[REPLY]", "[SHIP]", "[CHANGE]", "[AGAIN]");
 
     private static final String TEXT = load("system-prompt-" + VERSION + ".txt");
 

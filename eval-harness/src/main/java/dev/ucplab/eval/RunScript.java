@@ -1,6 +1,7 @@
 package dev.ucplab.eval;
 
 import dev.ucplab.core.agent.InMemoryRunRepository;
+import dev.ucplab.core.agent.Message;
 import dev.ucplab.core.agent.ModelClient;
 import dev.ucplab.core.agent.ToolSpec;
 import dev.ucplab.core.agent.RunId;
@@ -12,7 +13,13 @@ import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.ProposalResult;
 import dev.ucplab.core.intent.PurchaseIntent;
 import dev.ucplab.core.intent.StepResult;
+import dev.ucplab.core.merchant.CallOutcome;
+import dev.ucplab.core.merchant.CatalogGateway;
+import dev.ucplab.core.merchant.CatalogPage;
+import dev.ucplab.core.merchant.CatalogProduct;
+import dev.ucplab.core.merchant.CatalogSearch;
 import dev.ucplab.core.merchant.MerchantId;
+import dev.ucplab.core.merchant.Money;
 import dev.ucplab.faultproxy.LogEntry;
 import dev.ucplab.faultproxy.PathPattern;
 import dev.ucplab.faultproxy.RuleSet;
@@ -21,6 +28,7 @@ import dev.ucplab.runtime.AgentBudget;
 import dev.ucplab.runtime.AgentRuntime;
 import dev.ucplab.runtime.BudgetLimit;
 import dev.ucplab.runtime.RunOutcome;
+import dev.ucplab.runtime.RunSession;
 import dev.ucplab.runtime.RunTrace;
 import dev.ucplab.runtime.ScriptDriftException;
 import dev.ucplab.runtime.ScriptedModel;
@@ -47,6 +55,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.SplittableRandom;
 import java.util.concurrent.ConcurrentSkipListSet;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -594,13 +603,30 @@ public final class RunScript {
             return model.generate(conversation, tools);
         };
         String modelName = live.map(LiveModel::model).orElse("scripted");
-        AgentRuntime runtime = new AgentRuntime(checked, modelName, toolPorts(stack, scenario), runs,
+        // S30: each catalog search's price limit, in order, for a row with a follow-up turn only.
+        List<Optional<Money>> limits = new CopyOnWriteArrayList<>();
+        ToolPorts ports = spec.followUp().isPresent() ? limitsRecorded(toolPorts(stack, scenario), limits)
+                : toolPorts(stack, scenario);
+        AgentRuntime runtime = new AgentRuntime(checked, modelName, ports, runs,
                 AgentBudget.forModel(modelName), ASK_TIMEOUT, clock);
         Optional<RunOutcome> outcome = Optional.empty();
         Optional<String> abort = Optional.empty();
         try {
-            outcome = Optional.of(runtime.start(signedIn, runId, spec.userMessage(), user, trace, spec.budget())
-                    .outcome());
+            RunSession first = runtime.start(signedIn, runId, spec.userMessage(), user, trace, spec.budget());
+            outcome = Optional.of(first.outcome());
+            if (spec.followUp().isPresent()) {
+                AgentSpec.FollowUp next = spec.followUp().get();
+                // 23.1: the owner's PATCH of the run's budget, then the user's next message on the settled run.
+                next.changedBudget().ifPresent(b -> runs.setBudget(signedIn.user(), runId, Optional.of(b)));
+                int before = limits.size();
+                RunSession second = runtime.resume(signedIn, runId, first.conversation(), next.message(), user, trace);
+                outcome = Optional.of(second.outcome());
+                List<Optional<Money>> followUp = List.copyOf(limits.subList(before, limits.size()));
+                // The reply is read here, in memory, and only the verdict is kept (I8).
+                String reply = second.conversation().messages().getLast() instanceof Message.Model m ? m.text() : "";
+                abort = UncheckedClaim.check(reply, !followUp.isEmpty()).or(() -> next.changedBudget()
+                        .filter(b -> !followUp.isEmpty()).flatMap(b -> UncheckedClaim.staleBudget(followUp, b)));
+            }
             scripted.ifPresent(ScriptedModel::checkToolSequence);
         } catch (ScriptDriftException e) {
             abort = Optional.of("agent run: the script drifted");
@@ -639,6 +665,30 @@ public final class RunScript {
     /** The tools' ports: over several merchants, the limit for one merchant is the time scale's (see {@link #searchLimit}). */
     private ToolPorts toolPorts(AgentStack stack, Scenario scenario) {
         return scenario.multi().merchants() == 1 ? stack.toolPorts() : stack.toolPorts().withPerMerchant(searchLimit(scale));
+    }
+
+    /** {@code ports} with each catalog's searches recording their price limit, in order, into {@code limits} (S30). */
+    private static ToolPorts limitsRecorded(ToolPorts ports, List<Optional<Money>> limits) {
+        Map<MerchantId, CatalogGateway> recorded = new LinkedHashMap<>();
+        ports.catalogs().forEach((id, catalog) -> recorded.put(id, new CatalogGateway() {
+            @Override
+            public CallOutcome<CatalogPage> search(CatalogSearch request) {
+                limits.add(request.maxPrice());
+                return catalog.search(request);
+            }
+
+            @Override
+            public CallOutcome<List<CatalogProduct>> lookup(List<String> ids) {
+                return catalog.lookup(ids);
+            }
+
+            @Override
+            public CallOutcome<CatalogProduct> product(String id) {
+                return catalog.product(id);
+            }
+        }));
+        return new ToolPorts(ports.merchants(), recorded, ports.orchestrator(), ports.perMerchant(),
+                ports.catalogSource());
     }
 
     /** A live client holds HTTP resources; it is closed when its run ends. Closing never fails a run. */

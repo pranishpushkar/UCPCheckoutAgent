@@ -155,8 +155,7 @@ class SystemPromptTest {
                 .contains("Never say that nothing cheaper, nothing else or nothing that fits is available unless a "
                         + "search in this turn found none.")
                 .contains("This search counts toward this turn's two.")
-                .contains("Every search uses the run's current budget, the [BUDGET] line's, never the budget of an "
-                        + "earlier proposal."));
+                .contains("Every search uses the run's current budget, never the budget of an earlier proposal."));
         String v8 = SystemPrompt.class.getResource("system-prompt-v8.txt") == null ? ""
                 : new String(readAll("system-prompt-v8.txt"), java.nio.charset.StandardCharsets.UTF_8).strip();
         assertThat(SystemPrompt.text()).as("v9 is v8 and one paragraph").startsWith(v8 + "\n\n[AGAIN] ");
