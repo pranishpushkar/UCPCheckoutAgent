@@ -103,9 +103,11 @@ class LinkServiceTest {
                     transport: catalog
                     completion: link
                 """);
+        // 9.1: caps per currency, so the India test's INR quote is checked against INR's caps.
         Path policy = Files.writeString(dir.resolve("policy.yaml"), """
-                per_purchase_cap_minor: 100000
-                daily_cap_minor: 200000
+                caps:
+                  USD: {per_purchase_minor: 100000, daily_minor: 200000}
+                  INR: {per_purchase_minor: 10000000, daily_minor: 20000000}
                 """);
         Map<String, String> env = new HashMap<>();
         env.put("MERCHANTS_FILE", merchants.toString());

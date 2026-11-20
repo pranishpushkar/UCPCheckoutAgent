@@ -33,12 +33,15 @@ public final class InMemoryPolicyUsage implements PolicyUsage {
 
     @Override
     public long committedSpendMinor(UserId user, String currency, Instant from, Instant to) {
+        Objects.requireNonNull(currency, "currency");
         Objects.requireNonNull(from, "from");
         Objects.requireNonNull(to, "to");
         long total = 0;
         for (PurchaseIntent intent : intents.ownedBy(user)) {
             if (SPEND_STATES.contains(intent.state()) && inWindow(intent, from, to)) {
-                Optional<ApprovalRecord> newest = approvals.findLatestForSystem(intent.id());
+                // 9.1: only the newest approval in the asked currency counts; another currency is never converted.
+                Optional<ApprovalRecord> newest = approvals.findLatestForSystem(intent.id())
+                        .filter(a -> a.snapshot().currency().equals(currency));
                 total = Math.addExact(total, newest.map(a -> a.snapshot().totalMinor()).orElse(0L));
             }
         }

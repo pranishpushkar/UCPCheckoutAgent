@@ -148,15 +148,21 @@ def console_merchants(domain):
     return catalog_merchants_yaml() if domain is None else merchants_yaml(domain)
 
 
-POLICY_YAML = "per_purchase_cap_minor: 200000\ndaily_cap_minor: 400000\n"
 # The console's caps per buyer country (DESIGN 9.1, 26.7): round amounts of about the same size, chosen by the operator
 # and never a conversion. US is the owned store's currency and always written.
 CONSOLE_CAPS = {"US": ("USD", 200000, 400000), "IN": ("INR", 20000000, 40000000), "GB": ("GBP", 150000, 300000)}
 
 
 def policy_yaml(country=None):
-    """Skeleton (red): the flat caps, whatever the country."""
-    return POLICY_YAML
+    """The service's policy file: caps for USD and, when the buyer country is another, for its currency, each in its
+    own minor units (DESIGN 9.1). The amounts come from CONSOLE_CAPS, never from a conversion."""
+    rows = [CONSOLE_CAPS["US"]] + ([CONSOLE_CAPS[country]] if country and country != "US" else [])
+    return "caps:\n" + "".join("  %s: {per_purchase_minor: %d, daily_minor: %d}\n" % row for row in rows)
+
+
+def shown_policy(country=None):
+    """The policy file on one line, as a dry run prints it: "caps: USD: {...}; INR: {...}"."""
+    return "caps: " + "; ".join(line.strip() for line in policy_yaml(country).splitlines()[1:])
 
 
 COUNTRY_REFUSED = "refused: --buyer-country must be two upper-case letters (ISO 3166-1), such as IN"
@@ -170,6 +176,9 @@ def buyer_country(argv, env):
         return None
     if not re.fullmatch(r"[A-Z]{2}", code):
         raise SystemExit(COUNTRY_REFUSED)
+    if code not in CONSOLE_CAPS:
+        raise SystemExit("refused: --buyer-country %s has no console caps; add its currency's caps to CONSOLE_CAPS in "
+                         "scripts/shopify_live.py (it holds %s)" % (code, ", ".join(sorted(CONSOLE_CAPS))))
     return code
 
 
@@ -668,7 +677,7 @@ def shown_env(port, model="scripted", catalog=False, country=None):
 def console_dry_run(domain, port, evidence, jar, after_payment=False, model="scripted", country=None):
     catalog = domain is None
     say("DRY-RUN --console: merchants.yaml (temporary, deleted on exit):\n" + console_merchants(domain))
-    say("DRY-RUN policy.yaml (temporary): " + POLICY_YAML.strip().replace("\n", ", "))
+    say("DRY-RUN policy.yaml (temporary): " + shown_policy(country))
     shown = shown_env(port, model, catalog, country)
     if catalog:
         say("DRY-RUN --catalog: the service's only calls to Shopify: POST %s (token for client <redacted>, secret "
@@ -706,7 +715,7 @@ def start_service(jar, tmp, domain, evidence, port, model="scripted", country=No
     with open(os.path.join(tmp, "merchants.yaml"), "w") as f:
         f.write(console_merchants(domain))
     with open(os.path.join(tmp, "policy.yaml"), "w") as f:
-        f.write(POLICY_YAML)
+        f.write(policy_yaml(country))
     log = open(os.path.join(evidence, "service.log"), "w")
     return spawn(["java", "-jar", jar], service_env(os.environ, tmp, port, model, domain is None, country), log,
                  tmp), log
@@ -798,7 +807,7 @@ def main(argv):
 
     if dry:
         say("DRY-RUN merchants.yaml (temporary, deleted on exit):\n" + merchants_yaml(domain))
-        say("DRY-RUN policy.yaml (temporary): " + POLICY_YAML.strip().replace("\n", ", "))
+        say("DRY-RUN policy.yaml (temporary): " + shown_policy())
         shown = shown_env(port)
         say("DRY-RUN service: java -jar %s, environment %s, log to %s/service.log" % (jar, json.dumps(shown, sort_keys=True), evidence))
         say("DRY-RUN wait for %s/readyz; sign in as %s; POST /api/runs {\"message\": %s}" % (base, USER, json.dumps(query)))

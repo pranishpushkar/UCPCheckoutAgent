@@ -895,7 +895,7 @@ const REASON_TEXT = new Map([
   ["handoff_timeout", "The handoff to the store timed out: no order was placed"],
   ["price_unstable", "The store's price kept changing: no order was placed"],
   ["policy_P1", "This store is not allowed: no order was placed"],
-  ["policy_P2", "Above the limit for one purchase: no order was placed"],
+  ["policy_P2", "Above the limit for one purchase, or in a currency with no limit set: no order was placed"],
   ["policy_P3", "Above your limit for the last 24 hours: no order was placed"],
   ["policy_P4", "Too many items or too large a quantity: no order was placed"],
   ["policy_P5", "Too many proposals in the last hour: no order was placed"],
