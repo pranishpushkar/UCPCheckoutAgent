@@ -15,6 +15,14 @@ final class FreePort {
 
     static final int FIRST = 20_000;
     static final int COUNT = 10_000;
+    /** Skeleton (red): blocks are not used yet. */
+    static final int BLOCK = 10;
+    static final int MAX_FORKS = 999;
+    static final String FORK_PROPERTY = "ucplab.forkNumber";
+
+    static int blockStart(int fork) {
+        return FIRST;
+    }
 
     private FreePort() {
     }
