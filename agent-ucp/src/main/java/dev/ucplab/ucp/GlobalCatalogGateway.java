@@ -29,6 +29,7 @@ import dev.ucplab.ucp.mcp.StoreHeaders;
 import java.net.URI;
 import java.time.Clock;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -113,8 +114,16 @@ public final class GlobalCatalogGateway implements MerchantGateway, CatalogGatew
     @Override
     public CallOutcome<CatalogPage> search(CatalogSearch request) {
         Objects.requireNonNull(request, "request");
-        CallOutcome<CatalogPage> page = call("search_catalog", Map.of("query", request.query(), "context", CONTEXT,
-                "filters", FILTERS, "pagination", Map.of("limit", request.limit())), GlobalCatalogParser::search);
+        // 6.2, 26.7: a run's budget as filters.price.max in minor units, in the budget's currency as context.currency.
+        Map<String, Object> context = request.maxPrice()
+                .<Map<String, Object>>map(m -> Map.of("address_country", "US", "currency", m.currency())).orElse(CONTEXT);
+        Map<String, Object> filters = request.maxPrice().<Map<String, Object>>map(m -> {
+            Map<String, Object> withPrice = new LinkedHashMap<>(FILTERS);
+            withPrice.put("price", Map.of("max", m.minor()));
+            return withPrice;
+        }).orElse(FILTERS);
+        CallOutcome<CatalogPage> page = call("search_catalog", Map.of("query", request.query(), "context", context,
+                "filters", filters, "pagination", Map.of("limit", request.limit())), GlobalCatalogParser::search);
         if (page instanceof CallOutcome.Ok<CatalogPage> ok && ok.value().products().size() > request.limit()) {
             return new CallOutcome.Ok<>(ok.httpStatus(),
                     new CatalogPage(ok.value().products().subList(0, request.limit()), true), ok.messages());

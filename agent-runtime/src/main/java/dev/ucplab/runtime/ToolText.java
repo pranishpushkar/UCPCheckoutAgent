@@ -2,6 +2,9 @@ package dev.ucplab.runtime;
 
 import dev.ucplab.core.merchant.CatalogProduct;
 import dev.ucplab.core.merchant.CatalogVariant;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -36,6 +39,19 @@ final class ToolText {
         String title = product.variants().size() == 1 || variant.title().equals(product.title())
                 ? product.title() : product.title() + " - " + variant.title();
         return UntrustedText.wrap("merchant", "title", title);
+    }
+
+    /**
+     * The variant's own options as a result shows them (6.2): {@code [{name, label}]}, each wrapped as untrusted text,
+     * in the merchant's order.
+     */
+    static List<Map<String, Object>> options(CatalogVariant variant) {
+        return variant.options().stream().map(o -> {
+            Map<String, Object> option = new LinkedHashMap<>();
+            option.put("name", UntrustedText.wrap("merchant", "name", o.name()));
+            option.put("label", UntrustedText.wrap("merchant", "label", o.label()));
+            return option;
+        }).toList();
     }
 
     /** An id the merchant sent (an item or order id): as it is when it looks like an id, else wrapped. */

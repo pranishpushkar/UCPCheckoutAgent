@@ -8,6 +8,7 @@ import dev.ucplab.core.merchant.CatalogProduct;
 import dev.ucplab.core.merchant.CatalogSearch;
 import dev.ucplab.core.merchant.CatalogVariant;
 import dev.ucplab.core.merchant.MerchantEntry;
+import dev.ucplab.core.merchant.Money;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -19,12 +20,15 @@ import java.util.Set;
 /**
  * {@code search_catalog} (6.2): {@code query} (1 to 200 characters) and {@code max_results} (1 to 10). Searches each
  * active merchant's catalog and returns {@code {items:[{merchant_id, item_id, title, price_minor, currency,
- * in_stock, seller?}]}}, one entry per variant, at most {@code max_results}. {@code title} is wrapped, and so is
- * {@code seller}, a catalog source's seller name (26.7); the merchant's own
+ * in_stock, options?, seller?}]}}, one entry per variant, at most {@code max_results}. {@code title} is wrapped, and so
+ * are {@code seller}, a catalog source's seller name (26.7), and each name and label of {@code options}, the variant's
+ * own; the merchant's own
  * availability word is left out. A variant whose id a tool would not accept back is left out. Every active merchant is
  * asked at once, for {@link ToolPorts#perMerchant()} at most (19); the items are merged round-robin in registry order. A
  * merchant that timed out or failed is left out and named in {@code unavailable}; when every active merchant failed:
- * {@code {"error":"unavailable"}}.
+ * {@code {"error":"unavailable"}}. With a run budget (23.1) the search carries it as its price limit, from the run and
+ * never from the model, and an item in another currency or priced above it is left out whatever the merchant returned:
+ * a price filter is a request, not a guarantee.
  */
 final class SearchCatalogTool implements Tool {
 
@@ -64,7 +68,8 @@ final class SearchCatalogTool implements Tool {
             return ToolOutcome.invalid(e.getMessage());
         }
         List<MerchantEntry> active = ports.merchants().active();
-        List<Optional<CatalogPage>> pages = askAll(active, new CatalogSearch(query, max));
+        Optional<Money> limit = context.budget().map(b -> new Money(b.amountMinor(), b.currency()));
+        List<Optional<CatalogPage>> pages = askAll(active, new CatalogSearch(query, max, limit));
         List<List<Object>> perMerchant = new ArrayList<>();
         List<String> unavailable = new ArrayList<>();
         for (int i = 0; i < active.size(); i++) {
@@ -76,7 +81,7 @@ final class SearchCatalogTool implements Tool {
             List<Object> mine = new ArrayList<>();
             for (CatalogProduct product : pages.get(i).get().products()) {
                 for (CatalogVariant variant : product.variants()) {
-                    if (Args.ITEM_ID.matcher(variant.itemId()).matches()) {
+                    if (Args.ITEM_ID.matcher(variant.itemId()).matches() && fits(variant, limit)) {
                         mine.add(item(merchant, product, variant));
                     }
                 }
@@ -100,6 +105,12 @@ final class SearchCatalogTool implements Tool {
                 .map(answer -> answer.flatMap(o -> o instanceof CallOutcome.Ok<CatalogPage> ok
                         ? Optional.of(ok.value()) : Optional.<CatalogPage>empty()))
                 .toList();
+    }
+
+    /** True without a limit, or when the variant is in the limit's currency and priced at or below it (6.2). */
+    private static boolean fits(CatalogVariant variant, Optional<Money> limit) {
+        return limit.isEmpty() || variant.price().currency().equals(limit.get().currency())
+                && variant.price().minor() <= limit.get().minor();
     }
 
     /** One item from each merchant in turn, in registry order, each merchant's own order kept, up to {@code max}. */
@@ -128,6 +139,9 @@ final class SearchCatalogTool implements Tool {
         item.put("price_minor", variant.price().minor());
         item.put("currency", variant.price().currency());
         item.put("in_stock", variant.availability().available());
+        if (!variant.options().isEmpty()) {
+            item.put("options", ToolText.options(variant));
+        }
         // 6.2, 26.7: a catalog source's seller, by name only, wrapped like the title; never its domain or a URL (I6).
         variant.seller().ifPresent(s -> item.put("seller", UntrustedText.wrap("merchant", "seller", s)));
         return item;

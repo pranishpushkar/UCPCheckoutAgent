@@ -9,6 +9,7 @@ import dev.ucplab.core.merchant.ContinueUrl;
 import dev.ucplab.core.merchant.LinkOffer;
 import dev.ucplab.core.merchant.Money;
 import dev.ucplab.core.merchant.Seller;
+import dev.ucplab.core.merchant.VariantOption;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -160,7 +161,26 @@ final class GlobalCatalogParser {
                 ? string(s.get("name")).map(n -> clean(MerchantMarkup.strip(n), MAX_TEXT)).filter(n -> !n.isBlank())
                 : Optional.empty();
         return Optional.of(new CatalogVariant(id.get(), title, new Money(amount, CURRENCY),
-                new Availability(available, Optional.empty()), seller));
+                new Availability(available, Optional.empty()), seller, options(v.get("options"))));
+    }
+
+    /** The variant's own {@code options[{name, label}]}, cleaned; an entry without both is left out (6.2). */
+    private static List<VariantOption> options(Object value) {
+        List<VariantOption> out = new ArrayList<>();
+        if (value instanceof List<?> list) {
+            for (Object o : list) {
+                if (o instanceof Map<?, ?> m) {
+                    Optional<String> name = string(m.get("name")).map(n -> clean(MerchantMarkup.strip(n), MAX_TEXT))
+                            .filter(n -> !n.isBlank());
+                    Optional<String> label = string(m.get("label")).map(l -> clean(MerchantMarkup.strip(l), MAX_TEXT))
+                            .filter(l -> !l.isBlank());
+                    if (name.isPresent() && label.isPresent()) {
+                        out.add(new VariantOption(name.get(), label.get()));
+                    }
+                }
+            }
+        }
+        return out;
     }
 
     private static Optional<String> description(Object value) {
