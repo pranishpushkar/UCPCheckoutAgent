@@ -75,6 +75,16 @@ class ProposeLinkReasonTest {
         assertThat(CanonicalJson.write(result)).doesNotContain("http").doesNotContain(".example");
     }
 
+    // Covers: 6.2, P2, P3, 6.4 v7 [REFUSED] (a P2 or P3 refusal carries its fixed reason, our own text, so the agent can
+    // tell the user why; numbers of the caps never reach the model)
+    @Test
+    void aCapRefusal_carriesItsFixedReason() {
+        assertThat(propose("policy_P2")).containsEntry("failure_reason", "policy_P2")
+                .containsEntry("reason", "above the limit for one purchase, or in a currency with no limit set (P2)");
+        assertThat(propose("policy_P3")).containsEntry("failure_reason", "policy_P3")
+                .containsEntry("reason", "above your limit for the last 24 hours (P3)");
+    }
+
     // Covers: 6.2, 26.7 (the other link failures carry their code and no reason)
     @Test
     void otherLinkFailures_carryNoReason() {

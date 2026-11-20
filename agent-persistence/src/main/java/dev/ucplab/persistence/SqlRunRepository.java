@@ -45,6 +45,11 @@ public final class SqlRunRepository implements RunRepository {
     }
 
     @Override
+    public boolean setBudget(UserId owner, RunId id, Optional<Budget> budget) {
+        return false; // Skeleton (red).
+    }
+
+    @Override
     public void insert(UserId owner, RunRecord run) {
         checkOwner(owner, run);
         db.write(c -> {

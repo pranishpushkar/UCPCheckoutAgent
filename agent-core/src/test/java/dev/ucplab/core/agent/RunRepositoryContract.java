@@ -102,6 +102,29 @@ public abstract class RunRepositoryContract {
                 r -> assertThat(r.shipTo()).isEqualTo(BuyerCountry.US));
     }
 
+    // Covers: 23.1 PATCH budget, P9, T6 (the owner's setBudget changes the run's budget and an update keeps it; an empty
+    // budget clears it; another owner's call, or an unknown run, is false and changes nothing)
+    @Test
+    void setBudget_changesTheOwnersRunsBudget_andAnUpdateKeepsIt() {
+        repo.insert(ALICE, RunRecord.started(new RunId("r1"), ALICE, "scripted", T0, Optional.of(new Budget(50_000, "INR")),
+                new BuyerCountry("IN")));
+
+        assertThat(repo.setBudget(ALICE, new RunId("r1"), Optional.of(new Budget(1_500_000, "INR")))).isTrue();
+        assertThat(repo.find(ALICE, new RunId("r1"))).hasValueSatisfying(
+                r -> assertThat(r.budget()).contains(new Budget(1_500_000, "INR")));
+        assertThat(repo.update(ALICE, ended("r1", ALICE, List.of(I1)))).isTrue();
+        assertThat(repo.find(ALICE, new RunId("r1"))).hasValueSatisfying(
+                r -> assertThat(r.budget()).contains(new Budget(1_500_000, "INR")));
+
+        assertThat(repo.setBudget(BOB, new RunId("r1"), Optional.empty())).isFalse();
+        assertThat(repo.setBudget(ALICE, new RunId("missing"), Optional.empty())).isFalse();
+        assertThat(repo.findForSystem(new RunId("r1"))).hasValueSatisfying(
+                r -> assertThat(r.budget()).contains(new Budget(1_500_000, "INR")));
+
+        assertThat(repo.setBudget(ALICE, new RunId("r1"), Optional.empty())).isTrue();
+        assertThat(repo.find(ALICE, new RunId("r1"))).hasValueSatisfying(r -> assertThat(r.budget()).isEmpty());
+    }
+
     // Covers: 6.5, 23.1, 10 (V12) (a model_error's cause is stored by the update that ends the run and read back; a
     // run without one reads back with none)
     @Test

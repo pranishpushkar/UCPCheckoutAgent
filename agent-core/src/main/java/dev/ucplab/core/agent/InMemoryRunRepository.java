@@ -1,6 +1,7 @@
 package dev.ucplab.core.agent;
 
 import dev.ucplab.core.identity.UserId;
+import dev.ucplab.core.intent.Budget;
 import dev.ucplab.core.intent.IntentId;
 import java.time.Clock;
 import java.time.Instant;
@@ -46,6 +47,11 @@ public final class InMemoryRunRepository implements RunRepository {
     public Optional<RunRecord> find(UserId owner, RunId id) {
         Objects.requireNonNull(owner, "owner");
         return findForSystem(id).filter(r -> r.owner().equals(owner));
+    }
+
+    @Override
+    public boolean setBudget(UserId owner, RunId id, Optional<Budget> budget) {
+        return false; // Skeleton (red).
     }
 
     @Override

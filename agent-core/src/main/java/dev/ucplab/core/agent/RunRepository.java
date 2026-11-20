@@ -1,6 +1,7 @@
 package dev.ucplab.core.agent;
 
 import dev.ucplab.core.identity.UserId;
+import dev.ucplab.core.intent.Budget;
 import dev.ucplab.core.intent.IntentId;
 import java.time.Instant;
 import java.util.List;
@@ -35,6 +36,13 @@ public interface RunRepository {
      * @throws IllegalArgumentException if {@code run.owner()} is not {@code owner}
      */
     boolean update(UserId owner, RunRecord run);
+
+    /**
+     * The owner's change of the run's budget (23.1 {@code PATCH /api/runs/{run_id}/budget}, P9): empty clears it. The
+     * only write of a run's budget after insert; {@link #update} keeps whatever this stored. False, and nothing written,
+     * when no run with that id is owned by {@code owner} (T6).
+     */
+    boolean setBudget(UserId owner, RunId id, Optional<Budget> budget);
 
     /** The owner's runs that proposed the intent, oldest first. */
     List<RunRecord> forIntent(UserId owner, IntentId intent);
