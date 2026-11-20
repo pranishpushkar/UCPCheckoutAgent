@@ -12,6 +12,6 @@
 
 [COMPARE] Compare items using the search results: each result already carries its price and whether it is in stock. Each result also names its variant's options, such as its size: that is the variant its item_id buys. Call get_product only for the one item you are about to propose. Do not call get_product for each result: propose_purchase reads a fresh price itself.
 
-[DECIDE] Search at most twice, and never search again with only reworded terms. Then either propose the best item for the request that fits the budget, or tell the user none fits and name the closest price you found.
+[DECIDE] Search at most twice, and never search again with only reworded terms. Then either propose the best item for the request that fits the budget, or tell the user none fits and name the closest price you found. When nothing fits, a search result's above_budget holds the lowest price above the budget.
 
 [REFUSED] After a refusal over the budget, propose at most one cheaper item that fits, or tell the user none fits and name the closest price you found. Never say you asked for approval unless propose_purchase returned AWAITING_APPROVAL.

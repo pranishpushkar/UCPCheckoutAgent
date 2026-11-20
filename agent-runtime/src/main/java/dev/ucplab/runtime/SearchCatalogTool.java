@@ -28,7 +28,9 @@ import java.util.Set;
  * merchant that timed out or failed is left out and named in {@code unavailable}; when every active merchant failed:
  * {@code {"error":"unavailable"}}. With a run budget (23.1) the search carries it as its price limit, from the run and
  * never from the model, and an item in another currency or priced above it is left out whatever the merchant returned:
- * a price filter is a request, not a guarantee.
+ * a price filter is a request, not a guarantee. Items left out for their price are named only as {@code above_budget
+ * {count, lowest_price_minor, currency}}; when nothing fits, the same merchants are asked once more without the filter
+ * for it, the only second search.
  */
 final class SearchCatalogTool implements Tool {
 
@@ -91,8 +93,15 @@ final class SearchCatalogTool implements Tool {
         if (!active.isEmpty() && unavailable.size() == active.size()) {
             return ToolOutcome.error("unavailable");
         }
+        List<Object> items = roundRobin(perMerchant, max);
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("items", roundRobin(perMerchant, max));
+        result.put("items", items);
+        if (limit.isPresent()) {
+            // 6.2, the near miss: a merchant that honours the filter returns nothing above it, so when nothing fits the
+            // same search is asked once more without it. Only numbers from the catalog reach the model.
+            List<Optional<CatalogPage>> read = items.isEmpty() ? askAll(active, new CatalogSearch(query, max)) : pages;
+            aboveBudget(read, limit.get()).ifPresent(a -> result.put("above_budget", a));
+        }
         if (!unavailable.isEmpty()) {
             result.put("unavailable", unavailable);
         }
@@ -105,6 +114,35 @@ final class SearchCatalogTool implements Tool {
                 .map(answer -> answer.flatMap(o -> o instanceof CallOutcome.Ok<CatalogPage> ok
                         ? Optional.of(ok.value()) : Optional.<CatalogPage>empty()))
                 .toList();
+    }
+
+    /**
+     * {@code {count, lowest_price_minor, currency}} of the variants in {@code pages} in the limit's currency and priced
+     * above it, or empty when there are none (6.2). Numbers only: nothing else of a left-out variant.
+     */
+    private static Optional<Map<String, Object>> aboveBudget(List<Optional<CatalogPage>> pages, Money limit) {
+        long count = 0;
+        long lowest = Long.MAX_VALUE;
+        for (Optional<CatalogPage> page : pages) {
+            for (CatalogProduct product : page.map(CatalogPage::products).orElse(List.of())) {
+                for (CatalogVariant variant : product.variants()) {
+                    Money price = variant.price();
+                    if (Args.ITEM_ID.matcher(variant.itemId()).matches() && price.currency().equals(limit.currency())
+                            && price.minor() > limit.minor()) {
+                        count++;
+                        lowest = Math.min(lowest, price.minor());
+                    }
+                }
+            }
+        }
+        if (count == 0) {
+            return Optional.empty();
+        }
+        Map<String, Object> above = new LinkedHashMap<>();
+        above.put("count", count);
+        above.put("lowest_price_minor", lowest);
+        above.put("currency", limit.currency());
+        return Optional.of(above);
     }
 
     /** True without a limit, or when the variant is in the limit's currency and priced at or below it (6.2). */
