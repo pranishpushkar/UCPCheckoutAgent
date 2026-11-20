@@ -247,15 +247,15 @@ public final class Scenarios {
                     1, 1, true));
 
     /**
-     * A-S29 (S29, 13.2): the user's budget is 10.00 USD and the only matching item, a Blue Mug, costs more. P9 refuses
-     * the quote: FAILED_NOT_CHARGED with policy_P9, no approval, no order. The script reaches its last turn only on a
+     * A-S29 (S29, 13.2): the user's budget is 12.00 USD, the only matching item's own price (a Blue Mug), so the search
+     * shows it (6.2); its quote, with the lab's 8 % tax, is 12.96 USD. P9 refuses the quote: FAILED_NOT_CHARGED with policy_P9, no approval, no order. The script reaches its last turn only on a
      * propose result that names the budget and the quoted total, and then says none fits and names that total.
      */
-    public static final Scenario A_S29 = new Scenario("A-S29", "agent, scripted: the user's budget is below the price",
-            "none; the run's budget is 10.00 USD and the Blue Mug's quote is above it", Set.of(IntentState.FAILED_NOT_CHARGED),
+    public static final Scenario A_S29 = new Scenario("A-S29", "agent, scripted: the user's budget is below the quote",
+            "none; the run's budget is 12.00 USD and the Blue Mug's quote, with tax, is above it", Set.of(IntentState.FAILED_NOT_CHARGED),
             List.of("I3"), (t, run) -> RuleSet.empty(), AutoApprover.Policy.APPROVE_ALL, SHOP, PAY_OK,
-            AgentSpec.of("Buy me a blue mug under $10.", "a-s29-over-budget.json", List.of(), Set.of("done"), 1, 1, false)
-                    .withBudget(new Budget(1_000, "USD")));
+            AgentSpec.of("Buy me a blue mug under $12.", "a-s29-over-budget.json", List.of(), Set.of("done"), 1, 1, false)
+                    .withBudget(new Budget(1_200, "USD")));
 
     /**
      * A-B: each budget breach of 6.3 in turn, by run index (model calls, tool calls, wall clock, tokens), with section
