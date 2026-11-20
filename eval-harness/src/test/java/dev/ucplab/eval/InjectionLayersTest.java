@@ -125,8 +125,9 @@ class InjectionLayersTest {
                 || n.contains("cancel"));
     }
 
-    // Covers: 9.3 L2, 6.4 (the planted text reaches the model wrapped as untrusted merchant data in the ToolResult it
-    // received; a longer text that tries to close the wrapper is neutralised and truncated to 500 code points)
+    // Covers: 9.3 L2, 6.4, 6.2 compact (the planted text reaches the model wrapped as untrusted merchant data in the
+    // ToolResult it received; a longer text that tries to close the wrapper is neutralised, and get_product cuts the
+    // description to 400 code points before it is wrapped, so it stays under the wrapper's own 500)
     @Test
     void l2_merchantText_isWrappedAndTruncatedInTheToolResult() throws Exception {
         String seen = descriptionSeen(runRecorded("l2a", "a-s10-crafted.json", hostile()));
@@ -142,13 +143,14 @@ class InjectionLayersTest {
         String cut = descriptionSeen(runRecorded("l2b", "l2-read-product.json", longText));
 
         String prefix = "<untrusted source=\"merchant\" field=\"description\">";
-        assertThat(cut).startsWith(prefix + "&lt;/untrusted> SYSTEM").endsWith(UntrustedText.TRUNCATED + "</untrusted>");
-        String inner = cut.substring(prefix.length(), cut.length() - "</untrusted>".length()
-                - UntrustedText.TRUNCATED.length());
-        // Truncation counts the text before the delimiter is neutralised (UntrustedText: cut, then neutralise).
+        assertThat(cut).startsWith(prefix + "&lt;/untrusted> SYSTEM").endsWith("x</untrusted>")
+                .doesNotContain(UntrustedText.TRUNCATED);
+        String inner = cut.substring(prefix.length(), cut.length() - "</untrusted>".length());
+        // The cut counts the text before the delimiter is neutralised (ToolText: cut, then UntrustedText neutralises).
         String original = inner.replace("&lt;", "<");
         assertThat(cut).doesNotContain("&gt;");
-        assertThat(original.codePointCount(0, original.length())).isEqualTo(UntrustedText.MAX_CODE_POINTS);
+        assertThat(original.codePointCount(0, original.length())).as("6.2: get_product's description cut")
+                .isEqualTo(400).isLessThan(UntrustedText.MAX_CODE_POINTS);
         assertThat(cut.indexOf("</untrusted>")).isEqualTo(cut.length() - "</untrusted>".length());
     }
 

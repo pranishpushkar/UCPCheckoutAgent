@@ -51,7 +51,21 @@ public final class InMemoryRunRepository implements RunRepository {
 
     @Override
     public boolean setBudget(UserId owner, RunId id, Optional<Budget> budget) {
-        return false; // Skeleton (red).
+        Objects.requireNonNull(owner, "owner");
+        Objects.requireNonNull(id, "id");
+        Objects.requireNonNull(budget, "budget");
+        lock.lock();
+        try {
+            RunRecord stored = runs.get(id);
+            if (stored == null || !stored.owner().equals(owner)) {
+                return false;
+            }
+            runs.put(id, stored.withBudget(budget));
+            updated.put(id, clock.instant());
+            return true;
+        } finally {
+            lock.unlock();
+        }
     }
 
     @Override

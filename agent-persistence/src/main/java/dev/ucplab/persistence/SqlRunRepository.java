@@ -46,7 +46,26 @@ public final class SqlRunRepository implements RunRepository {
 
     @Override
     public boolean setBudget(UserId owner, RunId id, Optional<Budget> budget) {
-        return false; // Skeleton (red).
+        Objects.requireNonNull(owner, "owner");
+        Objects.requireNonNull(id, "id");
+        Objects.requireNonNull(budget, "budget");
+        return db.write(c -> {
+            // 23.1: the owner's change, the only write of the budget after insert; update never touches it.
+            try (PreparedStatement s = c.prepareStatement("UPDATE agent_run SET budget_minor = ?, budget_currency = ?,"
+                    + " updated_at = ? WHERE id = ? AND user_id = ?")) {
+                if (budget.isPresent()) {
+                    s.setLong(1, budget.get().amountMinor());
+                    s.setString(2, budget.get().currency());
+                } else {
+                    s.setNull(1, java.sql.Types.INTEGER);
+                    s.setString(2, null);
+                }
+                s.setString(3, SqlTimes.format(clock.instant()));
+                s.setString(4, id.value());
+                s.setString(5, owner.value());
+                return s.executeUpdate() == 1;
+            }
+        });
     }
 
     @Override

@@ -190,7 +190,7 @@ final class SearchCatalogTool implements Tool {
             item.put("options", ToolText.options(variant));
         }
         // 6.2, 26.7: a catalog source's seller, by name only, wrapped like the title; never its domain or a URL (I6).
-        variant.seller().ifPresent(s -> item.put("seller", UntrustedText.wrap("merchant", "seller", s)));
+        variant.seller().ifPresent(s -> item.put("seller", ToolText.seller(s)));
         return item;
     }
 }

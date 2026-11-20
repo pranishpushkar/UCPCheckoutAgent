@@ -88,7 +88,7 @@ final class GetProductTool implements Tool {
         item.put("merchant_id", merchant.id().value());
         item.put("item_id", variant.itemId());
         item.put("title", ToolText.title(product, variant));
-        item.put("description", UntrustedText.wrap("merchant", "description", product.description().orElse("")));
+        item.put("description", ToolText.description(product.description().orElse("")));
         item.put("price_minor", variant.price().minor());
         item.put("currency", variant.price().currency());
         item.put("in_stock", variant.availability().available());

@@ -904,7 +904,10 @@ class ConsoleStaticTest {
                 + "      stopWorking();\n      setStatus(errorText(changed), true);\n      return;\n    }");
         String budget = block(js, "budget");
         assertThat(budget).contains("function fieldMatchesRun(field) {");
-        assertThat(js).contains("setStatus(budgetNote ? budgetNote + \" \" + statusText : statusText);");
+        assertThat(budget).contains("function showBudgetNote(run, statusText) {\n"
+                + "  if (budgetNote && run.status !== \"running\") {\n"
+                + "    setStatus(budgetNote + \" \" + statusText);\n");
+        assertThat(js).contains("  showBudgetNote(run, statusText);\n");
     }
 
     // Covers: 24.3, 23.1, 21 (the run's current budget comes from the server's run answers only, never from what the page
@@ -926,7 +929,7 @@ class ConsoleStaticTest {
         String showRunBudget = js.substring(js.indexOf("function showRunBudget(budget) {"));
         showRunBudget = showRunBudget.substring(0, showRunBudget.indexOf("\n}\n"));
         assertThat(showRunBudget).contains("minorDigits(budget.currency)").contains("showCurrency(budget.currency);");
-        assertThat(js.indexOf("runBudget = ")).as("set in showRun, from the run answer")
+        assertThat(js.indexOf("runBudget = run.budget || null;")).as("set in showRun, from the run answer")
                 .isGreaterThan(js.indexOf("function showRun(run) {"));
         assertThat(js.replace("runBudget = run.budget || null;", "").replace("let runBudget = null;", ""))
                 .as("nothing else sets the run's budget").doesNotContain("runBudget = ");
@@ -943,7 +946,8 @@ class ConsoleStaticTest {
                 + "    card.appendChild(el(\"p\", \"Proposed under your earlier budget of \"\n"
                 + "        + money(approval.budget.amount_minor, approval.budget.currency), \"budget-line\"));\n"
                 + "  } else if (linked && approval.budget) {");
-        assertThat(card).doesNotContain("approve.disabled");
+        assertThat(card.replace("approve.disabled = left === 0;", "")).as("only the expiry disables Approve")
+                .doesNotContain("approve.disabled");
         String budget = block(js, "budget");
         assertThat(budget).contains("function budgetChanged(budget) {\n"
                 + "  return Boolean(currentRun) && !(runBudget && runBudget.amount_minor === budget.amount_minor\n"

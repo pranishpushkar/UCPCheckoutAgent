@@ -76,6 +76,10 @@ final class ProposePurchaseTool implements Tool {
     static final String LINK_NOT_ALLOWED_REASON = "the store's link is not on the seller's own site";
     /** The failure_reason of a quote P9 refused (9.1). */
     private static final String OVER_BUDGET = "policy_P9";
+    /** 6.2: the fixed reasons of the cap refusals; the caps' numbers never reach the model. */
+    private static final Map<String, String> CAP_REASONS = Map.of(
+            "policy_P2", "above the limit for one purchase, or in a currency with no limit set (P2)",
+            "policy_P3", "above your limit for the last 24 hours (P3)");
 
     @Override
     public ToolOutcome run(ToolContext context, Map<String, Object> arguments) {
@@ -110,6 +114,8 @@ final class ProposePurchaseTool implements Tool {
             if (status.failureReason().filter(LINK_NOT_ALLOWED::equals).isPresent()) {
                 result.put("reason", LINK_NOT_ALLOWED_REASON);
             }
+            // 6.2: a cap refusal's fixed reason, our own text, so the agent can tell the user why and stop.
+            status.failureReason().map(CAP_REASONS::get).ifPresent(r -> result.put("reason", r));
             if (status.failureReason().filter(OVER_BUDGET::equals).isPresent() && context.budget().isPresent()
                     && proposal.quote().isPresent()) {
                 // Our own text and numbers only (6.2), so the agent can try a cheaper item or say none fits.

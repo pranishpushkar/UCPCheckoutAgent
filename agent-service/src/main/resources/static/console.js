@@ -162,8 +162,34 @@ async function boot() {
     setStatus("Signed in again. Review the approval and decide.");
   } else {
     setStatus("Ready.");
+    await restoreRun();
   }
 }
+
+// <restore>
+// 24.3, 21: a page loaded again shows its run. The run's id is in the URL fragment (#run=<run_id>), never in browser
+// storage, and everything shown, the Budget field included, comes from GET /api/runs/{run_id}: another user's run or a
+// gone one is 404 and the page starts empty.
+async function restoreRun() {
+  const m = /^#run=([^&#]{1,128})$/.exec(location.hash);
+  if (!m) {
+    return;
+  }
+  let id;
+  try {
+    id = decodeURIComponent(m[1]);
+  } catch (e) {
+    return;
+  }
+  const result = await api("GET", "/api/runs/" + encodeURIComponent(id));
+  if (!result.ok) {
+    history.replaceState(null, "", location.pathname);
+    return;
+  }
+  showRun(result.data);
+  showRunBudget(result.data.budget);
+}
+// </restore>
 
 async function signOut() {
   await api("POST", "/auth/logout", {});
@@ -173,44 +199,100 @@ async function signOut() {
 // ---- the agent panel --------------------------------------------------------------------------------------------
 
 // <budget>
-// 24.3: the optional Budget field. As the user types a first message, the console fills the field, visibly, from an
-// amount with a limit word, until the user edits or clears the field or changes its currency. Only what the field holds
-// when the user presses Send is sent (23.1); the server never parses the message, and neither does send().
+// 24.3: the optional Budget field. As the user types, the console fills the field, visibly, from an amount with a limit
+// word, until the user edits or clears the field or changes its currency; on a follow-up it only ever fills it. Only what
+// the field holds when the user presses Send is sent (23.1); the server never parses the message, and neither does
+// send(). While a run continues, the field shows the run's current budget, from the server's run answers only
+// (runBudget), and a field that differs from it is sent as PATCH /api/runs/{run_id}/budget before the message.
 let budgetTouched = false;
+let runBudget = null;
+let budgetNote = "";
 
-const BUDGET_AMOUNT = "([$€£]|USD|EUR|GBP)?\\s*((?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d{1,2})?)\\s*(USD|EUR|GBP)?";
-const BUDGET_LIMIT = new RegExp(
-    "\\b(?:under|below|maximum|max|no more than|at most|less than)\\s+" + BUDGET_AMOUNT
-    + "|" + BUDGET_AMOUNT + "\\s+or less\\b", "i");
-const BUDGET_SIGNS = {"$": "USD", "€": "EUR", "£": "GBP"};
+// One pattern, three forms, each an optional sign or code, an amount (Indian grouping 1,50,000 too) and an optional
+// code: a limit word before it (groups 1-3), "or less" after it (4-6), or a budget word before it (7-9), the only form
+// that may leave out the currency and take the field's.
+const BUDGET_LIMIT = /\b(?:under|below|maximum|max|no more than|at most|less than|up to)\s+((?<![a-z])(?:[$€£₹]|USD|EUR|GBP|INR|rs\.?))?\s*((?:\d{1,3}(?:,\d{2})+,\d{3}|\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)\s*((?:USD|EUR|GBP|INR|rupees|rupee|rs)(?![a-z])\.?)?|((?<![a-z])(?:[$€£₹]|USD|EUR|GBP|INR|rs\.?))?\s*((?:\d{1,3}(?:,\d{2})+,\d{3}|\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)\s*((?:USD|EUR|GBP|INR|rupees|rupee|rs)(?![a-z])\.?)?\s+or less\b|\bbudget(?:\s+(?:of|to|is))?\s+((?<![a-z])(?:[$€£₹]|USD|EUR|GBP|INR|rs\.?))?\s*((?:\d{1,3}(?:,\d{2})+,\d{3}|\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)\s*((?:USD|EUR|GBP|INR|rupees|rupee|rs)(?![a-z])\.?)?/i;
+const BUDGET_SIGNS = {"$": "USD", "€": "EUR", "£": "GBP", "₹": "INR", "rs": "INR", "rs.": "INR", "rupee": "INR",
+  "rupees": "INR"};
 
-// An amount with a limit word and a sign or code ("under $500", "max 80 EUR", "£40 or less"), or null.
+function budgetCurrency(sign) {
+  return BUDGET_SIGNS[sign.toLowerCase()] || sign.toUpperCase();
+}
+
+// An amount with a limit word and a sign or code ("under $500", "max 80 EUR", "£40 or less", "under 500 rupees",
+// "Rs.500 or less"), or after a budget word with or without one ("budget to 15000"), or null.
 function budgetFromMessage(text) {
   const m = BUDGET_LIMIT.exec(text);
   if (!m) {
     return null;
   }
-  const sign = m[1] || m[3] || m[4] || m[6];
-  const amount = m[2] || m[5];
-  if (!sign) {
+  const sign = m[1] || m[3] || m[4] || m[6] || m[7] || m[9];
+  const amount = m[2] || m[5] || m[8];
+  const named = Boolean(m[8]);
+  if (!sign && !named) {
     return null;
   }
-  return {amount: amount.replace(/,/g, ""), currency: BUDGET_SIGNS[sign] || sign.toUpperCase()};
+  return {amount: amount.replace(/,/g, ""),
+    currency: sign ? budgetCurrency(sign) : $("budget-currency").value};
 }
 
 function continuingRun() {
   return Boolean(currentRun && RUN_WAITING.includes(currentRun.status));
 }
 
+// The field's currency, added as a choice when the list does not have it.
+function showCurrency(currency) {
+  const known = Array.from($("budget-currency").options).some((o) => o.value === currency);
+  if (!known) {
+    $("budget-currency").appendChild(el("option", currency));
+  }
+  $("budget-currency").value = currency;
+}
+
 function onMessageInput() {
-  if (budgetTouched || continuingRun()) {
+  if (budgetTouched) {
     return;
   }
   const found = budgetFromMessage($("message").value);
-  $("budget").value = found ? found.amount : "";
   if (found) {
-    $("budget-currency").value = found.currency;
+    $("budget").value = found.amount;
+    showCurrency(found.currency);
+  } else if (!continuingRun()) {
+    $("budget").value = "";
   }
+}
+
+// The run's budget from the server, in the field: an amount in the currency's own minor digits, or empty.
+function showRunBudget(budget) {
+  if (!budget) {
+    $("budget").value = "";
+    return;
+  }
+  const digits = minorDigits(budget.currency);
+  $("budget").value = (budget.amount_minor / Math.pow(10, digits)).toFixed(digits);
+  showCurrency(budget.currency);
+}
+
+// True when the field, as budgetToSend gives it, is the run's current budget.
+function fieldMatchesRun(field) {
+  if (!runBudget) {
+    return field.budget_minor === undefined;
+  }
+  return field.budget_minor === runBudget.amount_minor && field.currency === runBudget.currency;
+}
+
+// 24.3: after a PATCH, the status line names the change ahead of the run's own status, once the run has settled.
+function showBudgetNote(run, statusText) {
+  if (budgetNote && run.status !== "running") {
+    setStatus(budgetNote + " " + statusText);
+    budgetNote = "";
+  }
+}
+
+// 23.2: a card's budget differs from the run's current one, so it was proposed under an earlier budget.
+function budgetChanged(budget) {
+  return Boolean(currentRun) && !(runBudget && runBudget.amount_minor === budget.amount_minor
+      && runBudget.currency === budget.currency);
 }
 
 // The field as budget_minor and currency, in the currency's own minor digits: {} when it is empty, null when it is not an
@@ -233,10 +315,8 @@ function budgetToSend() {
   return {budget_minor: minor, currency: currency};
 }
 
-// While a run continues, the field keeps the run's budget and cannot change: the budget is fixed for the run.
+// While a run continues, Deliver to keeps the run's country and cannot change; the Budget field stays editable (23.1).
 function showBudgetField() {
-  $("budget").disabled = continuingRun();
-  $("budget-currency").disabled = continuingRun();
   $("ship-to").disabled = continuingRun();
 }
 // </budget>
@@ -363,12 +443,13 @@ async function send(event) {
     return;
   }
   const continuing = continuingRun();
-  const budget = continuing ? {} : budgetToSend();
+  const budget = budgetToSend();
   const shipTo = continuing ? {} : {ship_to_country: $("ship-to").value};
   if (budget === null) {
     setStatus("Enter the budget as an amount such as 500 or 499.99, or leave it empty.", true);
     return;
   }
+  budgetNote = "";
   input.value = "";
   if (!continuing) {
     clear($("chat"));
@@ -376,6 +457,19 @@ async function send(event) {
   }
   $("chat").appendChild(el("li", text, "user"));
   startWorking();
+  // 23.1: a changed field goes first, as the owner's PATCH; a refused change sends no message.
+  if (continuing && !fieldMatchesRun(budget)) {
+    const changed = await api("PATCH", "/api/runs/" + currentRun.id + "/budget", budget);
+    if (!changed.ok) {
+      stopWorking();
+      setStatus(errorText(changed), true);
+      return;
+    }
+    budgetNote = changed.data.budget
+        ? "Budget updated to " + money(changed.data.budget.amount_minor, changed.data.budget.currency)
+            + " for new proposals."
+        : "Budget removed for new proposals.";
+  }
   const result = continuing
       ? await api("POST", "/api/runs/" + currentRun.id + "/messages", {message: text})
       : await api("POST", "/api/runs", Object.assign({message: text}, budget, shipTo));
@@ -440,7 +534,14 @@ function runEnd(run) {
 // </run-end>
 
 function showRun(run) {
+  const sameRun = Boolean(currentRun) && currentRun.id === run.run_id;
+  const before = runBudget;
   currentRun = {id: run.run_id, status: run.status, intents: run.intent_ids || []};
+  runBudget = run.budget || null;
+  if (sameRun && JSON.stringify(before) !== JSON.stringify(runBudget)) {
+    showRunBudget(runBudget);
+  }
+  history.replaceState(null, "", "#run=" + encodeURIComponent(run.run_id));
   clear($("chat"));
   (run.messages || []).forEach((m) => {
     const item = el("li", m.text, m.role + (m.kind === "question" ? " question" : ""));
@@ -456,6 +557,7 @@ function showRun(run) {
     stopWorking();
     setStatus(statusText);
   }
+  showBudgetNote(run, statusText);
   if (run.tool_events) {
     showChips(run.tool_events);
   }
@@ -638,7 +740,10 @@ function showApprovalCard(id, approvalResponse) {
   table.appendChild(body);
   table.appendChild(foot);
   card.appendChild(table);
-  if (linked && approval.budget) {
+  if (approval.budget && budgetChanged(approval.budget)) {
+    card.appendChild(el("p", "Proposed under your earlier budget of "
+        + money(approval.budget.amount_minor, approval.budget.currency), "budget-line"));
+  } else if (linked && approval.budget) {
     card.appendChild(el("p", "Your budget: " + money(approval.budget.amount_minor, approval.budget.currency)
         + " (before the store's shipping and tax)", "budget-line"));
   } else if (approval.budget) {

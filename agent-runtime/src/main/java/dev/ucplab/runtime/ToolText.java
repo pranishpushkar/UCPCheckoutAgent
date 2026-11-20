@@ -31,6 +31,13 @@ final class ToolText {
             "buyer_identity_contact_method_required", "delivery_address_required",
             "delivery_no_delivery_available_for_merchandise_line");
 
+    /** 6.2 compact: the most characters of merchant text the model sees per field, and the most options per item. */
+    static final int TITLE_MAX = 120;
+    static final int SELLER_MAX = 60;
+    static final int OPTION_TEXT_MAX = 40;
+    static final int OPTIONS_MAX = 4;
+    static final int DESCRIPTION_MAX = 400;
+
     private ToolText() {
     }
 
@@ -38,20 +45,36 @@ final class ToolText {
     static String title(CatalogProduct product, CatalogVariant variant) {
         String title = product.variants().size() == 1 || variant.title().equals(product.title())
                 ? product.title() : product.title() + " - " + variant.title();
-        return UntrustedText.wrap("merchant", "title", title);
+        return UntrustedText.wrap("merchant", "title", cut(title, TITLE_MAX));
     }
 
     /**
      * The variant's own options as a result shows them (6.2): {@code [{name, label}]}, each wrapped as untrusted text,
-     * in the merchant's order.
+     * in the merchant's order, at most {@value #OPTIONS_MAX}.
      */
     static List<Map<String, Object>> options(CatalogVariant variant) {
-        return variant.options().stream().map(o -> {
+        return variant.options().stream().limit(OPTIONS_MAX).map(o -> {
             Map<String, Object> option = new LinkedHashMap<>();
-            option.put("name", UntrustedText.wrap("merchant", "name", o.name()));
-            option.put("label", UntrustedText.wrap("merchant", "label", o.label()));
+            option.put("name", UntrustedText.wrap("merchant", "name", cut(o.name(), OPTION_TEXT_MAX)));
+            option.put("label", UntrustedText.wrap("merchant", "label", cut(o.label(), OPTION_TEXT_MAX)));
             return option;
         }).toList();
+    }
+
+    /** A catalog source's seller name, wrapped (6.2, 26.7). */
+    static String seller(String name) {
+        return UntrustedText.wrap("merchant", "seller", cut(name, SELLER_MAX));
+    }
+
+    /** A product's description, wrapped; an item without one has an empty one (6.2). */
+    static String description(String text) {
+        return UntrustedText.wrap("merchant", "description", cut(text, DESCRIPTION_MAX));
+    }
+
+    /** The first {@code max} code points of {@code text}, cut before it is wrapped, so no character is split. */
+    static String cut(String text, int max) {
+        return text.codePointCount(0, text.length()) <= max ? text
+                : text.substring(0, text.offsetByCodePoints(0, max));
     }
 
     /** An id the merchant sent (an item or order id): as it is when it looks like an id, else wrapped. */

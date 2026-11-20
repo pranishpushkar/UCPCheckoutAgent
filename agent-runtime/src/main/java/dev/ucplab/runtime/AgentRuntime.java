@@ -16,6 +16,7 @@ import dev.ucplab.core.intent.BuyerCountry;
 import dev.ucplab.core.intent.IntentId;
 import dev.ucplab.core.intent.IntentNotFoundException;
 import dev.ucplab.core.intent.IntentState;
+import dev.ucplab.core.json.CanonicalJson;
 import dev.ucplab.core.recovery.Sleeper;
 import java.time.Clock;
 import java.time.Duration;
@@ -24,6 +25,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * The agent loop (m5-plan section 4, 6.3, 6.5). For one run: the system prompt and the user's message, then model turns;
@@ -151,10 +153,16 @@ public final class AgentRuntime {
         Objects.requireNonNull(trace, "trace");
     }
 
-    /** One run's state, confined to the run's thread. */
+    /** The refusals after which the rest of a turn's tool calls are stopped (6.2): P2, P3 and P9. */
+    private static final Set<String> STOPPING_REFUSALS = Set.of("policy_P2", "policy_P3", "policy_P9");
+
+    /** One turn of a run, confined to the run's thread: a start, or one continuation (6.2 "Stopped for the turn"). */
     private final class Run {
         private final AuthContext auth;
-        private final ToolContext context;
+        /** Its budget is the run's stored one, read again before every model call (23.1 PATCH budget). */
+        private ToolContext context;
+        /** True after a P2, P3 or P9 refusal: the turn's later tool calls are answered "stopped" without running. */
+        private boolean stopped;
         private final RunTrace trace;
         private final BudgetMeter meter;
         private final ToolRegistry tools;
@@ -228,6 +236,7 @@ public final class AgentRuntime {
                 if (refused.isPresent()) {
                     return new RunOutcome.BudgetExceeded(refused.get(), intents);
                 }
+                refreshBudget();
                 Instant before = clock.instant();
                 ModelTurn turn;
                 try {
@@ -264,7 +273,8 @@ public final class AgentRuntime {
                     Instant called = clock.instant();
                     ToolOutcome outcome;
                     try {
-                        outcome = tool.isPresent() ? tool.get().run(context, call.arguments())
+                        outcome = stopped ? ToolOutcome.stopped()
+                                : tool.isPresent() ? tool.get().run(context, call.arguments())
                                 : ToolOutcome.error("unknown_tool");
                     } catch (RuntimeException e) {
                         // 11: the line names the tool, the exception's class and where it was thrown; never its message.
@@ -279,6 +289,7 @@ public final class AgentRuntime {
                         intents.add(r.intent().get());
                     }
                     conversation = conversation.append(new Message.ToolResult(call.id(), call.name(), outcome.json()));
+                    stopped = stopped || refusedByPolicy(call.name(), outcome);
                     snapshot();
                     if (outcome instanceof ToolOutcome.NoAnswer) {
                         return new RunOutcome.UserTimedOut(
@@ -286,6 +297,28 @@ public final class AgentRuntime {
                     }
                 }
             }
+        }
+
+        /**
+         * 23.1, 6.4: the run's stored budget, which the owner may have changed since the last model call, for the tools
+         * and the hint; read fresh every time (20 caches nothing). A run the store no longer returns keeps its budget.
+         */
+        private void refreshBudget() {
+            Optional<Budget> stored = runs.find(auth.user(), context.runId()).map(RunRecord::budget)
+                    .orElse(context.budget());
+            if (!stored.equals(context.budget())) {
+                context = new ToolContext(auth, context.runId(), stored, context.shipTo());
+                conversation = new Conversation(SystemPrompt.text(stored), conversation.messages());
+            }
+        }
+
+        /** 6.2: a propose_purchase answer whose intent a P2, P3 or P9 refusal ended. */
+        private static boolean refusedByPolicy(String tool, ToolOutcome outcome) {
+            if (!tool.equals("propose_purchase") || !(outcome instanceof ToolOutcome.Result r)) {
+                return false;
+            }
+            return CanonicalJson.readObject(r.json()).get("failure_reason") instanceof String reason
+                    && STOPPING_REFUSALS.contains(reason);
         }
 
         /**

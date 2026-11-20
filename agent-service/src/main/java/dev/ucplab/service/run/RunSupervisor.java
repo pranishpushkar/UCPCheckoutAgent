@@ -380,6 +380,17 @@ public final class RunSupervisor implements AutoCloseable {
         return liveView(run);
     }
 
+    /**
+     * The owner's change of the run's budget (23.1 {@code PATCH /api/runs/{run_id}/budget}, P9): stored at once, also while
+     * the run works or waits, and read by the run before its next model call. False when the run is not the caller's or
+     * does not exist (T6). An intent already proposed keeps the budget it was proposed under.
+     */
+    public boolean setBudget(AuthContext auth, RunId id, Optional<Budget> budget) {
+        Objects.requireNonNull(auth, "auth");
+        Objects.requireNonNull(id, "id");
+        return runs.setBudget(auth.user(), id, budget);
+    }
+
     /** The run as the caller sees it, or empty when it is not theirs or does not exist (T6). */
     public Optional<RunView> get(AuthContext auth, RunId id) {
         Objects.requireNonNull(auth, "auth");

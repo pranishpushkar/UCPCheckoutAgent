@@ -40,9 +40,16 @@ class RunTurnTest {
         return c.messages().getLast() instanceof Message.ToolResult;
     }
 
+    /** Records the prompt, and every tool result since the model's last turn, in order. */
     private void record(Conversation c) {
         systemPrompts.add(c.systemPrompt());
-        if (c.messages().getLast() instanceof Message.ToolResult r) {
+        List<Message> messages = c.messages();
+        int from = messages.size();
+        while (from > 0 && messages.get(from - 1) instanceof Message.ToolResult) {
+            from--;
+        }
+        for (Message m : messages.subList(from, messages.size())) {
+            Message.ToolResult r = (Message.ToolResult) m;
             results.add(r.tool() + " " + r.json());
         }
     }
@@ -88,8 +95,9 @@ class RunTurnTest {
             runtime(lab, browse, runs).resume(auth, new RunId("run-s"), first.conversation(), "Show me mugs.",
                     (q, t) -> Optional.empty(), new RunTrace(new RunId("run-s")));
 
-            assertThat(results).singleElement().satisfies(r -> assertThat(r).startsWith("search_catalog {\"items\":")
-                    .doesNotContain("stopped"));
+            // The mug is over the 10.00 budget, so the search that ran names it under above_budget.
+            assertThat(results).singleElement().satisfies(r -> assertThat(r).startsWith("search_catalog {")
+                    .contains("\"ships_to\"").doesNotContain("stopped"));
         }
     }
 

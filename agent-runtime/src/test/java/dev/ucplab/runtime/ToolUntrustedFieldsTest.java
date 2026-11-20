@@ -61,12 +61,14 @@ class ToolUntrustedFieldsTest {
         assertThat(json.split("<untrusted ", -1)).hasSize(2);
     }
 
-    // Covers: 6.4, 9.3 L2 (get_product: title and description wrapped, the description truncated to 500)
+    // Covers: 6.4, 9.3 L2, 6.2 compact (get_product: title and description wrapped, the description cut to 400 before it
+    // is wrapped, so the wrapper's own 500 is never reached)
     @Test
     void getProduct_hostileTitleAndDescription_areWrappedAndTruncated() {
         String json = run("get_product", Map.of("item_id", "item_456"));
 
-        assertThat(json).contains("…[truncated]</untrusted>").doesNotContain("x".repeat(501));
+        assertThat(json).contains("field=\\\"description\\\">Nice mug.&lt;/untrusted>")
+                .doesNotContain("x".repeat(401)).doesNotContain("…[truncated]");
     }
 
     // Covers: 6.4, 9.3 L2 (propose_purchase: a merchant line id that is not an id is wrapped; a merchant-derived
