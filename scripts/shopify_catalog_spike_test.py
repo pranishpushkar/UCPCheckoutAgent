@@ -41,6 +41,7 @@ class Fake(http.server.BaseHTTPRequestHandler):
     token_status = 200
     profile_caps = ("dev.ucp.shopping.catalog.search", "dev.ucp.shopping.catalog.lookup", "dev.shopify.catalog.global")
     other_link_host = False
+    in_pages = 1        # how many pages the IN/INR search has; page n is asked for with the cursor "cur-<n-1>"
 
     def split(self):
         host, _, path = self.path.lstrip("/").partition("/")
@@ -69,7 +70,14 @@ class Fake(http.server.BaseHTTPRequestHandler):
                      "id": {"type": "string"}}}}}}]}})
         elif name == "search_catalog":
             country = body["params"]["arguments"]["catalog"]["context"]["address_country"]
-            if country == "IN":
+            cursor = (body["params"]["arguments"]["catalog"].get("pagination") or {}).get("cursor")
+            page = 1 if cursor is None else int(cursor.split("-")[1]) + 1
+            if country == "IN" and page > 1:
+                other = {2: ["AUD"], 3: ["CAD", "CAD"]}.get(page, [])
+                products = [{"id": "gid://shopify/p/in%d%d" % (page, i), "title": "Board", "variants": [
+                    variant("gid://shopify/ProductVariant/%d%02d" % (page, i), "Shop %d" % i, "shop%d.example" % i, cur)]}
+                    for i, cur in enumerate(["INR", "INR"] + other)]
+            elif country == "IN":
                 products = [{"id": "gid://shopify/p/in1", "title": "Board", "variants": [
                     variant("gid://shopify/ProductVariant/101", "Mumbai Boards", "mumbai-boards.example", "INR")]}]
             else:
@@ -77,9 +85,12 @@ class Fake(http.server.BaseHTTPRequestHandler):
                     variant("gid://shopify/ProductVariant/201", "Snow Co", "snow-co.example", "USD"),
                     variant("gid://shopify/ProductVariant/202", "Peak Shop", "peak.example", "USD", native=False)]}]
             extra = {"Retry-After": "1", "X-RateLimit-Limit": "2"} if "authorization" not in headers else {}
+            more = country == "IN" and page < Fake.in_pages
+            pagination = {"has_next_page": more, "total_count": len(products)}
+            if more:
+                pagination["cursor"] = "cur-%d" % page
             self.mcp({"ucp": {"version": "2026-08-25", "capabilities": {"dev.ucp.shopping.catalog.search": []}},
-                      "products": products, "pagination": {"has_next_page": False, "total_count": len(products)}},
-                     extra)
+                      "products": products, "pagination": pagination}, extra)
         elif name in ("lookup_catalog", "get_product"):
             vid = (body["params"]["arguments"]["catalog"].get("id")
                    or body["params"]["arguments"]["catalog"]["ids"][0])
@@ -115,6 +126,7 @@ class CatalogSpikeTest(unittest.TestCase):
         Fake.profile_caps = ("dev.ucp.shopping.catalog.search", "dev.ucp.shopping.catalog.lookup",
                              "dev.shopify.catalog.global")
         Fake.other_link_host = False
+        Fake.in_pages = 1
         self.server = http.server.HTTPServer(("127.0.0.1", 0), Fake)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.saved = dict(os.environ)
@@ -263,6 +275,75 @@ class CatalogSpikeTest(unittest.TestCase):
                                                                     "params": {"name": "create_checkout"}})):
             with self.assertRaises(SystemExit, msg="%s %s" % (method, url)):
                 c.call("x", method, url, {}, body, False, PROFILE)
+        self.assertEqual(Fake.calls, [])
+
+    # Covers: 26.7 (buyer country: --pages 3 follows the IN/INR search's cursor for pages 2 and 3, with the same query,
+    # context, filters and limit, authenticated; the US searches stay one page each)
+    def test_morePages_followTheINCursor_withTheSameContextAndFilters(self):
+        Fake.in_pages = 3
+        self.run_main(["--record", self.record, "--pages", "3"])
+        searches = [call[4]["params"]["arguments"]["catalog"] for call in Fake.calls if call[2] == "search_catalog"]
+        ins = [cat for cat in searches if cat["context"]["address_country"] == "IN"]
+        self.assertEqual([cat["pagination"] for cat in ins],
+                         [{"limit": 10}, {"limit": 10, "cursor": "cur-1"}, {"limit": 10, "cursor": "cur-2"}])
+        for cat in ins:
+            self.assertEqual(cat["context"], {"address_country": "IN", "currency": "INR"})
+            self.assertEqual(cat["filters"], {"available": True, "ships_to": {"country": "IN"}})
+            self.assertEqual(cat["query"], "snowboard")
+        self.assertEqual(len(searches) - len(ins), 2)
+        paged = [call for call in Fake.calls if call[2] == "search_catalog"
+                 and call[4]["params"]["arguments"]["catalog"].get("pagination", {}).get("cursor")]
+        self.assertTrue(all(call[3]["authorization"] == "Bearer " + TOKEN for call in paged))
+
+    # Covers: 26.7 (buyer country: the report counts each IN/INR page's offers by currency, and all pages together)
+    def test_morePages_areCountedByCurrency_perPageAndInAll(self):
+        Fake.in_pages = 3
+        out = self.run_main(["--record", self.record, "--pages", "3"])
+        self.assertIn("IN/INR page 1: 1 offer; INR 1; other currencies 0", out)
+        self.assertIn("IN/INR page 2: 3 offers; INR 2; other currencies 1 (AUD 1)", out)
+        self.assertIn("IN/INR page 3: 4 offers; INR 2; other currencies 2 (CAD 2)", out)
+        self.assertIn("IN/INR pages 1-3: 8 offers; INR 5; other currencies 3 (AUD 1, CAD 2)", out)
+        with open(os.path.join(self.record, "report.json")) as f:
+            pages = json.load(f)["contexts"]["IN/INR"]["pages"]
+        self.assertEqual([p["currencies"] for p in pages], [{"INR": 1}, {"AUD": 1, "INR": 2}, {"CAD": 2, "INR": 2}])
+
+    # Covers: 26.7, I8 (buyer country: each further page is recorded, sanitized and redacted as page 1 is)
+    def test_morePages_areRecorded_sanitized(self):
+        Fake.in_pages = 3
+        self.run_main(["--record", self.record, "--pages", "3"])
+        for name in ("search_in_inr_page2.json", "search_in_inr_page3.json"):
+            self.assertTrue(os.path.exists(os.path.join(self.record, name)), name)
+            with open(os.path.join(self.record, name)) as f:
+                text = f.read()
+            for secret in ("canary-id-111", "canary-secret-222", TOKEN, ATTRIBUTION):
+                self.assertNotIn(secret, text, name)
+            self.assertIn('"checkout_url": "https://shop0.example/..."', text)
+
+    # Covers: 26.7 (buyer country: the paging stops at the last page; no cursor is asked for past has_next_page false)
+    def test_morePages_stopAtTheLastPage(self):
+        Fake.in_pages = 2
+        out = self.run_main(["--record", self.record, "--pages", "3"])
+        ins = [call for call in Fake.calls if call[2] == "search_catalog"
+               and call[4]["params"]["arguments"]["catalog"]["context"]["address_country"] == "IN"]
+        self.assertEqual(len(ins), 2)
+        self.assertIn("IN/INR pages 1-2: 4 offers; INR 3; other currencies 1 (AUD 1)", out)
+        self.assertFalse(os.path.exists(os.path.join(self.record, "search_in_inr_page3.json")))
+
+    # Covers: 26.7, I8 (buyer country: the dry run shows the paged calls with the cursor as a placeholder, no secret)
+    def test_morePages_dryRun_showsThePagedCalls(self):
+        out = self.run_main(["--dry-run", "--pages", "3"])
+        for n in (2, 3):
+            self.assertIn("DRY-RUN search_catalog IN/INR page %d" % n, out)
+            self.assertIn('"cursor": "<cursor of page %d>"' % (n - 1), out)
+        for secret in ("canary-id-111", "canary-secret-222", TOKEN):
+            self.assertNotIn(secret, out)
+        self.assertEqual(Fake.calls, [])
+
+    # Covers: 26.7 (buyer country: --pages is 1 to 3, refused otherwise before any call)
+    def test_pagesOutsideOneToThree_areRefused(self):
+        for value in ("0", "4", "x"):
+            out = self.run_main(["--dry-run", "--pages", value])
+            self.assertIn("EXIT refused: --pages is 1 to 3", out, value)
         self.assertEqual(Fake.calls, [])
 
     # Covers: 26.7 (the recordings default to notes/catalog/recordings/, which git ignores)
