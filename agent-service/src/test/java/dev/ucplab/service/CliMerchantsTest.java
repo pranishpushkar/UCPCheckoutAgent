@@ -12,7 +12,6 @@ import dev.ucplab.service.cli.Cli;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
-import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Clock;
@@ -51,10 +50,7 @@ class CliMerchantsTest {
     }
 
     private void start() throws IOException {
-        int port;
-        try (ServerSocket s = new ServerSocket(0)) {
-            port = s.getLocalPort();
-        }
+        int port = FreePort.pick();
         baseUrl = "http://127.0.0.1:" + port;
         service = TestService.startMerchants(dir, Map.of("PUBLIC_ORIGIN", baseUrl), Optional.empty(), "active", true,
                 Map.of(), port);
