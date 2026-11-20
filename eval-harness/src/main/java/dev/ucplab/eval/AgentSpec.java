@@ -23,10 +23,23 @@ import java.util.Set;
  * @param noSideEffects the row's claim is section 8's: no intent, no approval, only discovery and catalog reads on the
  *     wire, and no new order
  * @param budget the user's budget for the run (23.1, P9), as the Budget field would send it; none for most rows
+ * @param followUp a second turn after the run settles (23.1 continuation), with the owner's budget change before it;
+ *     none for most rows
  */
 public record AgentSpec(String userMessage, Plan plan, List<String> userAnswers, Set<String> runOutcomes,
                         int minIntents, int maxIntents, boolean askFirst, boolean noSideEffects,
-                        Optional<Budget> budget) {
+                        Optional<Budget> budget, Optional<FollowUp> followUp) {
+
+    /**
+     * S30's follow-up turn: the user's next message on the settled run, sent after the owner changes the run's budget to
+     * {@code changedBudget} ({@code PATCH /api/runs/{run_id}/budget}, 23.1), when it is present.
+     */
+    public record FollowUp(String message, Optional<Budget> changedBudget) {
+        public FollowUp {
+            Objects.requireNonNull(message, "message");
+            Objects.requireNonNull(changedBudget, "changedBudget");
+        }
+    }
 
     /** The script of one run. */
     @FunctionalInterface
@@ -65,6 +78,14 @@ public record AgentSpec(String userMessage, Plan plan, List<String> userAnswers,
             throw new IllegalArgumentException("a row with no side effects leaves no intent");
         }
         Objects.requireNonNull(budget, "budget");
+        Objects.requireNonNull(followUp, "followUp");
+    }
+
+    /** A row with no follow-up turn. */
+    public AgentSpec(String userMessage, Plan plan, List<String> userAnswers, Set<String> runOutcomes, int minIntents,
+                     int maxIntents, boolean askFirst, boolean noSideEffects, Optional<Budget> budget) {
+        this(userMessage, plan, userAnswers, runOutcomes, minIntents, maxIntents, askFirst, noSideEffects, budget,
+                Optional.empty());
     }
 
     /** A row whose run has no budget. */
@@ -77,7 +98,13 @@ public record AgentSpec(String userMessage, Plan plan, List<String> userAnswers,
     /** This row with the user's budget for its run. */
     public AgentSpec withBudget(Budget runBudget) {
         return new AgentSpec(userMessage, plan, userAnswers, runOutcomes, minIntents, maxIntents, askFirst,
-                noSideEffects, Optional.of(runBudget));
+                noSideEffects, Optional.of(runBudget), followUp);
+    }
+
+    /** This row with a follow-up turn after its run settles. */
+    public AgentSpec withFollowUp(FollowUp next) {
+        return new AgentSpec(userMessage, plan, userAnswers, runOutcomes, minIntents, maxIntents, askFirst,
+                noSideEffects, budget, Optional.of(next));
     }
 
     /** A row with one script for every run. */
