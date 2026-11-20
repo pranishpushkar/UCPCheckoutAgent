@@ -70,8 +70,8 @@ class CompactResultsTest {
         return s.substring(s.indexOf('>') + 1, s.lastIndexOf("</untrusted>"));
     }
 
-    // Covers: 6.2 compact, 6.3, 6.4 (a search item: title cut to 120, seller to 60, at most four options, the
-    // merchant's first four, each name and label cut to 40; still wrapped as untrusted text)
+    // Covers: 6.2 compact, 6.2 amounts as text, 24.3, 6.3, 6.4 (a search item: title cut to 120, seller to 60, at most
+    // four options, the merchant's first four, each name and label cut to 40; still wrapped as untrusted text)
     @Test
     void aSearchItem_isCutForTheModel() {
         @SuppressWarnings("unchecked")
@@ -88,9 +88,12 @@ class CompactResultsTest {
             assertThat(inner(options.get(i).get("label"))).isEqualTo((i + "L".repeat(99)).substring(0, 40));
         }
         assertThat((String) item.get("title")).startsWith("<untrusted source=\"merchant\" field=\"title\">");
+        assertThat(item).as("6.2 amounts as text, 24.3: rupees with Indian grouping")
+                .containsEntry("price_minor", 499_900L).containsEntry("price", "₹4,999.00");
     }
 
-    // Covers: 6.2 compact (get_product: the description cut to 400, the title and options as in a search)
+    // Covers: 6.2 compact, 6.2 amounts as text (get_product: the description cut to 400, the title, options and price
+    // as in a search)
     @Test
     void getProduct_cutsTheDescription() {
         Map<String, Object> item = run("get_product", Map.of("item_id", ITEM));
@@ -98,5 +101,6 @@ class CompactResultsTest {
         assertThat(inner(item.get("description"))).isEqualTo("D".repeat(400));
         assertThat(inner(item.get("title"))).isEqualTo("T".repeat(120));
         assertThat((List<?>) item.get("options")).hasSize(4);
+        assertThat(item).containsEntry("price", "₹4,999.00");
     }
 }

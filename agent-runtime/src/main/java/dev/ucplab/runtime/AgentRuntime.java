@@ -141,8 +141,10 @@ public final class AgentRuntime {
                 .orElseThrow(() -> new IllegalArgumentException("no such run for this user"));
         Run run = new Run(auth, id, user, trace, Optional.of(stored), stored.budget(), stored.shipTo());
         run.snapshot();
-        // The hint is rebuilt from the stored budget, never carried over from the history (6.4).
-        return run.execute(new Conversation(SystemPrompt.text(stored.budget()), history.messages()), userMessage);
+        // The hint is rebuilt from the stored budget, never carried over from the history (6.4); the earlier turns'
+        // tool results reach the model as one-line summaries (6.3 Earlier turns in the context).
+        return run.execute(new Conversation(SystemPrompt.text(stored.budget()), EarlierTurns.compact(history.messages())),
+                userMessage);
     }
 
     private static void check(AuthContext auth, RunId id, String userMessage, UserChannel user, RunTrace trace) {

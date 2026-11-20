@@ -1,5 +1,6 @@
 package dev.ucplab.runtime;
 
+import dev.ucplab.core.money.MoneyFormat;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import dev.ucplab.core.intent.BuyerCountry;
@@ -29,7 +30,13 @@ final class ResultFields {
     /** Containers and numbers. */
     static final Set<String> STRUCTURE = Set.of("items", "quote", "lines", "price_minor", "total_minor", "quantity",
             "unit_price_minor", "in_stock", "options", "above_budget", "count", "lowest_price_minor", "ships_to",
-            "other_currency");
+            "other_currency", "budget", "quoted", "amount_minor");
+    /**
+     * 6.2 amounts as text: each amount in minor units with its text twin in the same object, which must be 24.3's money
+     * format of that amount in that object's currency. A line's unit price has none.
+     */
+    static final Map<String, String> AMOUNT_TEXT = Map.of("price_minor", "price", "total_minor", "total",
+            "lowest_price_minor", "lowest_price", "amount_minor", "amount");
 
     private static final Pattern ID = Pattern.compile("[A-Za-z0-9_\\-]{1,100}");
 
@@ -42,11 +49,24 @@ final class ResultFields {
 
     private static void walk(String key, Object value) {
         switch (value) {
-            case Map<?, ?> map -> map.forEach((k, v) -> {
-                assertThat(WRAPPED.contains(k) || WRAPPED_UNLESS_ID.contains(k) || OWN.contains(k)
-                        || FIXED.containsKey(k) || STRUCTURE.contains(k)).as("a field this test knows: " + k).isTrue();
-                walk((String) k, v);
-            });
+            case Map<?, ?> map -> {
+                map.forEach((k, v) -> {
+                    assertThat(WRAPPED.contains(k) || WRAPPED_UNLESS_ID.contains(k) || OWN.contains(k)
+                            || FIXED.containsKey(k) || STRUCTURE.contains(k) || AMOUNT_TEXT.containsValue(k))
+                            .as("a field this test knows: " + k).isTrue();
+                    if (!AMOUNT_TEXT.containsValue(k)) {
+                        walk((String) k, v);
+                    }
+                });
+                AMOUNT_TEXT.forEach((minor, text) -> {
+                    if (map.containsKey(minor)) {
+                        assertThat(map.get(text)).as(text + " beside " + minor + " (6.2, 24.3)")
+                                .isEqualTo(MoneyFormat.format(((Number) map.get(minor)).longValue(),
+                                        (String) map.get("currency")));
+                    }
+                    assertThat(map.containsKey(text)).as(text + " only beside " + minor).isEqualTo(map.containsKey(minor));
+                });
+            }
             case List<?> list -> list.forEach(v -> walk(key, v));
             case String s -> checkString(key, s);
             default -> assertThat(STRUCTURE).as("a number or boolean only in a structure field").contains(key);

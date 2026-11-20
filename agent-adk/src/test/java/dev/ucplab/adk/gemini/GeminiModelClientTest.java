@@ -294,7 +294,8 @@ class GeminiModelClientTest {
                 }));
     }
 
-    // Covers: 6.5, 11 (a timeout and a dropped connection have their own causes, never retryable)
+    // Covers: 6.5, 11, 6.3 (a timeout and a dropped connection have their own causes; our own client's timeout is
+    // retryable like the API's 504, the same deadline seen from our side, and a dropped connection is not)
     @Test
     void generate_timeoutAndDroppedConnection_haveTheirCauses() throws Exception {
         stub.holding();
@@ -302,7 +303,8 @@ class GeminiModelClientTest {
                 name -> null);
         assertThatThrownBy(() -> slow.generate(ask("hi"), TOOLS)).isInstanceOfSatisfying(GeminiException.class, e -> {
             assertThat(e.cause()).isEqualTo("timeout");
-            assertThat(e.retryable()).isFalse();
+            assertThat(e.retryable()).isTrue();
+            assertThat(e.retryAfter()).isEmpty();
         });
 
         try (GeminiStub.Dropping dropping = new GeminiStub.Dropping()) {

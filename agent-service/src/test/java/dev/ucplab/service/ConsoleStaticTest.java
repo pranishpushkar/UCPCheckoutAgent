@@ -821,6 +821,32 @@ class ConsoleStaticTest {
         assertThat(toSend.substring(0, toSend.indexOf("\n}\n"))).contains("minorDigits(").doesNotContain("* 100");
     }
 
+    // Covers: 24.3 money format (the console formats every amount from its minor units as a string of digits, never
+    // through floating point: the browser's CLDR en symbol and digits, Indian grouping for INR and threes otherwise; the
+    // Budget field is shown and read the same way; nothing else formats an amount)
+    @Test
+    void money_isFormattedFromMinorUnits_withTheSymbol_andTheCurrencysGrouping() throws IOException {
+        String js = read("console.js");
+        String money = block(js, "money");
+
+        assertThat(money).contains("function money(minor, currency) {")
+                .contains("function currencySymbol(currency) {")
+                .contains(".formatToParts(0).find((part) => part.type === \"currency\")")
+                .contains("function grouped(whole, currency) {")
+                .contains("if (currency === \"INR\" && whole.length > 3) {")
+                .contains("function plainAmount(digits, fraction) {")
+                .doesNotContain("toFixed").doesNotContain("Math.pow").doesNotContain("Number(").doesNotContain(" / ")
+                .doesNotContain("parseFloat");
+        assertThat(js).as("no amount through floating point anywhere").doesNotContain("toFixed(")
+                .doesNotContain("Math.pow(10");
+        String showRunBudget = js.substring(js.indexOf("function showRunBudget(budget) {"));
+        assertThat(showRunBudget.substring(0, showRunBudget.indexOf("\n}\n")))
+                .contains("plainAmount(String(budget.amount_minor), minorDigits(budget.currency))");
+        String toSend = js.substring(js.indexOf("function budgetToSend() {"));
+        assertThat(toSend.substring(0, toSend.indexOf("\n}\n")))
+                .contains("const minor = Number(m[1] + (m[2] || \"\").padEnd(digits, \"0\"));");
+    }
+
     // Covers: 24.3, 23.2, 26.7 (the link card says where the catalog listed the item as shipping to, from the approval
     // answer's ships_to, as text)
     @Test

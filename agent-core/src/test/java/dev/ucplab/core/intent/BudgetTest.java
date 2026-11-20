@@ -23,14 +23,14 @@ class BudgetTest {
         assertThatThrownBy(() -> new Budget(500, currency)).isInstanceOf(IllegalArgumentException.class);
     }
 
-    // Covers: 6.4, 24.3 (the budget is shown in its currency's own minor digits, from the JDK's ISO 4217 table: two for
-    // USD and INR, none for JPY; "$" for USD and the code otherwise; a code the table does not know takes two)
+    // Covers: 6.4, 24.3 money format (the budget is shown as 24.3 formats money: its currency's own minor digits and
+    // English symbol, Indian grouping for INR; a code the JDK does not know is the code, a space and two digits)
     @Test
     void display_usesTheCurrencysOwnMinorDigits() {
         assertThat(new Budget(50_000, "USD").display()).isEqualTo("$500.00");
-        assertThat(new Budget(4_270_000, "INR").display()).isEqualTo("INR 42700.00");
-        assertThat(new Budget(500, "JPY").display()).isEqualTo("JPY 500");
-        assertThat(new Budget(5, "EUR").display()).isEqualTo("EUR 0.05");
+        assertThat(new Budget(4_270_000, "INR").display()).isEqualTo("₹42,700.00");
+        assertThat(new Budget(500, "JPY").display()).isEqualTo("¥500");
+        assertThat(new Budget(5, "EUR").display()).isEqualTo("€0.05");
         assertThat(new Budget(1_234, "ABC").display()).isEqualTo("ABC 12.34");
     }
 

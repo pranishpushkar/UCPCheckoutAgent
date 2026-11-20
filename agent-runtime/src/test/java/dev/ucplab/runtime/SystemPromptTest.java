@@ -98,7 +98,8 @@ class SystemPromptTest {
     @Test
     void prompt_isLoadedOnceAndVersioned() {
         assertThat(SystemPrompt.text()).isSameAs(SystemPrompt.text());
-        assertThat(SystemPrompt.VERSION).isEqualTo("v7");
+        assertThat(SystemPrompt.VERSION).isEqualTo("v8");
+        assertThat(SystemPrompt.class.getResource("system-prompt-v8.txt")).isNotNull();
         assertThat(SystemPrompt.class.getResource("system-prompt-v7.txt")).isNotNull();
         assertThat(SystemPrompt.class.getResource("system-prompt-v6.txt")).isNotNull();
         assertThat(SystemPrompt.class.getResource("system-prompt-v4.txt")).isNotNull();
@@ -127,6 +128,16 @@ class SystemPromptTest {
                 .satisfies(p -> assertThat(p).contains("merchant_id").contains("seller name"));
         assertThat(SystemPrompt.text()).as("the prompt itself uses no Markdown").doesNotContain("**")
                 .doesNotContain("shopify-catalog");
+    }
+
+    // Covers: 6.4 v8, 6.2 amounts as text, 24.3 money format (v8, after the re-check from India: the agent writes an
+    // amount as the tool result gives it as text, such as the rupee amount with Indian grouping, and never computes,
+    // rounds or converts one)
+    @Test
+    void prompt_v8_writesAmountsAsTheResultGivesThem() {
+        assertThat(paragraphs()).filteredOn(p -> p.startsWith("[REPLY]")).singleElement().satisfies(p -> assertThat(p)
+                .contains("Write an amount exactly as the tool result gives it as text (price, total, lowest_price or "
+                        + "amount), such as ₹12,000.00; never compute, round or convert one."));
     }
 
     // Covers: 6.4, 6.2 stopped, 23.1 PATCH budget, P2, P3, P9 (v7, after the second live check from India: after a policy
