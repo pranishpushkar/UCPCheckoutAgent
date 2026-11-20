@@ -881,6 +881,70 @@ class ConsoleStaticTest {
         return List.of(amount, sign.toLowerCase(java.util.Locale.ROOT));
     }
 
+    /** console.js's {@code BUDGET_NOT_MONEY} literal: a word after a sign-less amount that says it is not money. */
+    private static Pattern notMoneyPattern() throws IOException {
+        String budget = block(read("console.js"), "budget");
+        String start = "const BUDGET_NOT_MONEY = /";
+        int from = budget.indexOf(start);
+        assertThat(from).as("BUDGET_NOT_MONEY is one regex literal").isNotNegative();
+        int to = budget.indexOf("/i;\n", from);
+        assertThat(to).as("the literal ends with /i;").isGreaterThan(from);
+        return Pattern.compile(budget.substring(from + start.length(), to),
+                Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    }
+
+    /**
+     * The amount and currency budgetFromMessage fills from {@code text} with {@code selected} as the field's currency, or
+     * null, step for step as the pinned lines below read: the first match; a sign or code names the currency; a sign-less
+     * amount after a limit word is money only from 100 up and with no unit after it.
+     */
+    private static List<String> prefill(String text, String selected) throws IOException {
+        Matcher m = budgetPattern().matcher(text);
+        if (!m.find()) {
+            return null;
+        }
+        String amount = m.group(2) != null ? m.group(2) : m.group(5) != null ? m.group(5) : m.group(8);
+        String sign = java.util.stream.Stream.of(1, 3, 4, 6, 7, 9).map(m::group).filter(java.util.Objects::nonNull)
+                .findFirst().orElse(null);
+        boolean named = m.group(8) != null;
+        if (sign == null && !named && (new java.math.BigDecimal(amount.replace(",", "")).compareTo(
+                java.math.BigDecimal.valueOf(100)) < 0 || notMoneyPattern().matcher(text.substring(m.end())).find())) {
+            return null;
+        }
+        java.util.Map<String, String> signs = java.util.Map.of("$", "USD", "€", "EUR", "£", "GBP", "₹", "INR", "rs", "INR", "rs.", "INR",
+                "rupee", "INR", "rupees", "INR");
+        String currency = sign == null ? selected
+                : signs.getOrDefault(sign.toLowerCase(java.util.Locale.ROOT), sign.toUpperCase(java.util.Locale.ROOT));
+        return List.of(amount.replace(",", ""), currency);
+    }
+
+    // Covers: 24.3, P9, 23.1 (a sign-less amount after a limit word takes the selected budget currency: "shoes under
+    // 15000" with INR fills 15000 INR, "under 15000" with USD 15000 USD; the field stays as it is for "under 2 kg", "kids
+    // under 10", "under 3 days", "size 7 uk" and "under 50", for an amount of 100 or more with a unit after it, and an
+    // amount with a sign is still taken in its own currency)
+    @Test
+    void budgetPrefill_aSignlessAmountAfterALimitWord_takesTheSelectedCurrency_unlessItIsNotMoney() throws IOException {
+        assertThat(prefill("shoes under 15000", "INR")).containsExactly("15000", "INR");
+        assertThat(prefill("under 15000", "USD")).containsExactly("15000", "USD");
+        assertThat(prefill("a board below 1,50,000", "INR")).containsExactly("150000", "INR");
+        assertThat(prefill("shoes up to 100", "EUR")).containsExactly("100", "EUR");
+        for (String text : List.of("under 2 kg", "kids under 10", "under 3 days", "size 7 uk", "under 50",
+                "a bag under 2500 g", "tent under 250 cm", "under 120 months", "under 200 pcs", "under 500 pack",
+                "under 100 %", "under 150 x 3", "under 300 mm", "under 150 years", "under 120 yrs", "under 700 UK",
+                "under 500 us", "under 450 EU", "under 100 size")) {
+            assertThat(prefill(text, "INR")).as(text).isNull();
+        }
+        assertThat(prefill("under $50", "INR")).as("a sign keeps a small amount").containsExactly("50", "USD");
+        assertThat(prefill("under 500 USD", "INR")).containsExactly("500", "USD");
+        assertThat(prefill("my budget is 50", "INR")).as("after budget, any amount").containsExactly("50", "INR");
+        String budget = block(read("console.js"), "budget");
+        assertThat(budget).contains("const named = Boolean(m[8]);\n"
+                + "  if (!sign && !named && (Number(amount.replace(/,/g, \"\")) < 100\n"
+                + "      || BUDGET_NOT_MONEY.test(text.slice(m.index + m[0].length)))) {\n"
+                + "    return null;\n  }\n")
+                .contains("currency: sign ? budgetCurrency(sign) : $(\"budget-currency\").value");
+    }
+
     // Covers: 24.3, P9 (the live check's rupee forms, each run through the console's own pattern: "500 rupees", "rs 500",
     // "Rs.500", "₹500" and "500 INR", each with a limit word; Indian grouping "1,50,000" and thousands "15,000"; "budget to
     // 15000" without a sign; and each sign maps to INR)

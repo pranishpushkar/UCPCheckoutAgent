@@ -47,6 +47,11 @@ final class EarlierTurns {
         return List.copyOf(out);
     }
 
+    /** 6.3 superseded search results: what a run's next model call is sent of its own messages. */
+    static List<Message> superseded(List<Message> messages) {
+        return List.copyOf(messages);
+    }
+
     private static Message summarised(Message.ToolResult result, Optional<ToolCall> call, Map<String, Map<?, ?>> items) {
         if (result.tool().equals("ask_user")) {
             return result;

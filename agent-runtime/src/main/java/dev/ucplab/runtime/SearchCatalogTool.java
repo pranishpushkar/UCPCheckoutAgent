@@ -35,6 +35,10 @@ import java.util.Set;
  */
 final class SearchCatalogTool implements Tool {
 
+    /** 6.2: the most items a catalog source (26.7) is asked for and contributes to one search. */
+    static final int CATALOG_MAX_RESULTS = 5;
+
+
     static final String NAME = "search_catalog";
     private static final ToolSpec SPEC = new ToolSpec(NAME,
             "Searches the merchants' catalogs. Returns matching items with their prices in minor units.",
