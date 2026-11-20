@@ -833,8 +833,8 @@ class ConsoleStaticTest {
                 .contains("function currencySymbol(currency) {")
                 .contains(".formatToParts(0).find((part) => part.type === \"currency\")")
                 .contains("function grouped(whole, currency) {")
-                .contains("if (currency === \"INR\" && whole.length > 3) {")
-                .contains("function plainAmount(digits, fraction) {")
+                .contains("const size = currency === \"INR\" ? 2 : 3;")
+                .contains("function plainAmount(minorText, digits) {")
                 .doesNotContain("toFixed").doesNotContain("Math.pow").doesNotContain("Number(").doesNotContain(" / ")
                 .doesNotContain("parseFloat");
         assertThat(js).as("no amount through floating point anywhere").doesNotContain("toFixed(")

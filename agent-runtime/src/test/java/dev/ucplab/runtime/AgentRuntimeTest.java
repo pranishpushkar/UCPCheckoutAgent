@@ -683,8 +683,9 @@ class AgentRuntimeTest {
         assertThat(waiting.toolCalls()).as("ask_user itself is counted once it returns").isEqualTo(1);
     }
 
-    // Covers: 23.1, 6.5, m6-plan Decision 3 (a resume continues with the earlier messages and the new one last, under a
-    // fresh budget: six model calls are used up, and the resume still gets its own; the record's counts are the sum)
+    // Covers: 23.1, 6.5, m6-plan Decision 3, 6.3 earlier turns (a resume continues with the earlier messages, their
+    // tool results summarised, and the new one last, under a fresh budget: six model calls are used up, and the resume
+    // still gets its own; the record's counts are the sum)
     @Test
     void resume_continuesTheConversationUnderAFreshBudget() {
         List<Conversation> seen = new CopyOnWriteArrayList<>();
@@ -707,7 +708,9 @@ class AgentRuntimeTest {
         Conversation resumed = seen.getLast();
         assertThat(resumed.messages()).startsWith(new Message.User("first message"));
         assertThat(resumed.messages().getLast()).isEqualTo(new Message.User("second message"));
-        assertThat(resumed.messages()).containsSequence(first.conversation().messages());
+        assertThat(resumed.messages()).containsSequence(EarlierTurns.compact(first.conversation().messages()));
+        assertThat(resumed.messages()).filteredOn(Message.ToolResult.class::isInstance).hasSize(5)
+                .allSatisfy(r -> assertThat(((Message.ToolResult) r).json()).isEqualTo("{\"earlier\":\"searched: 1 result\"}"));
         assertThat(second.conversation().messages().getLast()).isEqualTo(new Message.Model("reply 7", List.of()));
         RunRecord record = record();
         assertThat(record.modelCalls()).isEqualTo(7);

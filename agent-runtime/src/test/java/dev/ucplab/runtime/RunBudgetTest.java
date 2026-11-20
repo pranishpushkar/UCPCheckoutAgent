@@ -1,6 +1,5 @@
 package dev.ucplab.runtime;
 
-import dev.ucplab.core.money.MoneyFormat;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import dev.ucplab.core.agent.Conversation;
@@ -17,6 +16,7 @@ import dev.ucplab.core.intent.Budget;
 import dev.ucplab.core.intent.IntentState;
 import dev.ucplab.core.intent.PurchaseIntent;
 import dev.ucplab.core.json.CanonicalJson;
+import dev.ucplab.core.money.MoneyFormat;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;

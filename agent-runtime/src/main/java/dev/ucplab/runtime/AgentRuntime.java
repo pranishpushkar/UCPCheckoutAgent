@@ -325,9 +325,9 @@ public final class AgentRuntime {
 
         /**
          * 6.3: how long to wait before trying a failed model call once more, or empty when it is not tried again: only
-         * a retryable failure (HTTP 429, 503 or 504), only with a model call left, and only when the wait, the API's
-         * {@code retryDelay} or {@link AgentRuntime#RETRY_WAIT}, plus {@link AgentRuntime#RETRY_CALL} for the call, still
-         * fits in the wall clock left.
+         * a retryable failure (HTTP 429, 503 or 504, or the client's own timeout), only with a model call left, and only
+         * when the wait, the API's {@code retryDelay} or {@link AgentRuntime#RETRY_WAIT}, plus
+         * {@link AgentRuntime#RETRY_CALL} for the call, still fits in the wall clock left.
          */
         private Optional<Duration> retryWait(RuntimeException failure) {
             if (!(failure instanceof ModelFailure f) || !f.retryable() || !meter.modelCallLeft()) {

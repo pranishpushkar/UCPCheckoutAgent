@@ -42,8 +42,11 @@ function setStatus(text, isError) {
   node.className = isError ? "status error" : "status";
 }
 
-// 24.3: money in the currency's own minor digits (JPY 0, INR 2, KWD 3), from the browser's ISO 4217 table; 2 for a code
-// it does not know.
+// <money>
+// 24.3 money format: an amount from its minor units as a string of digits, never through floating point. The currency's
+// own minor digits (JPY 0, INR 2, KWD 3) and English symbol come from the browser's CLDR en data, as the service's come
+// from the JDK's; 2 digits and the code itself for a code it does not know. The whole part is grouped, Indian grouping
+// for INR and threes otherwise: ₹1,50,000.00, $224.98.
 function minorDigits(currency) {
   try {
     return new Intl.NumberFormat("en", {style: "currency", currency: currency}).resolvedOptions().maximumFractionDigits;
@@ -52,11 +55,53 @@ function minorDigits(currency) {
   }
 }
 
-function money(minor, currency) {
-  const digits = minorDigits(currency);
-  const amount = (Number(minor) / Math.pow(10, digits)).toFixed(digits);
-  return (currency === "USD" || !currency ? "$" : currency + " ") + amount;
+// The currency's symbol, formatted from zero only to read it; one that ends in a letter (CHF) takes a space.
+function currencySymbol(currency) {
+  let symbol = currency;
+  try {
+    symbol = new Intl.NumberFormat("en", {style: "currency", currency: currency})
+        .formatToParts(0).find((part) => part.type === "currency").value;
+  } catch (e) {
+    symbol = currency;
+  }
+  return /[A-Za-z]$/.test(symbol) ? symbol + " " : symbol;
 }
+
+// The whole part's digits grouped: the last three, then pairs for INR and threes for every other currency.
+function grouped(whole, currency) {
+  if (whole.length <= 3) {
+    return whole;
+  }
+  const size = currency === "INR" ? 2 : 3;
+  let rest = whole.slice(0, -3);
+  const groups = [whole.slice(-3)];
+  while (rest.length > size) {
+    groups.unshift(rest.slice(-size));
+    rest = rest.slice(0, -size);
+  }
+  groups.unshift(rest);
+  return groups.join(",");
+}
+
+// A string of minor units as an amount with its point, no symbol and no grouping: "12000.00" for "1200000" at 2 digits.
+function plainAmount(minorText, digits) {
+  const negative = minorText.startsWith("-");
+  const magnitude = (negative ? minorText.slice(1) : minorText).padStart(digits + 1, "0");
+  const whole = magnitude.slice(0, magnitude.length - digits);
+  return (negative ? "-" : "") + whole + (digits > 0 ? "." + magnitude.slice(magnitude.length - digits) : "");
+}
+
+function money(minor, currency) {
+  if (!currency) {
+    return money(minor, "USD");
+  }
+  const plain = plainAmount(String(minor), minorDigits(currency));
+  const negative = plain.startsWith("-");
+  const [whole, fraction] = (negative ? plain.slice(1) : plain).split(".");
+  return (negative ? "-" : "") + currencySymbol(currency) + grouped(whole, currency)
+      + (fraction === undefined ? "" : "." + fraction);
+}
+// </money>
 
 // One request. A 401 goes to the sign-in page, as 24.3 says; every other error comes back as {code, message}.
 async function api(method, path, body) {
@@ -268,8 +313,7 @@ function showRunBudget(budget) {
     $("budget").value = "";
     return;
   }
-  const digits = minorDigits(budget.currency);
-  $("budget").value = (budget.amount_minor / Math.pow(10, digits)).toFixed(digits);
+  $("budget").value = plainAmount(String(budget.amount_minor), minorDigits(budget.currency));
   showCurrency(budget.currency);
 }
 
@@ -308,7 +352,8 @@ function budgetToSend() {
   if (!m) {
     return null;
   }
-  const minor = Number(m[1]) * Math.pow(10, digits) + Number((m[2] || "").padEnd(digits, "0") || "0");
+  // The digits joined as a string, then read once as an integer below 2^53: no floating-point arithmetic (24.3).
+  const minor = Number(m[1] + (m[2] || "").padEnd(digits, "0"));
   if (minor < 1) {
     return null;
   }

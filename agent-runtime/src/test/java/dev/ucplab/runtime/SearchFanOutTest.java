@@ -267,7 +267,7 @@ class SearchFanOutTest {
 
     private static String item(String id) {
         return "{\"currency\":\"USD\",\"in_stock\":true,\"item_id\":\"" + id + "\",\"merchant_id\":\"merchant-a\","
-                + "\"price_minor\":100,\"title\":" + dev.ucplab.core.json.CanonicalJson.write(
+                + "\"price\":\"$1.00\",\"price_minor\":100,\"title\":" + dev.ucplab.core.json.CanonicalJson.write(
                         dev.ucplab.runtime.ToolText.title(product(id, 100), product(id, 100).variants().getFirst()))
                 + "}";
     }

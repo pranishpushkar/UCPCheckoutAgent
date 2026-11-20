@@ -9,6 +9,7 @@ import dev.ucplab.core.merchant.CatalogSearch;
 import dev.ucplab.core.merchant.CatalogVariant;
 import dev.ucplab.core.merchant.MerchantEntry;
 import dev.ucplab.core.merchant.Money;
+import dev.ucplab.core.money.MoneyFormat;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -19,7 +20,7 @@ import java.util.Set;
 
 /**
  * {@code search_catalog} (6.2): {@code query} (1 to 200 characters) and {@code max_results} (1 to 10). Searches each
- * active merchant's catalog and returns {@code {items:[{merchant_id, item_id, title, price_minor, currency,
+ * active merchant's catalog and returns {@code {items:[{merchant_id, item_id, title, price_minor, price, currency,
  * in_stock, options?, seller?}]}}, one entry per variant, at most {@code max_results}. {@code title} is wrapped, and so
  * are {@code seller}, a catalog source's seller name (26.7), and each name and label of {@code options}, the variant's
  * own; the merchant's own
@@ -29,7 +30,7 @@ import java.util.Set;
  * {@code {"error":"unavailable"}}. With a run budget (23.1) the search carries it as its price limit, from the run and
  * never from the model, and an item in another currency or priced above it is left out whatever the merchant returned:
  * a price filter is a request, not a guarantee. Items left out for their price are named only as {@code above_budget
- * {count, lowest_price_minor, currency}}; when nothing fits, the same merchants are asked once more without the filter
+ * {count, lowest_price_minor, lowest_price, currency}}; when nothing fits, the same merchants are asked once more without the filter
  * for it, the only second search.
  */
 final class SearchCatalogTool implements Tool {
@@ -150,6 +151,7 @@ final class SearchCatalogTool implements Tool {
         Map<String, Object> above = new LinkedHashMap<>();
         above.put("count", count);
         above.put("lowest_price_minor", lowest);
+        above.put("lowest_price", MoneyFormat.format(lowest, limit.currency()));
         above.put("currency", limit.currency());
         return Optional.of(above);
     }
@@ -184,6 +186,8 @@ final class SearchCatalogTool implements Tool {
         item.put("item_id", variant.itemId());
         item.put("title", ToolText.title(product, variant));
         item.put("price_minor", variant.price().minor());
+        // 6.2 amounts as text: the price as the agent writes it, formatted from the minor units (24.3).
+        item.put("price", MoneyFormat.format(variant.price().minor(), variant.price().currency()));
         item.put("currency", variant.price().currency());
         item.put("in_stock", variant.availability().available());
         if (!variant.options().isEmpty()) {

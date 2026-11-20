@@ -119,8 +119,8 @@ class ContinuationContextTest {
     }
 
     // Covers: 6.3 earlier turns, 6.3 tokens (turn 2's input tokens do not grow with turn 1's catalog payloads: the first
-    // turn's big and small searches differ by thousands of characters, and turn 2's calls by at most one digit, the
-    // count in "searched: 10 results")
+    // turn's big and small searches differ by thousands of characters, and turn 2's first call only by the count in the
+    // summary, "searched: 10 results" against "searched: 1 result")
     @Test
     void theSecondTurnsInputTokens_doNotGrowWithTheFirstTurnsCatalogPayloads() {
         Run big = twoTurns(true);
@@ -130,7 +130,7 @@ class ContinuationContextTest {
         long payload = big.sizes().get(1) - small.sizes().get(1);
         assertThat(payload).as("one search's big payload over its small one, as turn 1 sees it whole").isGreaterThan(3_000);
         assertThat(big.sizes().get(2) - small.sizes().get(2)).as("turn 2's first call: turn 1's result summarised")
-                .isBetween(0L, 1L);
+                .isBetween(0L, 2L);
         // Resent whole, turn 1's payload would add itself to both of turn 2's calls: three payloads in all, with turn
         // 2's own search. Summarised, turn 2 pays for its own search once, plus at most a digit and the rounding.
         assertThat(big.secondTurnTokens() - small.secondTurnTokens())
