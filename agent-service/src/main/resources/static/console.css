@@ -163,6 +163,11 @@ tr.total th, tr.total td { color: var(--fg); font-size: 1.2rem; font-weight: 700
 .info p:last-child { margin-bottom: 0; }
 
 /* 24.3: under a line's title on the approval card, the merchant's item id. */
+.option {
+  color: var(--muted);
+  font-size: 0.9em;
+}
+
 .item-id {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color: var(--muted);

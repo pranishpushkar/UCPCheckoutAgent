@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The quote as the API shows it: {@code {merchant_id, currency, total_minor, lines[{item_id, title, quantity, unit_price_minor}]}}, built
+ * The quote as the API shows it: {@code {merchant_id, currency, total_minor, lines[{item_id, title, options?, quantity, unit_price_minor}]}}, built
  * only from an approval's {@link ApprovalSnapshot}, which the approval service made from the merchant's own quote (9.2).
  * No second parser of the merchant's response, and nothing from the model.
  */
@@ -26,6 +26,15 @@ final class QuoteCard {
             Map<String, Object> line = new LinkedHashMap<>();
             line.put("item_id", l.itemId());
             line.put("title", l.title());
+            // 9.2, 24.3: the variant's options from the snapshot, only when it has some.
+            if (!l.options().isEmpty()) {
+                line.put("options", l.options().stream().map(o -> {
+                    Map<String, Object> option = new LinkedHashMap<>();
+                    option.put("name", o.name());
+                    option.put("label", o.label());
+                    return option;
+                }).toList());
+            }
             line.put("quantity", l.quantity());
             line.put("unit_price_minor", l.unitPriceMinor());
             return line;

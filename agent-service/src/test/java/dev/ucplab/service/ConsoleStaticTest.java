@@ -283,6 +283,18 @@ class ConsoleStaticTest {
                 .contains(".chip .dot.warn {");
     }
 
+    // Covers: 24.3 (ask_user's time is the user's own: its chip reads "ask_user · waited for your answer", never a
+    // duration; every other tool keeps "<tool> · <took_ms> ms")
+    @Test
+    void chip_forAskUser_saysItWaited_insteadOfADuration() throws IOException {
+        String js = read("console.js");
+
+        assertThat(js).contains("function chipText(e) {")
+                .contains("  if (e.tool === \"ask_user\") {\n    return \"ask_user · waited for your answer\""
+                        + " + (e.summary === \"ok\" ? \"\" : \" · \" + e.summary);\n  }\n")
+                .contains("chip.appendChild(el(\"span\", chipText(e)));");
+    }
+
     // Covers: I2, 9.3 L4, 24.3, 9.2 (the approval card is its own component and reads only the approval response's
     // fields: the snapshot's lines with their merchant titles, currency and total, the expiry and the token, and at a link
     // merchant the answer's seller (23.2, 26.7); never the chat, the run, the messages or a description)
@@ -292,7 +304,7 @@ class ConsoleStaticTest {
         String card = card(js);
 
         Set<String> allowed = Set.of("snapshot", "lines", "item_id", "title", "quantity", "unit_price_minor", "currency",
-                "total_minor", "expires_at", "token", "merchant_id", "completion", "note", "budget", "seller");
+                "total_minor", "expires_at", "token", "merchant_id", "completion", "note", "budget", "seller", "options");
         Set<String> read = new LinkedHashSet<>();
         Matcher fields = Pattern.compile("\\b(?:approval|snapshot|line)\\.([A-Za-z_]+)").matcher(card);
         while (fields.find()) {
@@ -387,12 +399,29 @@ class ConsoleStaticTest {
     void approvalCard_showsTheLinesTitle_withTheItemIdUnderIt() throws IOException {
         String card = card(read("console.js"));
 
+        // 24.3: the line's options sit between the title and the item id (approvalCard_showsTheLinesOptions_...).
         assertThat(card).contains("    const name = el(\"td\");\n"
-                + "    if (line.title) {\n      name.appendChild(el(\"div\", line.title));\n    }\n"
-                + "    name.appendChild(el(\"div\", line.item_id, \"item-id\"));\n"
-                + "    row.appendChild(name);\n")
+                + "    if (line.title) {\n      name.appendChild(el(\"div\", line.title));\n    }\n")
+                .contains("    name.appendChild(el(\"div\", line.item_id, \"item-id\"));\n"
+                        + "    row.appendChild(name);\n")
                 .doesNotContain("row.appendChild(el(\"td\", line.item_id));");
+        assertThat(card.indexOf("name.appendChild(el(\"div\", line.title));"))
+                .isLessThan(card.indexOf("name.appendChild(el(\"div\", line.item_id, \"item-id\"));"));
         assertThat(read("console.css")).contains(".item-id {");
+    }
+
+    // Covers: 24.3, 9.2, I2, 26.7 (a line's options show under its title as "<name>: <label>", each set as text from the
+    // snapshot line only, before the item id)
+    @Test
+    void approvalCard_showsTheLinesOptions_asText_underTheTitle() throws IOException {
+        String card = card(read("console.js"));
+
+        assertThat(card).contains("    (line.options || []).forEach((option) => {\n"
+                + "      name.appendChild(el(\"div\", option.name + \": \" + option.label, \"option\"));\n"
+                + "    });\n"
+                + "    name.appendChild(el(\"div\", line.item_id, \"item-id\"));\n");
+        assertThat(card.indexOf("line.options")).isGreaterThan(card.indexOf("line.title"))
+                .isLessThan(card.indexOf("line.item_id"));
     }
 
     // Covers: 24.3, 19 (at a handoff merchant the store adds shipping and tax after the handoff: no "Other charges (tax)"

@@ -114,6 +114,26 @@ class SqlApprovalRepositoryTest extends ApprovalRepositoryContract {
         assertThat(read.snapshot().hash()).isEqualTo(read.snapshotHash());
     }
 
+    // Covers: 9.2, 10, I2, I3 (a line's options read back exactly, so the read-back snapshot equals the stored one and
+    // its hash; a snapshot stored before options reads back with none)
+    @Test
+    void aLinesOptions_readBackExactly() {
+        IntentId id = new IntentId("i-sized");
+        storeIntent(id, new UserId("alice"));
+        ApprovalSnapshot snapshot = new ApprovalSnapshot(id, new MerchantId("shopify-catalog"),
+                new SessionId("link:gid://shopify/ProductVariant/1000001"),
+                List.of(new SnapshotLine("gid://shopify/ProductVariant/1000001", 1, 22498, "Arbor Element Decon 2026",
+                        List.of(new dev.ucplab.core.merchant.VariantOption("Size", "154 cm")))),
+                "USD", 22498, 22498, Instant.parse("2026-01-01T00:10:00Z"));
+        repo.insert(new ApprovalRecord("a-sized", id, new UserId("alice"), snapshot, snapshot.hash(), "th",
+                snapshot.expiresAt(), ApprovalStatus.PENDING, Optional.empty(), Optional.empty()));
+
+        ApprovalRecord read = repo.findLatest(new UserId("alice"), id).orElseThrow();
+
+        assertThat(read.snapshot()).isEqualTo(snapshot);
+        assertThat(read.snapshot().hash()).isEqualTo(read.snapshotHash());
+    }
+
     // Covers: 9.2, 10, I8, 26.7 (a stored link whose url no longer parses is refused on read, never read as no link,
     // and the refusal names no part of it)
     @Test

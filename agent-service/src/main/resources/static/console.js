@@ -450,13 +450,21 @@ async function loadRunDetails() {
   showChips(result.data.tool_events || []);
 }
 
+// 24.3: a chip's text. ask_user's time is the user's own, so its chip says it waited instead of a duration.
+function chipText(e) {
+  if (e.tool === "ask_user") {
+    return "ask_user · waited for your answer" + (e.summary === "ok" ? "" : " · " + e.summary);
+  }
+  return e.tool + " · " + e.took_ms + " ms" + (e.summary === "ok" ? "" : " · " + e.summary);
+}
+
 // 24.3: one chip per call, with a dot for its outcome; a summary other than ok is also shown as text.
 function showChips(events) {
   clear($("tools"));
   events.forEach((e) => {
     const chip = el("li", null, "chip");
     chip.appendChild(el("span", null, e.summary === "ok" ? "dot ok" : "dot warn")).setAttribute("aria-hidden", "true");
-    chip.appendChild(el("span", e.tool + " · " + e.took_ms + " ms" + (e.summary === "ok" ? "" : " · " + e.summary)));
+    chip.appendChild(el("span", chipText(e)));
     $("tools").appendChild(chip);
   });
 }
@@ -542,6 +550,10 @@ function showApprovalCard(id, approvalResponse) {
     if (line.title) {
       name.appendChild(el("div", line.title));
     }
+    // 24.3, 9.2: the variant's options, from the snapshot only, as text ("Size: 154 cm").
+    (line.options || []).forEach((option) => {
+      name.appendChild(el("div", option.name + ": " + option.label, "option"));
+    });
     name.appendChild(el("div", line.item_id, "item-id"));
     row.appendChild(name);
     row.appendChild(el("td", line.quantity + " × " + money(line.unit_price_minor, snapshot.currency), "num"));

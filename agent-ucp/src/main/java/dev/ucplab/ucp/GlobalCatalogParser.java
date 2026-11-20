@@ -105,7 +105,7 @@ final class GlobalCatalogParser {
         Optional<ContinueUrl> link = string(v.get("checkout_url")).flatMap(ContinueUrl::parse);
         CatalogVariant kept = variant.get();
         return new CatalogParser.Parsed.Found<>(new LinkOffer(kept.itemId(), kept.title(), kept.price(),
-                kept.availability().available(), new Seller(name.get(), domain.get(), site), link));
+                kept.availability().available(), new Seller(name.get(), domain.get(), site), link, kept.options()));
     }
 
     private interface Reader<T> {

@@ -51,7 +51,8 @@ public record ApprovalSnapshot(
             Comparator.comparing(SnapshotLine::itemId)
                     .thenComparingInt(SnapshotLine::quantity)
                     .thenComparingLong(SnapshotLine::unitPriceMinor)
-                    .thenComparing(SnapshotLine::title);
+                    .thenComparing(SnapshotLine::title)
+                    .thenComparing(l -> CanonicalJson.write(optionsJson(l)));
 
     public ApprovalSnapshot {
         Objects.requireNonNull(intentId, "intentId");
@@ -80,7 +81,7 @@ public record ApprovalSnapshot(
 
     /**
      * The canonical JSON form that is hashed: field names as in 9.2, lines sorted by itemId, then
-     * quantity, then unitPriceMinor, expiresAt as ISO-8601 UTC.
+     * quantity, then unitPriceMinor, then title, then options, expiresAt as ISO-8601 UTC.
      */
     public String canonicalJson() {
         Map<String, Object> m = new LinkedHashMap<>();
@@ -132,6 +133,20 @@ public record ApprovalSnapshot(
         if (!line.title().isEmpty()) {
             m.put("title", line.title());
         }
+        // Likewise only when the read gave the variant's options (9.2).
+        if (!line.options().isEmpty()) {
+            m.put("options", optionsJson(line));
+        }
         return m;
+    }
+
+    /** The line's options as {@code [{name, label}]}, in the merchant's order (9.2). */
+    private static List<Map<String, Object>> optionsJson(SnapshotLine line) {
+        return line.options().stream().map(o -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("name", o.name());
+            m.put("label", o.label());
+            return m;
+        }).toList();
     }
 }

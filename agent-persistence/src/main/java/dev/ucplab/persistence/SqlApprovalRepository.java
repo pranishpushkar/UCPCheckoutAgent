@@ -13,6 +13,7 @@ import dev.ucplab.core.json.CanonicalJson;
 import dev.ucplab.core.merchant.ContinueUrl;
 import dev.ucplab.core.merchant.MerchantId;
 import dev.ucplab.core.merchant.SessionId;
+import dev.ucplab.core.merchant.VariantOption;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -179,6 +180,15 @@ public final class SqlApprovalRepository implements ApprovalRepository {
             line.put("quantity", l.quantity());
             line.put("unitPriceMinor", l.unitPriceMinor());
             line.put("title", l.title());
+            // 9.2: only when the line has options, so a snapshot without them is stored as before.
+            if (!l.options().isEmpty()) {
+                line.put("options", l.options().stream().map(o -> {
+                    Map<String, Object> option = new LinkedHashMap<>();
+                    option.put("name", o.name());
+                    option.put("label", o.label());
+                    return option;
+                }).toList());
+            }
             lines.add(line);
         }
         Map<String, Object> m = new LinkedHashMap<>();
@@ -218,8 +228,16 @@ public final class SqlApprovalRepository implements ApprovalRepository {
             Map<String, Object> l = (Map<String, Object>) o;
             // 9.2: a snapshot stored before titles has none.
             String title = l.get("title") instanceof String t ? t : "";
+            // 9.2: a snapshot stored before options has none.
+            List<VariantOption> options = new ArrayList<>();
+            if (l.get("options") instanceof List<?> stored) {
+                for (Object each : stored) {
+                    Map<String, Object> option = (Map<String, Object>) each;
+                    options.add(new VariantOption((String) option.get("name"), (String) option.get("label")));
+                }
+            }
             lines.add(new SnapshotLine((String) l.get("itemId"), ((Long) l.get("quantity")).intValue(),
-                    (Long) l.get("unitPriceMinor"), title));
+                    (Long) l.get("unitPriceMinor"), title, options));
         }
         return new ApprovalSnapshot(
                 new IntentId((String) m.get("intentId")), new MerchantId((String) m.get("merchantId")),

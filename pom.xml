@@ -177,6 +177,14 @@
                         <forkCount>1C</forkCount>
                         <reuseForks>true</reuseForks>
                         <excludedGroups>sequential</excludedGroups>
+                        <!-- Each fork's number, for a test service that must know its port before it starts: it picks
+                             only within its own fork's block (agent-service's FreePort), so no two forks share a port.
+                             $$ keeps Maven from resolving the whole-value expression itself (to an empty string, as
+                             Maven 3.10 does); it reaches surefire as ${surefire.forkNumber}, which surefire replaces
+                             per fork. -->
+                        <systemPropertyVariables>
+                            <ucplab.forkNumber>$${surefire.forkNumber}</ucplab.forkNumber>
+                        </systemPropertyVariables>
                     </configuration>
                     <executions>
                         <execution>

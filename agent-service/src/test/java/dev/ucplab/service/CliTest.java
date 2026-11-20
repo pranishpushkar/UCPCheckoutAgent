@@ -6,7 +6,6 @@ import dev.ucplab.service.cli.Cli;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
-import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -46,10 +45,7 @@ class CliTest {
     }
 
     private void start() throws IOException {
-        int port;
-        try (ServerSocket s = new ServerSocket(0)) {
-            port = s.getLocalPort();
-        }
+        int port = FreePort.pick();
         baseUrl = "http://127.0.0.1:" + port;
         service = TestService.start(dir.resolve("service"), Map.of("PUBLIC_ORIGIN", baseUrl), Optional.empty(),
                 List.of(), Optional.empty(), Map.of(), port);
