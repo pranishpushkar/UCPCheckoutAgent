@@ -1838,7 +1838,8 @@ public final class DefaultOrchestrator implements Orchestrator {
         Map<SnapshotLine, Integer> shown = new java.util.HashMap<>();
         for (LineView l : view.lines()) {
             // 9.2: the title too, so a GET that shows another title is a change, as another price is.
-            shown.merge(new SnapshotLine(l.itemId(), l.quantity(), l.unitPriceMinor(), l.title()), 1, Integer::sum);
+            shown.merge(new SnapshotLine(l.itemId(), l.quantity(), l.unitPriceMinor(), l.title(), l.options()), 1,
+                    Integer::sum);
         }
         Map<SnapshotLine, Integer> approved = new java.util.HashMap<>();
         for (SnapshotLine l : snapshot.lines()) {
@@ -2154,11 +2155,15 @@ public final class DefaultOrchestrator implements Orchestrator {
         return new Step(QUOTING, m.next().state(), false, Optional.of(view));
     }
 
-    /** The offer as a quote, for policy and the approval: one line, its listed price, session id link:<item id>. */
+    /**
+     * The offer as a quote, for policy and the approval: one line with the variant's options (9.2), its listed price,
+     * session id link:<item id>.
+     */
     private static CheckoutView linkView(LinkOffer offer) {
         long price = offer.price().minor();
         return new CheckoutView(new SessionId(LINK_SESSION_PREFIX + offer.itemId()), CheckoutStatus.READY_FOR_COMPLETE,
-                offer.price().currency(), List.of(new LineView(offer.itemId(), 1, price, Optional.empty(), offer.title())),
+                offer.price().currency(), List.of(new LineView(offer.itemId(), 1, price, Optional.empty(), offer.title(),
+                        offer.options())),
                 price, 0, price, Optional.empty(), List.of());
     }
 

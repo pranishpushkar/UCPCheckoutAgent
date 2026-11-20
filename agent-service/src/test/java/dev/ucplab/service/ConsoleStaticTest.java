@@ -399,11 +399,14 @@ class ConsoleStaticTest {
     void approvalCard_showsTheLinesTitle_withTheItemIdUnderIt() throws IOException {
         String card = card(read("console.js"));
 
+        // 24.3: the line's options sit between the title and the item id (approvalCard_showsTheLinesOptions_...).
         assertThat(card).contains("    const name = el(\"td\");\n"
-                + "    if (line.title) {\n      name.appendChild(el(\"div\", line.title));\n    }\n"
-                + "    name.appendChild(el(\"div\", line.item_id, \"item-id\"));\n"
-                + "    row.appendChild(name);\n")
+                + "    if (line.title) {\n      name.appendChild(el(\"div\", line.title));\n    }\n")
+                .contains("    name.appendChild(el(\"div\", line.item_id, \"item-id\"));\n"
+                        + "    row.appendChild(name);\n")
                 .doesNotContain("row.appendChild(el(\"td\", line.item_id));");
+        assertThat(card.indexOf("name.appendChild(el(\"div\", line.title));"))
+                .isLessThan(card.indexOf("name.appendChild(el(\"div\", line.item_id, \"item-id\"));"));
         assertThat(read("console.css")).contains(".item-id {");
     }
 
