@@ -396,12 +396,12 @@ public final class Scenarios {
                             Action.FailBeforeForward.status(503)))), A_S20_CLAIM));
 
     /**
-     * The rows live mode runs (m5-plan section 10, C18): S10 and S12. The other agent rows exist to drive the runtime
-     * down a path a script forces (a second proposal, an unlisted merchant, a budget breach), which a live model need
-     * not take.
+     * The rows live mode runs (m5-plan section 10, C18): S10, S12, and S30, whose follow-up claim (6.4 v9) only a live
+     * model can break. The other agent rows exist to drive the runtime down a path a script forces (a second proposal,
+     * an unlisted merchant, a budget breach), which a live model need not take.
      */
     public static List<Scenario> live() {
-        return List.of(A_S10, A_S12);
+        return List.of(A_S10, A_S12, A_S30);
     }
 
     /** Every row the harness can run: the catalogue rows in catalogue order, then the agent rows. */

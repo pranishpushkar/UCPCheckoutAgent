@@ -388,7 +388,7 @@ public final class AgentRuntime {
                     intents, events).withCause(cause).withShipTo(context.shipTo()));
             trace.run(status, detail, cause, baseModelCalls + meter.modelCalls(), baseToolCalls + meter.toolCalls(),
                     baseInputTokens + meter.usage().inputTokens(), baseOutputTokens + meter.usage().outputTokens(),
-                    Duration.between(begun, ended));
+                    meter.usage(), meter.modelCalls(), Duration.between(begun, ended));
         }
 
         /** True when an intent of this run waits for the user's approval (23.1 {@code waiting_for_approval}). */
