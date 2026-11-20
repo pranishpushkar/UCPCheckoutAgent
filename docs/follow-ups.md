@@ -40,6 +40,12 @@ owner's, and an item is done only when its condition is met.
   re-run a Dunk Low was listed at ₹1,399.00 against about ₹12,000 elsewhere. The card states it as catalog fact
   ("lowest of N offers; others from ₹X"), never as the model's judgement. Part of Deal comparison above. (owner,
   2026-11-20)
+- **Also:** "a request for something different excludes item IDs already proposed in the run" (owner, 2026-11-20).
+  Today nothing does: `search_catalog` sends the same query, filters and page size each time and knows nothing of the
+  run's intents, and with no sort order requested the catalog's own ranking, cut to 5, then [CHEAPEST], picks the same
+  lowest-priced item again (a ₹1,399.00 Dunk Low on the live re-runs).
+- **Also:** "search_catalog's 5-result cap counts variants, not products; cap per product (one slot per product) so a
+  multi-variant product can't crowd out alternatives. Not yet seen live." (owner, 2026-11-20)
 
 ## Seller policy links on the card (from the follow-up-turns live re-run, 2026-11-20)
 
